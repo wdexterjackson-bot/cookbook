@@ -42,6 +42,16 @@ struct RecipeDetailView: View {
                     sectionHeader("Notes")
                     Text(recipe.notes)
                 }
+
+                NutritionSummaryView(
+                    calories: recipe.calories,
+                    proteinGrams: recipe.proteinGrams,
+                    fatGrams: recipe.fatGrams,
+                    carbsGrams: recipe.carbsGrams,
+                    sugarGrams: recipe.sugarGrams,
+                    fiberGrams: recipe.fiberGrams,
+                    sodiumMilligrams: recipe.sodiumMilligrams
+                )
             }
             .padding()
         }
@@ -54,9 +64,18 @@ struct RecipeDetailView: View {
                     recipe.updatedAt = .now
                     try? modelContext.save()
                 } label: {
-                    Image(systemName: recipe.isFavorite ? "star.fill" : "star")
+                    Image(systemName: recipe.isFavorite ? "heart.fill" : "heart")
                 }
-                .accessibilityLabel(recipe.isFavorite ? "Unfavorite" : "Favorite")
+                .accessibilityLabel(recipe.isFavorite ? "Remove from Favorites" : "Add to Favorites")
+
+                Button {
+                    recipe.personalRating = isLiked ? nil : 5
+                    recipe.updatedAt = .now
+                    try? modelContext.save()
+                } label: {
+                    Image(systemName: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                }
+                .accessibilityLabel(isLiked ? "Unlike" : "Like")
 
                 Button("Edit") {
                     isPresentingEdit = true
@@ -92,6 +111,13 @@ struct RecipeDetailView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Owner: You")
         }
+    }
+
+    /// A quick, distinct signal from Favorite — a single tap sets a fixed
+    /// high rating rather than opening a full 1-5 star picker. Uses the
+    /// existing personalRating field rather than adding a new isLiked flag.
+    private var isLiked: Bool {
+        recipe.personalRating != nil
     }
 
     private var metadataRow: some View {

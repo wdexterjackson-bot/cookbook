@@ -240,8 +240,8 @@ private struct RecipeRow: View {
             }
             Spacer()
             if recipe.isFavorite {
-                Image(systemName: "star.fill")
-                    .foregroundStyle(.yellow)
+                Image(systemName: "heart.fill")
+                    .foregroundStyle(.red)
                     .accessibilityLabel("Favorite")
             }
         }

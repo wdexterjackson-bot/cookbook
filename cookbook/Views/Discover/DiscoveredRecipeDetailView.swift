@@ -92,7 +92,15 @@ struct DiscoveredRecipeDetailView: View {
                 }
 
                 if let nutrition = recipe.nutrition {
-                    nutritionSection(nutrition)
+                    NutritionSummaryView(
+                        calories: nutrition.calories,
+                        proteinGrams: nutrition.proteinGrams,
+                        fatGrams: nutrition.fatGrams,
+                        carbsGrams: nutrition.carbsGrams,
+                        sugarGrams: nutrition.sugarGrams,
+                        fiberGrams: nutrition.fiberGrams,
+                        sodiumMilligrams: nutrition.sodiumMilligrams
+                    )
                 }
 
                 if !recipe.ingredients.isEmpty {
@@ -164,34 +172,6 @@ struct DiscoveredRecipeDetailView: View {
                         .foregroundStyle(.green)
                 }
             }
-        }
-    }
-
-    private func nutritionSection(_ nutrition: DiscoveredNutrition) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Nutrition (per serving)")
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                nutritionStat("Calories", nutrition.calories, unit: "kcal")
-                nutritionStat("Protein", nutrition.proteinGrams, unit: "g")
-                nutritionStat("Fat", nutrition.fatGrams, unit: "g")
-                nutritionStat("Carbs", nutrition.carbsGrams, unit: "g")
-                nutritionStat("Sugar", nutrition.sugarGrams, unit: "g")
-                nutritionStat("Sodium", nutrition.sodiumMilligrams, unit: "mg")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func nutritionStat(_ label: String, _ value: Double?, unit: String) -> some View {
-        if let value {
-            VStack(spacing: 2) {
-                Text(value.formatted(.number.precision(.fractionLength(0))))
-                    .font(.headline)
-                Text("\(label) (\(unit))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity)
         }
     }
 

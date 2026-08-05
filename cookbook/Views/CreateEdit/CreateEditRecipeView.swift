@@ -2,21 +2,41 @@
 //  CreateEditRecipeView.swift
 //  cookbook
 //
+//  Milestone 5C rework: a flowing List(.plain) page (not a boxed Form),
+//  with structured per-row ingredient/step editors (name, then amount,
+//  then a selectable-but-optional unit) instead of a free-text multi-line
+//  blob. Reorder handles come from SwiftUI's native List editing affordances,
+//  scoped to just the ingredient/step rows via a local `.editMode` override
+//  — the rest of the page (title, photo, tags, notes) stays in normal mode.
+//
+//  Simplification, stated plainly rather than hidden: earlier versions
+//  supported multiple headed ingredient/step sub-sections per recipe; this
+//  editor flattens everything into one ingredient list and one step list
+//  (matching the reference layout the user asked to follow, which shows no
+//  sub-headings). Editing a recipe that already has multiple sections
+//  merges them into one on save — no data is dropped, just the grouping.
+//
 
 import SwiftUI
 import SwiftData
 import PhotosUI
 
-/// A section's raw editable state before it's turned into IngredientSection/
-/// StepSection model objects on save. Ingredient/step rows are entered as
-/// one-per-line free text (supporting paste-multiline per REC-005); each
-/// non-empty line becomes a row's displayText verbatim. This is a Phase 1
-/// simplification — no quantity/unit parsing yet (REC-004's normalized
-/// fields stay nil), only the author's raw text is preserved.
-private struct DraftSection: Identifiable {
+private struct DraftIngredientRow: Identifiable {
     let id = UUID()
-    var heading: String = ""
-    var linesText: String = ""
+    var name: String = ""
+    var quantityText: String = ""
+    var unit: String = ""
+    var isOptional: Bool = false
+
+    var isBlank: Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && quantityText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+private struct DraftStepRow: Identifiable {
+    let id = UUID()
+    var text: String = ""
 }
 
 struct CreateEditRecipeView: View {
@@ -30,6 +50,11 @@ struct CreateEditRecipeView: View {
         case importing(DiscoveredRecipe)
     }
 
+    static let commonUnits = [
+        "cup", "tbsp", "tsp", "oz", "fl oz", "lb", "g", "kg", "ml", "L",
+        "pinch", "clove", "slice", "can", "package", "whole",
+    ]
+
     let mode: Mode
 
     @Environment(\.modelContext) private var modelContext
@@ -42,10 +67,17 @@ struct CreateEditRecipeView: View {
     @State private var summary: String
     @State private var yield: String
     @State private var notes: String
-    @State private var ingredientSections: [DraftSection]
-    @State private var stepSections: [DraftSection]
+    @State private var ingredientRows: [DraftIngredientRow]
+    @State private var stepRows: [DraftStepRow]
     @State private var selectedChapterID: UUID?
+    @State private var tags: [String]
+    @State private var newTagText = ""
     @State private var validationMessage: String?
+
+    @State private var importText = ""
+    @State private var isImporting = false
+    @State private var importErrorMessage: String?
+    private let lineImportService: RecipeLineImportServicing = FoundationModelsLineImportService()
 
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var heroImageData: Data?
@@ -59,9 +91,10 @@ struct CreateEditRecipeView: View {
             _summary = State(initialValue: "")
             _yield = State(initialValue: "")
             _notes = State(initialValue: "")
-            _ingredientSections = State(initialValue: [DraftSection()])
-            _stepSections = State(initialValue: [DraftSection()])
+            _ingredientRows = State(initialValue: [DraftIngredientRow()])
+            _stepRows = State(initialValue: [DraftStepRow()])
             _selectedChapterID = State(initialValue: nil)
+            _tags = State(initialValue: [])
             _heroImageData = State(initialValue: nil)
 
         case .edit(let recipe):
@@ -69,15 +102,14 @@ struct CreateEditRecipeView: View {
             _summary = State(initialValue: recipe.summary)
             _yield = State(initialValue: recipe.yield)
             _notes = State(initialValue: recipe.notes)
-
-            let sortedIngredientSections = recipe.ingredientSections.sorted { $0.sortOrder < $1.sortOrder }
-            let ingredientDrafts = sortedIngredientSections.map(Self.makeIngredientDraft)
-            _ingredientSections = State(initialValue: ingredientDrafts.isEmpty ? [DraftSection()] : ingredientDrafts)
-
-            let sortedStepSections = recipe.stepSections.sorted { $0.sortOrder < $1.sortOrder }
-            let stepDrafts = sortedStepSections.map(Self.makeStepDraft)
-            _stepSections = State(initialValue: stepDrafts.isEmpty ? [DraftSection()] : stepDrafts)
             _selectedChapterID = State(initialValue: recipe.sectionID)
+            _tags = State(initialValue: recipe.tags)
+
+            let ingredientDrafts = Self.makeIngredientDrafts(from: recipe)
+            _ingredientRows = State(initialValue: ingredientDrafts.isEmpty ? [DraftIngredientRow()] : ingredientDrafts)
+
+            let stepDrafts = Self.makeStepDrafts(from: recipe)
+            _stepRows = State(initialValue: stepDrafts.isEmpty ? [DraftStepRow()] : stepDrafts)
 
             if let filename = recipe.heroPhotoFilename {
                 _heroImageData = State(initialValue: PhotoStore.data(for: filename))
@@ -90,35 +122,47 @@ struct CreateEditRecipeView: View {
             _summary = State(initialValue: discovered.summary ?? "")
             _yield = State(initialValue: discovered.servings.map { "Serves \($0)" } ?? "")
             _notes = State(initialValue: "")
-
-            let ingredientDraft = DraftSection(
-                heading: "",
-                linesText: discovered.ingredients.map(\.displayText).joined(separator: "\n")
-            )
-            _ingredientSections = State(initialValue: [ingredientDraft])
-
-            let stepDraft = DraftSection(heading: "", linesText: discovered.steps.joined(separator: "\n"))
-            _stepSections = State(initialValue: [stepDraft])
             _selectedChapterID = State(initialValue: nil)
+            _tags = State(initialValue: [])
+
+            let ingredientDrafts = discovered.ingredients.map { DraftIngredientRow(name: $0.displayText) }
+            _ingredientRows = State(initialValue: ingredientDrafts.isEmpty ? [DraftIngredientRow()] : ingredientDrafts)
+
+            let stepDrafts = discovered.steps.map { DraftStepRow(text: $0) }
+            _stepRows = State(initialValue: stepDrafts.isEmpty ? [DraftStepRow()] : stepDrafts)
+
             _heroImageData = State(initialValue: nil)
         }
     }
 
-    private static func makeIngredientDraft(from section: IngredientSection) -> DraftSection {
-        let sortedIngredients = section.ingredients.sorted { $0.sortOrder < $1.sortOrder }
-        let lines = sortedIngredients.map { $0.displayText }
-        return DraftSection(heading: section.heading ?? "", linesText: lines.joined(separator: "\n"))
+    private static func makeIngredientDrafts(from recipe: Recipe) -> [DraftIngredientRow] {
+        let sortedSections = recipe.ingredientSections.sorted { $0.sortOrder < $1.sortOrder }
+        return sortedSections.flatMap { section in
+            section.ingredients.sorted { $0.sortOrder < $1.sortOrder }
+        }.map { ingredient in
+            DraftIngredientRow(
+                name: ingredient.name,
+                quantityText: ingredient.quantityValue.map(Self.formatQuantity) ?? "",
+                unit: ingredient.unit ?? "",
+                isOptional: ingredient.isOptional
+            )
+        }
     }
 
-    private static func makeStepDraft(from section: StepSection) -> DraftSection {
-        let sortedSteps = section.steps.sorted { $0.sortOrder < $1.sortOrder }
-        let lines = sortedSteps.map { $0.text }
-        return DraftSection(heading: section.heading ?? "", linesText: lines.joined(separator: "\n"))
+    private static func makeStepDrafts(from recipe: Recipe) -> [DraftStepRow] {
+        let sortedSections = recipe.stepSections.sorted { $0.sortOrder < $1.sortOrder }
+        return sortedSections.flatMap { section in
+            section.steps.sorted { $0.sortOrder < $1.sortOrder }
+        }.map { DraftStepRow(text: $0.text) }
+    }
+
+    private static func formatQuantity(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...2)))
     }
 
     var body: some View {
         NavigationStack {
-            Form {
+            List {
                 Section("Recipe") {
                     TextField("Title", text: $title)
                     TextField("Summary", text: $summary, axis: .vertical)
@@ -142,8 +186,10 @@ struct CreateEditRecipeView: View {
                 }
                 #endif
 
-                ingredientSectionsEditor
-                stepSectionsEditor
+                ingredientsSection
+                stepsSection
+                importSection
+                tagsSection
 
                 Section("Notes") {
                     TextField("Notes", text: $notes, axis: .vertical)
@@ -156,6 +202,7 @@ struct CreateEditRecipeView: View {
                     }
                 }
             }
+            .listStyle(.plain)
             .navigationTitle(navigationTitle)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -166,6 +213,215 @@ struct CreateEditRecipeView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Ingredients
+
+    private var ingredientsSection: some View {
+        Section("Ingredients") {
+            ForEach($ingredientRows) { $row in
+                ingredientRow($row)
+            }
+            .onDelete { offsets in
+                ingredientRows.remove(atOffsets: offsets)
+            }
+            .onMove { from, to in
+                ingredientRows.move(fromOffsets: from, toOffset: to)
+            }
+            .environment(\.editMode, .constant(.active))
+
+            Button {
+                ingredientRows.append(DraftIngredientRow())
+            } label: {
+                Label("Add Ingredient", systemImage: "plus")
+            }
+        }
+    }
+
+    private func ingredientRow(_ row: Binding<DraftIngredientRow>) -> some View {
+        HStack(spacing: 8) {
+            TextField("Ingredient", text: row.name)
+                .accessibilityLabel("Ingredient name")
+
+            TextField("Amount", text: row.quantityText)
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+                .frame(width: 64)
+                .multilineTextAlignment(.trailing)
+                .accessibilityLabel("Amount")
+
+            HStack(spacing: 2) {
+                TextField("unit", text: row.unit)
+                    .frame(width: 56)
+                    .accessibilityLabel("Unit")
+                Menu {
+                    ForEach(Self.commonUnits, id: \.self) { unit in
+                        Button(unit) { row.wrappedValue.unit = unit }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Choose a unit")
+            }
+        }
+    }
+
+    // MARK: - Steps
+
+    private var stepsSection: some View {
+        Section("Steps") {
+            ForEach($stepRows) { $row in
+                TextField("Step", text: $row.text, axis: .vertical)
+                    .accessibilityLabel("Step")
+            }
+            .onDelete { offsets in
+                stepRows.remove(atOffsets: offsets)
+            }
+            .onMove { from, to in
+                stepRows.move(fromOffsets: from, toOffset: to)
+            }
+            .environment(\.editMode, .constant(.active))
+
+            Button {
+                stepRows.append(DraftStepRow())
+            } label: {
+                Label("Add Step", systemImage: "plus")
+            }
+        }
+    }
+
+    // MARK: - Import
+
+    private var importSection: some View {
+        Section {
+            if lineImportService.isAvailable {
+                TextEditor(text: $importText)
+                    .frame(minHeight: 100)
+                    .accessibilityLabel("Paste ingredients and steps to import")
+
+                Button {
+                    Task { await performImport() }
+                } label: {
+                    if isImporting {
+                        ProgressView()
+                    } else {
+                        Label("Import", systemImage: "sparkles")
+                    }
+                }
+                .disabled(importText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImporting)
+
+                if let importErrorMessage {
+                    Text(importErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            } else {
+                Text("On-device AI import needs Apple Intelligence enabled on this device.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Import")
+        } footer: {
+            Text("Paste a full list of ingredients and steps — AI will sort them into Ingredients and Steps above.")
+        }
+    }
+
+    private func performImport() async {
+        isImporting = true
+        importErrorMessage = nil
+        defer { isImporting = false }
+        do {
+            let result = try await lineImportService.parseLines(from: importText)
+
+            ingredientRows.removeAll { $0.isBlank }
+            for parsed in result.ingredients {
+                ingredientRows.append(DraftIngredientRow(
+                    name: parsed.name,
+                    quantityText: parsed.quantity.map(Self.formatQuantity) ?? "",
+                    unit: parsed.unit ?? ""
+                ))
+            }
+            if ingredientRows.isEmpty {
+                ingredientRows = [DraftIngredientRow()]
+            }
+
+            stepRows.removeAll { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            for stepText in result.steps {
+                stepRows.append(DraftStepRow(text: stepText))
+            }
+            if stepRows.isEmpty {
+                stepRows = [DraftStepRow()]
+            }
+
+            importText = ""
+        } catch {
+            importErrorMessage = "Couldn't import — try again, or add these manually below."
+        }
+    }
+
+    // MARK: - Tags
+
+    private var tagsSection: some View {
+        Section("Tags") {
+            if !tags.isEmpty {
+                tagChipsRow(tags, style: .selected) { tag in
+                    tags.removeAll { $0 == tag }
+                }
+            }
+
+            let suggestions = TagCatalog.suggestedTags.filter { !tags.contains($0) }
+            if !suggestions.isEmpty {
+                tagChipsRow(suggestions, style: .suggestion) { tag in
+                    tags.append(tag)
+                }
+            }
+
+            HStack {
+                TextField("Custom tag", text: $newTagText)
+                    .onSubmit(addCustomTag)
+                Button("Add", action: addCustomTag)
+                    .disabled(newTagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private enum TagChipStyle {
+        case selected
+        case suggestion
+    }
+
+    private func tagChipsRow(_ chipTags: [String], style: TagChipStyle, onTap: @escaping (String) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(chipTags, id: \.self) { tag in
+                    Button {
+                        onTap(tag)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(tag)
+                            Image(systemName: style == .selected ? "xmark.circle.fill" : "plus.circle")
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(style == .selected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12)))
+                        .foregroundStyle(style == .selected ? Color.accentColor : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(style == .selected ? "Remove tag \(tag)" : "Add tag \(tag)")
+                }
+            }
+        }
+    }
+
+    private func addCustomTag() {
+        let trimmed = newTagText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !tags.contains(trimmed) else { return }
+        tags.append(trimmed)
+        newTagText = ""
     }
 
     #if os(iOS)
@@ -202,71 +458,9 @@ struct CreateEditRecipeView: View {
     }
     #endif
 
-    private var ingredientSectionsEditor: some View {
-        ForEach($ingredientSections) { $section in
-            Section {
-                TextField("Section heading (optional)", text: $section.heading)
-                TextEditor(text: $section.linesText)
-                    .frame(minHeight: 100)
-                    .accessibilityLabel("Ingredients, one per line")
-            } header: {
-                sectionHeader("Ingredients", canRemove: ingredientSections.count > 1) {
-                    ingredientSections.removeAll { $0.id == section.id }
-                }
-            }
-        }
-    }
-
-    private var stepSectionsEditor: some View {
-        Group {
-            ForEach($stepSections) { $section in
-                Section {
-                    TextField("Section heading (optional)", text: $section.heading)
-                    TextEditor(text: $section.linesText)
-                        .frame(minHeight: 100)
-                        .accessibilityLabel("Steps, one per line")
-                } header: {
-                    sectionHeader("Steps", canRemove: stepSections.count > 1) {
-                        stepSections.removeAll { $0.id == section.id }
-                    }
-                }
-            }
-
-            Section {
-                Button {
-                    ingredientSections.append(DraftSection())
-                } label: {
-                    Label("Add Ingredient Section", systemImage: "plus")
-                }
-                Button {
-                    stepSections.append(DraftSection())
-                } label: {
-                    Label("Add Step Section", systemImage: "plus")
-                }
-            }
-        }
-    }
-
-    private func sectionHeader(_ title: String, canRemove: Bool, onRemove: @escaping () -> Void) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            if canRemove {
-                Button(role: .destructive, action: onRemove) {
-                    Image(systemName: "trash")
-                }
-                .accessibilityLabel("Remove \(title.lowercased()) section")
-            }
-        }
-    }
-
     private var isEditing: Bool {
         if case .edit = mode { return true }
         return false
-    }
-
-    private var activeCookbook: Cookbook? {
-        allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
     }
 
     private var navigationTitle: String {
@@ -277,14 +471,14 @@ struct CreateEditRecipeView: View {
         }
     }
 
+    private var activeCookbook: Cookbook? {
+        allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
+    }
+
     private func save() {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasIngredientContent = ingredientSections.contains {
-            !$0.linesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        let hasStepContent = stepSections.contains {
-            !$0.linesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+        let hasIngredientContent = ingredientRows.contains { !$0.isBlank }
+        let hasStepContent = stepRows.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
         guard !trimmedTitle.isEmpty else {
             validationMessage = "Give your recipe a title."
@@ -336,13 +530,18 @@ struct CreateEditRecipeView: View {
         recipe.yield = yield.trimmingCharacters(in: .whitespacesAndNewlines)
         recipe.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         recipe.sectionID = selectedChapterID
+        recipe.tags = tags
         recipe.updatedAt = .now
 
-        recipe.ingredientSections = ingredientSections.enumerated().compactMap { index, draft in
-            buildIngredientSection(from: draft, sortOrder: index)
+        if let ingredientSection = Self.buildIngredientSection(from: ingredientRows) {
+            recipe.ingredientSections = [ingredientSection]
+        } else {
+            recipe.ingredientSections = []
         }
-        recipe.stepSections = stepSections.enumerated().compactMap { index, draft in
-            buildStepSection(from: draft, sortOrder: index)
+        if let stepSection = Self.buildStepSection(from: stepRows) {
+            recipe.stepSections = [stepSection]
+        } else {
+            recipe.stepSections = []
         }
 
         #if os(iOS)
@@ -368,32 +567,49 @@ struct CreateEditRecipeView: View {
     }
     #endif
 
-    private func buildIngredientSection(from draft: DraftSection, sortOrder: Int) -> IngredientSection? {
-        let lines = draft.linesText
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        let trimmedHeading = draft.heading.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !lines.isEmpty || !trimmedHeading.isEmpty else { return nil }
+    private static func buildIngredientSection(from rows: [DraftIngredientRow]) -> IngredientSection? {
+        let nonBlankRows = rows.filter { !$0.isBlank }
+        guard !nonBlankRows.isEmpty else { return nil }
 
-        let section = IngredientSection(heading: trimmedHeading.isEmpty ? nil : trimmedHeading, sortOrder: sortOrder)
-        section.ingredients = lines.enumerated().map { index, line in
-            Ingredient(displayText: line, name: line, sortOrder: index)
+        let section = IngredientSection(heading: nil, sortOrder: 0)
+        section.ingredients = nonBlankRows.enumerated().map { index, row in
+            let trimmedName = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedQuantityText = row.quantityText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedUnit = row.unit.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parsedQuantity = Double(trimmedQuantityText)
+
+            return Ingredient(
+                displayText: Self.composeDisplayText(name: trimmedName, quantityText: trimmedQuantityText, unit: trimmedUnit),
+                name: trimmedName.isEmpty ? trimmedQuantityText : trimmedName,
+                quantityValue: parsedQuantity,
+                unit: trimmedUnit.isEmpty ? nil : trimmedUnit,
+                preparationNote: nil,
+                isOptional: row.isOptional,
+                sortOrder: index
+            )
         }
         return section
     }
 
-    private func buildStepSection(from draft: DraftSection, sortOrder: Int) -> StepSection? {
-        let lines = draft.linesText
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        let trimmedHeading = draft.heading.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !lines.isEmpty || !trimmedHeading.isEmpty else { return nil }
+    /// Preserves the raw typed amount even when it doesn't parse as a
+    /// Double (e.g. "1/2" or "to taste") — REC-004: retain the
+    /// author-entered string for fidelity even when normalized values
+    /// can't be derived from it.
+    private static func composeDisplayText(name: String, quantityText: String, unit: String) -> String {
+        var parts: [String] = []
+        if !quantityText.isEmpty { parts.append(quantityText) }
+        if !unit.isEmpty { parts.append(unit) }
+        if !name.isEmpty { parts.append(name) }
+        return parts.isEmpty ? name : parts.joined(separator: " ")
+    }
 
-        let section = StepSection(heading: trimmedHeading.isEmpty ? nil : trimmedHeading, sortOrder: sortOrder)
-        section.steps = lines.enumerated().map { index, line in
-            Step(text: line, sortOrder: index)
+    private static func buildStepSection(from rows: [DraftStepRow]) -> StepSection? {
+        let nonBlankRows = rows.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !nonBlankRows.isEmpty else { return nil }
+
+        let section = StepSection(heading: nil, sortOrder: 0)
+        section.steps = nonBlankRows.enumerated().map { index, row in
+            Step(text: row.text.trimmingCharacters(in: .whitespacesAndNewlines), sortOrder: index)
         }
         return section
     }
