@@ -9,3 +9,9 @@ cookbook/GoogleService-Info.plist
 
 # macOS
 .DS_Store
+
+# Firebase emulator (rules-tests)
+firestore-debug.log
+firebase-debug.log
+.firebase/
+rules-tests/node_modules/

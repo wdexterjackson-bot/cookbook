@@ -18,7 +18,9 @@ final class FirestoreEntitlementGranter: EntitlementGranting {
         guard !snapshot.exists else { return }
 
         try await ref.setData([
+            "userID": userID,
             "creationCredits": PromoCredit.creditCount,
+            "hasFamilyUser": false,
             "grantedPromoCredits": true,
             "createdAt": FieldValue.serverTimestamp(),
         ])
