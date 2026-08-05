@@ -9,22 +9,59 @@ import SwiftData
 struct RecipeListView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
+    @Environment(ActiveCookbookState.self) private var activeCookbookState
     @Query(sort: \Recipe.updatedAt, order: .reverse) private var allRecipes: [Recipe]
+    @Query private var allCookbooks: [Cookbook]
     @State private var isPresentingCreateRecipe = false
     @State private var isPresentingFilters = false
     @State private var isPresentingAccount = false
+    @State private var isPresentingCookbookSwitcher = false
     @State private var criteria = RecipeFilterCriteria()
+
+    private var activeCookbook: Cookbook? {
+        allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
+    }
 
     /// Recipes belonging to whichever identity is currently active on this
     /// device (signed-in account, or the local guest identity) — owner-key
     /// scoping so a second person signing in on a shared device never sees
-    /// the first person's recipes.
+    /// the first person's recipes — AND filed under the currently active
+    /// Cookbook specifically, now that an owner can have more than one.
     private var ownedRecipes: [Recipe] {
-        allRecipes.filter { $0.ownerID == accountState.currentOwnerID }
+        allRecipes.filter { $0.ownerID == accountState.currentOwnerID && $0.cookbookID == activeCookbookState.activeCookbookID }
     }
 
     private var filteredRecipes: [Recipe] {
         RecipeSearch.apply(criteria, to: ownedRecipes)
+    }
+
+    /// Groups filteredRecipes by the active cookbook's configured chapters,
+    /// in chapter order, with a trailing "Unfiled" group for anything with
+    /// no (or a since-removed) section. A cookbook with zero configured
+    /// chapters falls back to one untitled group — today's flat list.
+    private var groupedBySection: [(title: String?, recipes: [Recipe])] {
+        guard let activeCookbook, !activeCookbook.sections.isEmpty else {
+            return [(nil, filteredRecipes)]
+        }
+
+        var groups: [(title: String?, recipes: [Recipe])] = []
+        let sortedSections = activeCookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
+        for section in sortedSections {
+            let recipesInSection = filteredRecipes.filter { $0.sectionID == section.id }
+            if !recipesInSection.isEmpty {
+                groups.append((section.title, recipesInSection))
+            }
+        }
+
+        let knownSectionIDs = Set(sortedSections.map(\.id))
+        let unfiled = filteredRecipes.filter { recipe in
+            guard let sectionID = recipe.sectionID else { return true }
+            return !knownSectionIDs.contains(sectionID)
+        }
+        if !unfiled.isEmpty {
+            groups.append(("Unfiled", unfiled))
+        }
+        return groups
     }
 
     var body: some View {
@@ -34,7 +71,7 @@ struct RecipeListView: View {
                     ContentUnavailableView(
                         "No Recipes Yet",
                         systemImage: "fork.knife",
-                        description: Text("Tap the + button to add your first recipe to your Personal Cookbook.")
+                        description: Text("Tap the + button to add your first recipe to \(activeCookbook?.title ?? "your cookbook").")
                     )
                 } else if filteredRecipes.isEmpty {
                     ContentUnavailableView(
@@ -50,21 +87,31 @@ struct RecipeListView: View {
                             }
                             .listRowInsets(EdgeInsets())
                         }
-                        Section {
-                            ForEach(filteredRecipes) { recipe in
-                                NavigationLink {
-                                    RecipeDetailView(recipe: recipe)
-                                } label: {
-                                    RecipeRow(recipe: recipe)
+                        ForEach(Array(groupedBySection.enumerated()), id: \.offset) { _, group in
+                            Section {
+                                ForEach(group.recipes) { recipe in
+                                    NavigationLink {
+                                        RecipeDetailView(recipe: recipe)
+                                    } label: {
+                                        RecipeRow(recipe: recipe)
+                                    }
+                                    .swipeActions {
+                                        Button("Delete", role: .destructive) {
+                                            deleteRecipe(recipe)
+                                        }
+                                    }
+                                }
+                            } header: {
+                                if let title = group.title {
+                                    Text(title)
                                 }
                             }
-                            .onDelete(perform: deleteRecipes)
                         }
                     }
                 }
             }
             .searchable(text: $criteria.searchText, prompt: "Search recipes, ingredients, tags")
-            .navigationTitle("Personal Cookbook")
+            .navigationTitle(activeCookbook?.title ?? "Cookbook")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -73,6 +120,14 @@ struct RecipeListView: View {
                         Label("Add Recipe", systemImage: "plus")
                     }
                     .accessibilityLabel("Add Recipe")
+                }
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        isPresentingCookbookSwitcher = true
+                    } label: {
+                        Label("Cookbooks", systemImage: "books.vertical")
+                    }
+                    .accessibilityLabel("Switch or manage cookbooks")
                 }
                 ToolbarItem(placement: .secondaryAction) {
                     Menu {
@@ -105,6 +160,9 @@ struct RecipeListView: View {
             }
             .sheet(isPresented: $isPresentingFilters) {
                 RecipeFilterSheet(criteria: $criteria, availableOptions: RecipeFilterOptions(recipes: ownedRecipes))
+            }
+            .sheet(isPresented: $isPresentingCookbookSwitcher) {
+                CookbooksListView()
             }
             .sheet(isPresented: $isPresentingAccount) {
                 AccountView()
@@ -154,11 +212,9 @@ struct RecipeListView: View {
         .background(Capsule().fill(Color.secondary.opacity(0.15)))
     }
 
-    private func deleteRecipes(at offsets: IndexSet) {
+    private func deleteRecipe(_ recipe: Recipe) {
         let store = SwiftDataRecipeStore(context: modelContext)
-        for index in offsets {
-            try? store.delete(filteredRecipes[index])
-        }
+        try? store.delete(recipe)
     }
 }
 
@@ -237,4 +293,5 @@ private struct RecipeRow: View {
     RecipeListView()
         .modelContainer(for: Recipe.self, inMemory: true)
         .environment(AccountState(authService: FakeAuthService()))
+        .environment(ActiveCookbookState())
 }

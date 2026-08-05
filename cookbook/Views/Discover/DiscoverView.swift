@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct DiscoverView: View {
     enum SourceMode: String, CaseIterable, Identifiable {
@@ -254,4 +255,7 @@ private struct DiscoveredRecipeCard: View {
 
 #Preview {
     DiscoverView()
+        .modelContainer(for: Recipe.self, inMemory: true)
+        .environment(AccountState(authService: FakeAuthService()))
+        .environment(ActiveCookbookState())
 }

@@ -165,5 +165,6 @@ private struct RecipeDetailPreviewContainer: View {
         }
         .modelContainer(for: Recipe.self, inMemory: true)
         .environment(AccountState(authService: FakeAuthService()))
+        .environment(ActiveCookbookState())
     }
 }

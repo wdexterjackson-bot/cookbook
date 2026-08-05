@@ -35,6 +35,8 @@ struct CreateEditRecipeView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(AccountState.self) private var accountState
+    @Environment(ActiveCookbookState.self) private var activeCookbookState
+    @Query private var allCookbooks: [Cookbook]
 
     @State private var title: String
     @State private var summary: String
@@ -42,6 +44,7 @@ struct CreateEditRecipeView: View {
     @State private var notes: String
     @State private var ingredientSections: [DraftSection]
     @State private var stepSections: [DraftSection]
+    @State private var selectedChapterID: UUID?
     @State private var validationMessage: String?
 
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -58,6 +61,7 @@ struct CreateEditRecipeView: View {
             _notes = State(initialValue: "")
             _ingredientSections = State(initialValue: [DraftSection()])
             _stepSections = State(initialValue: [DraftSection()])
+            _selectedChapterID = State(initialValue: nil)
             _heroImageData = State(initialValue: nil)
 
         case .edit(let recipe):
@@ -73,6 +77,7 @@ struct CreateEditRecipeView: View {
             let sortedStepSections = recipe.stepSections.sorted { $0.sortOrder < $1.sortOrder }
             let stepDrafts = sortedStepSections.map(Self.makeStepDraft)
             _stepSections = State(initialValue: stepDrafts.isEmpty ? [DraftSection()] : stepDrafts)
+            _selectedChapterID = State(initialValue: recipe.sectionID)
 
             if let filename = recipe.heroPhotoFilename {
                 _heroImageData = State(initialValue: PhotoStore.data(for: filename))
@@ -94,6 +99,7 @@ struct CreateEditRecipeView: View {
 
             let stepDraft = DraftSection(heading: "", linesText: discovered.steps.joined(separator: "\n"))
             _stepSections = State(initialValue: [stepDraft])
+            _selectedChapterID = State(initialValue: nil)
             _heroImageData = State(initialValue: nil)
         }
     }
@@ -117,6 +123,17 @@ struct CreateEditRecipeView: View {
                     TextField("Title", text: $title)
                     TextField("Summary", text: $summary, axis: .vertical)
                     TextField("Yield (e.g. Serves 6)", text: $yield)
+                }
+
+                if let chapters = activeCookbook?.sections, !chapters.isEmpty {
+                    Section("Chapter") {
+                        Picker("Chapter", selection: $selectedChapterID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(chapters.sorted { $0.sortOrder < $1.sortOrder }) { chapter in
+                                Text(chapter.title).tag(UUID?.some(chapter.id))
+                            }
+                        }
+                    }
                 }
 
                 #if os(iOS)
@@ -248,6 +265,10 @@ struct CreateEditRecipeView: View {
         return false
     }
 
+    private var activeCookbook: Cookbook? {
+        allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
+    }
+
     private var navigationTitle: String {
         switch mode {
         case .create: return "New Recipe"
@@ -279,6 +300,7 @@ struct CreateEditRecipeView: View {
         switch mode {
         case .create:
             recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .manual)
+            recipe.cookbookID = activeCookbookState.activeCookbookID
             modelContext.insert(recipe)
         case .edit(let existing):
             recipe = existing
@@ -291,6 +313,7 @@ struct CreateEditRecipeView: View {
             }
         case .importing(let discovered):
             recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .webImport)
+            recipe.cookbookID = activeCookbookState.activeCookbookID
             recipe.sourceURL = discovered.sourceURL
             recipe.sourceAuthorText = discovered.attributionText
             recipe.externalSource = discovered.source.rawValue
@@ -312,6 +335,7 @@ struct CreateEditRecipeView: View {
         recipe.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         recipe.yield = yield.trimmingCharacters(in: .whitespacesAndNewlines)
         recipe.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        recipe.sectionID = selectedChapterID
         recipe.updatedAt = .now
 
         recipe.ingredientSections = ingredientSections.enumerated().compactMap { index, draft in
@@ -379,4 +403,5 @@ struct CreateEditRecipeView: View {
     CreateEditRecipeView(mode: .create)
         .modelContainer(for: Recipe.self, inMemory: true)
         .environment(AccountState(authService: FakeAuthService()))
+        .environment(ActiveCookbookState())
 }

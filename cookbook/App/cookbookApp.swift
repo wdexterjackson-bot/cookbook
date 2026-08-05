@@ -16,6 +16,7 @@ import GoogleSignIn
 struct cookbookApp: App {
     var sharedModelContainer: ModelContainer
     @State private var accountState: AccountState
+    @State private var activeCookbookState = ActiveCookbookState()
 
     init() {
         FirebaseApp.configure()
@@ -26,6 +27,8 @@ struct cookbookApp: App {
             Ingredient.self,
             StepSection.self,
             Step.self,
+            Cookbook.self,
+            CookbookSection.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -49,5 +52,6 @@ struct cookbookApp: App {
         }
         .modelContainer(sharedModelContainer)
         .environment(accountState)
+        .environment(activeCookbookState)
     }
 }

@@ -23,6 +23,16 @@ final class Recipe {
     /// offers to change it.
     var ownerID: String
 
+    /// Which Cookbook this recipe belongs to. Optional at the type level
+    /// (SwiftData lightweight migration needs new fields to default
+    /// safely) but should never be nil in practice once CookbookMigrator
+    /// has run at launch — a plain scalar reference, not a @Relationship,
+    /// matching how ownerID/lineage fields already reference other
+    /// entities without cascade-delete coupling.
+    var cookbookID: UUID?
+    /// Which chapter within that Cookbook, if any — nil means unfiled.
+    var sectionID: UUID?
+
     var title: String
     var summary: String
     var story: String
@@ -98,6 +108,8 @@ final class Recipe {
     ) {
         self.id = UUID()
         self.ownerID = ownerID
+        self.cookbookID = nil
+        self.sectionID = nil
         self.title = title
         self.summary = summary
         self.story = story

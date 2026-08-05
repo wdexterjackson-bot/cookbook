@@ -13,6 +13,7 @@ import SwiftData
 enum PostSignInCoordinator {
     static func handle(_ result: AuthResult, modelContext: ModelContext, entitlementGranter: EntitlementGranting) async {
         RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: modelContext, to: result.userID)
+        CookbookMigrator.migrateGuestCookbooksIfNeeded(in: modelContext, to: result.userID)
 
         if result.isNewAccount {
             try? await entitlementGranter.grantPromoCreditsIfEligible(userID: result.userID)
