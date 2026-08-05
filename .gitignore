@@ -7,6 +7,9 @@ xcuserdata/
 # Firebase config — contains API keys, per-developer/per-environment
 cookbook/GoogleService-Info.plist
 
+# Third-party API keys (Spoonacular, etc.) — per-developer, never committed
+cookbook/Secrets.plist
+
 # macOS
 .DS_Store
 

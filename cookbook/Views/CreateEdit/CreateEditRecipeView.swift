@@ -23,6 +23,11 @@ struct CreateEditRecipeView: View {
     enum Mode {
         case create
         case edit(Recipe)
+        /// Review-before-import (REC-008): pre-fills the same editor as
+        /// `.create` from a search result, but save() also stamps
+        /// nutrition/diet/external-source fields the plain create flow
+        /// never touches.
+        case importing(DiscoveredRecipe)
     }
 
     let mode: Mode
@@ -74,6 +79,22 @@ struct CreateEditRecipeView: View {
             } else {
                 _heroImageData = State(initialValue: nil)
             }
+
+        case .importing(let discovered):
+            _title = State(initialValue: discovered.title)
+            _summary = State(initialValue: discovered.summary ?? "")
+            _yield = State(initialValue: discovered.servings.map { "Serves \($0)" } ?? "")
+            _notes = State(initialValue: "")
+
+            let ingredientDraft = DraftSection(
+                heading: "",
+                linesText: discovered.ingredients.map(\.displayText).joined(separator: "\n")
+            )
+            _ingredientSections = State(initialValue: [ingredientDraft])
+
+            let stepDraft = DraftSection(heading: "", linesText: discovered.steps.joined(separator: "\n"))
+            _stepSections = State(initialValue: [stepDraft])
+            _heroImageData = State(initialValue: nil)
         }
     }
 
@@ -118,7 +139,7 @@ struct CreateEditRecipeView: View {
                     }
                 }
             }
-            .navigationTitle(isEditing ? "Edit Recipe" : "New Recipe")
+            .navigationTitle(navigationTitle)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -227,6 +248,14 @@ struct CreateEditRecipeView: View {
         return false
     }
 
+    private var navigationTitle: String {
+        switch mode {
+        case .create: return "New Recipe"
+        case .edit: return "Edit Recipe"
+        case .importing: return "Review & Add Recipe"
+        }
+    }
+
     private func save() {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasIngredientContent = ingredientSections.contains {
@@ -249,7 +278,7 @@ struct CreateEditRecipeView: View {
         let recipe: Recipe
         switch mode {
         case .create:
-            recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle)
+            recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .manual)
             modelContext.insert(recipe)
         case .edit(let existing):
             recipe = existing
@@ -260,6 +289,24 @@ struct CreateEditRecipeView: View {
             for section in recipe.stepSections {
                 modelContext.delete(section)
             }
+        case .importing(let discovered):
+            recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .webImport)
+            recipe.sourceURL = discovered.sourceURL
+            recipe.sourceAuthorText = discovered.attributionText
+            recipe.externalSource = discovered.source.rawValue
+            recipe.externalSourceID = discovered.externalID
+            recipe.totalTimeMinutes = discovered.readyInMinutes
+            recipe.dietaryLabels = discovered.dietFlags
+            if let nutrition = discovered.nutrition {
+                recipe.calories = nutrition.calories
+                recipe.proteinGrams = nutrition.proteinGrams
+                recipe.fatGrams = nutrition.fatGrams
+                recipe.carbsGrams = nutrition.carbsGrams
+                recipe.sugarGrams = nutrition.sugarGrams
+                recipe.fiberGrams = nutrition.fiberGrams
+                recipe.sodiumMilligrams = nutrition.sodiumMilligrams
+            }
+            modelContext.insert(recipe)
         }
 
         recipe.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)

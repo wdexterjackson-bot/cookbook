@@ -47,6 +47,24 @@ final class Recipe {
     var sourceURL: String?
     var sourceAuthorText: String?
 
+    /// Which external catalog (if any) this was imported from, and its ID
+    /// there — distinct from sourceURL/sourceAuthorText (display-only
+    /// attribution). Structured enough to answer "already in my cookbook?"
+    /// before re-spending API quota importing the same recipe twice.
+    var externalSource: String?
+    var externalSourceID: String?
+
+    // Nutrition — a curated subset of what Spoonacular computes, not the
+    // full ~20-nutrient breakdown. Per serving, nil for manually-created
+    // recipes (Phase 1 didn't have this; imports populate it directly).
+    var calories: Double?
+    var proteinGrams: Double?
+    var fatGrams: Double?
+    var carbsGrams: Double?
+    var sugarGrams: Double?
+    var fiberGrams: Double?
+    var sodiumMilligrams: Double?
+
     var cuisine: String?
     var course: String?
     var dietaryLabels: [String]
@@ -95,6 +113,15 @@ final class Recipe {
         self.sourceType = sourceType
         self.sourceURL = nil
         self.sourceAuthorText = nil
+        self.externalSource = nil
+        self.externalSourceID = nil
+        self.calories = nil
+        self.proteinGrams = nil
+        self.fatGrams = nil
+        self.carbsGrams = nil
+        self.sugarGrams = nil
+        self.fiberGrams = nil
+        self.sodiumMilligrams = nil
         self.cuisine = nil
         self.course = nil
         self.dietaryLabels = []

@@ -167,6 +167,8 @@ private struct RecipeRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            thumbnail
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(recipe.title)
                     .font(.headline)
@@ -175,6 +177,9 @@ private struct RecipeRow: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                }
+                if recipe.calories != nil || !recipe.dietaryLabels.isEmpty {
+                    metadataRow
                 }
             }
             Spacer()
@@ -185,6 +190,46 @@ private struct RecipeRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
+        #if os(iOS)
+        if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        } else {
+            placeholderThumbnail
+        }
+        #else
+        placeholderThumbnail
+        #endif
+    }
+
+    private var placeholderThumbnail: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(Color.accentColor.opacity(0.12))
+            .frame(width: 56, height: 56)
+            .overlay {
+                Image(systemName: "fork.knife")
+                    .foregroundStyle(Color.accentColor)
+            }
+    }
+
+    private var metadataRow: some View {
+        HStack(spacing: 6) {
+            if let calories = recipe.calories {
+                Text("\(calories.formatted(.number.precision(.fractionLength(0)))) cal")
+            }
+            ForEach(recipe.dietaryLabels.prefix(2), id: \.self) { label in
+                Text(label.capitalized)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(Color.accentColor)
     }
 }
 

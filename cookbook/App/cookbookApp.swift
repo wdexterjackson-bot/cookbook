@@ -40,7 +40,7 @@ struct cookbookApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RecipeListView()
+            RootTabView()
                 #if os(iOS)
                 .onOpenURL { url in
                     GIDSignIn.sharedInstance.handle(url)
