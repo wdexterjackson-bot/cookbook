@@ -7,10 +7,19 @@
 
 import SwiftUI
 import SwiftData
+import FirebaseCore
+#if os(iOS)
+import GoogleSignIn
+#endif
 
 @main
 struct cookbookApp: App {
-    var sharedModelContainer: ModelContainer = {
+    var sharedModelContainer: ModelContainer
+    @State private var accountState: AccountState
+
+    init() {
+        FirebaseApp.configure()
+
         let schema = Schema([
             Recipe.self,
             IngredientSection.self,
@@ -21,16 +30,24 @@ struct cookbookApp: App {
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            sharedModelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
-    }()
+
+        _accountState = State(initialValue: AccountState(authService: FirebaseAuthService()))
+    }
 
     var body: some Scene {
         WindowGroup {
             RecipeListView()
+                #if os(iOS)
+                .onOpenURL { url in
+                    GIDSignIn.sharedInstance.handle(url)
+                }
+                #endif
         }
         .modelContainer(sharedModelContainer)
+        .environment(accountState)
     }
 }

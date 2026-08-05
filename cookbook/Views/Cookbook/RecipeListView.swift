@@ -8,19 +8,29 @@ import SwiftData
 
 struct RecipeListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(AccountState.self) private var accountState
     @Query(sort: \Recipe.updatedAt, order: .reverse) private var allRecipes: [Recipe]
     @State private var isPresentingCreateRecipe = false
     @State private var isPresentingFilters = false
+    @State private var isPresentingAccount = false
     @State private var criteria = RecipeFilterCriteria()
 
+    /// Recipes belonging to whichever identity is currently active on this
+    /// device (signed-in account, or the local guest identity) — owner-key
+    /// scoping so a second person signing in on a shared device never sees
+    /// the first person's recipes.
+    private var ownedRecipes: [Recipe] {
+        allRecipes.filter { $0.ownerID == accountState.currentOwnerID }
+    }
+
     private var filteredRecipes: [Recipe] {
-        RecipeSearch.apply(criteria, to: allRecipes)
+        RecipeSearch.apply(criteria, to: ownedRecipes)
     }
 
     var body: some View {
         NavigationStack {
             Group {
-                if allRecipes.isEmpty {
+                if ownedRecipes.isEmpty {
                     ContentUnavailableView(
                         "No Recipes Yet",
                         systemImage: "fork.knife",
@@ -81,12 +91,23 @@ struct RecipeListView: View {
                     }
                     .accessibilityLabel("Sort and filter recipes")
                 }
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        isPresentingAccount = true
+                    } label: {
+                        Image(systemName: accountState.isSignedIn ? "person.crop.circle.fill" : "person.crop.circle")
+                    }
+                    .accessibilityLabel(accountState.isSignedIn ? "Account, signed in" : "Account, not signed in")
+                }
             }
             .sheet(isPresented: $isPresentingCreateRecipe) {
                 CreateEditRecipeView(mode: .create)
             }
             .sheet(isPresented: $isPresentingFilters) {
-                RecipeFilterSheet(criteria: $criteria, availableOptions: RecipeFilterOptions(recipes: allRecipes))
+                RecipeFilterSheet(criteria: $criteria, availableOptions: RecipeFilterOptions(recipes: ownedRecipes))
+            }
+            .sheet(isPresented: $isPresentingAccount) {
+                AccountView()
             }
         }
     }
@@ -170,4 +191,5 @@ private struct RecipeRow: View {
 #Preview {
     RecipeListView()
         .modelContainer(for: Recipe.self, inMemory: true)
+        .environment(AccountState(authService: FakeAuthService()))
 }

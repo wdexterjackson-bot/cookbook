@@ -29,6 +29,7 @@ struct CreateEditRecipeView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(AccountState.self) private var accountState
 
     @State private var title: String
     @State private var summary: String
@@ -248,7 +249,7 @@ struct CreateEditRecipeView: View {
         let recipe: Recipe
         switch mode {
         case .create:
-            recipe = Recipe(ownerID: LocalOwner.id, title: trimmedTitle)
+            recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle)
             modelContext.insert(recipe)
         case .edit(let existing):
             recipe = existing
@@ -330,4 +331,5 @@ struct CreateEditRecipeView: View {
 #Preview {
     CreateEditRecipeView(mode: .create)
         .modelContainer(for: Recipe.self, inMemory: true)
+        .environment(AccountState(authService: FakeAuthService()))
 }

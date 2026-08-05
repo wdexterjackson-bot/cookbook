@@ -1,0 +1,11 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Firebase config — contains API keys, per-developer/per-environment
+cookbook/GoogleService-Info.plist
+
+# macOS
+.DS_Store

@@ -1,0 +1,63 @@
+//
+//  FakeAuthService.swift
+//  cookbook
+//
+//  In-memory fake for tests/previews — no network, no real Firebase.
+//
+
+import Foundation
+
+final class FakeAuthService: AuthServicing {
+    private(set) var currentUserID: String?
+    private var registeredEmails: Set<String> = []
+
+    /// Every distinct (idToken) seen for Apple/Google sign-in is treated as
+    /// a distinct account, mirroring Firebase's isNewUser semantics.
+    private var seenFederatedTokens: Set<String> = []
+
+    var deleteAccountCallCount = 0
+
+    func signInWithEmail(email: String, password: String) async throws -> AuthResult {
+        guard registeredEmails.contains(email) else {
+            throw AuthServiceError.invalidCredential
+        }
+        let userID = "fake-user-\(email)"
+        currentUserID = userID
+        return AuthResult(userID: userID, isNewAccount: false)
+    }
+
+    func signUpWithEmail(email: String, password: String) async throws -> AuthResult {
+        registeredEmails.insert(email)
+        let userID = "fake-user-\(email)"
+        currentUserID = userID
+        return AuthResult(userID: userID, isNewAccount: true)
+    }
+
+    func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult {
+        try signInFederated(token: idToken, provider: "apple")
+    }
+
+    func signInWithGoogle(idToken: String, accessToken: String) async throws -> AuthResult {
+        try signInFederated(token: idToken, provider: "google")
+    }
+
+    private func signInFederated(token: String, provider: String) throws -> AuthResult {
+        let userID = "fake-user-\(provider)-\(token)"
+        let isNewAccount = !seenFederatedTokens.contains(token)
+        seenFederatedTokens.insert(token)
+        currentUserID = userID
+        return AuthResult(userID: userID, isNewAccount: isNewAccount)
+    }
+
+    func signOut() throws {
+        currentUserID = nil
+    }
+
+    func deleteAccount() async throws {
+        guard currentUserID != nil else {
+            throw AuthServiceError.notSignedIn
+        }
+        deleteAccountCallCount += 1
+        currentUserID = nil
+    }
+}
