@@ -35,14 +35,31 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
 
         let session = LanguageModelSession {
             """
-            You extract recipe ingredients and instruction steps from pasted,
-            possibly messy text. Classify each line as either an ingredient or
-            an instruction step. For ingredients, separate the quantity (a
-            plain number — convert fractions like "1/2" to 0.5) and unit
-            (e.g. cup, tbsp, oz, g) from the ingredient name whenever
-            possible; omit quantity or unit for a line that doesn't clearly
-            have one (e.g. "salt to taste"). Preserve the original order
-            within each list.
+            You extract structured recipe data from pasted, possibly messy
+            text. The text may use explicit labels ("Name:", "Section:",
+            "Notes:") — treat those as authoritative when present. Extract:
+
+            - title: the dish's name. Look for a "Name:" label first, or an
+              unambiguous title-like first line. Leave blank if not clearly
+              identifiable — never guess.
+            - chapterName: which cookbook chapter/category this recipe
+              belongs to (e.g. "Desserts", "Appetizers"), from a "Section:"
+              label. Leave blank if there's no such label — never infer this
+              from the recipe's content.
+            - ingredients and steps: classify each remaining line as either
+              an ingredient or an instruction step, preserving original
+              order within each list. For ingredients, separate the
+              quantity (a plain number — convert fractions like "1/2" to
+              0.5) and unit (e.g. cup, tbsp, oz, g) from the ingredient name
+              whenever possible; omit quantity or unit for a line that
+              doesn't clearly have one (e.g. "salt to taste").
+            - notes: trailing commentary that isn't itself a cooking
+              instruction — serving size, substitution tips, storage
+              advice, etc. Look for a "Notes:" label first; otherwise, if
+              text after the last real instruction step reads as commentary
+              rather than another step, treat it as notes instead of
+              appending it to steps. Leave blank if there's nothing like
+              that.
             """
         }
 
@@ -52,10 +69,23 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
             let ingredients = content.ingredients.map {
                 ParsedIngredientLine(name: $0.name, quantity: $0.quantity, unit: $0.unit)
             }
-            return ParsedRecipeLines(ingredients: ingredients, steps: content.steps)
+            return ParsedRecipeLines(
+                title: Self.nonBlank(content.title),
+                chapterName: Self.nonBlank(content.chapterName),
+                ingredients: ingredients,
+                steps: content.steps,
+                notes: Self.nonBlank(content.notes)
+            )
         } catch {
             throw RecipeLineImportError.parsingFailed
         }
+    }
+
+    private static func nonBlank(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }
 
@@ -68,6 +98,9 @@ private struct GeneratedRecipeLines {
         var unit: String?
     }
 
+    var title: String?
+    var chapterName: String?
     var ingredients: [GeneratedIngredient]
     var steps: [String]
+    var notes: String?
 }

@@ -18,8 +18,22 @@ struct ParsedIngredientLine: Equatable {
 }
 
 struct ParsedRecipeLines: Equatable {
+    /// The dish's name, if identifiable — from an explicit "Name:" label or
+    /// an unambiguous title-like first line. Nil (never guessed) when not
+    /// clearly identifiable.
+    var title: String? = nil
+    /// Which cookbook chapter this recipe belongs to (e.g. "Desserts"),
+    /// from an explicit "Section:" label — matched against the target
+    /// cookbook's existing chapters by the caller, not resolved here. Nil
+    /// when not clearly identifiable.
+    var chapterName: String? = nil
     var ingredients: [ParsedIngredientLine]
     var steps: [String]
+    /// Trailing commentary distinct from the numbered/imperative cooking
+    /// steps — serving info, substitution tips, etc. From an explicit
+    /// "Notes:" label, or inferred as non-instructional text following the
+    /// last real step. Nil when there's nothing like that to separate out.
+    var notes: String? = nil
 }
 
 enum RecipeLineImportError: Error, Equatable {

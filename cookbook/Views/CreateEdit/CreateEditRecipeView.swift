@@ -481,6 +481,18 @@ struct CreateEditRecipeView: View {
         do {
             let result = try await lineImportService.parseLines(from: importText)
 
+            if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let parsedTitle = result.title {
+                title = parsedTitle
+            }
+            if let chapterName = result.chapterName, let matchedChapter = matchingChapter(named: chapterName) {
+                selectedChapterID = matchedChapter.id
+            }
+            if let parsedNotes = result.notes {
+                notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? parsedNotes
+                    : notes + "\n\n" + parsedNotes
+            }
+
             ingredientRows.removeAll { $0.isBlank }
             for parsed in result.ingredients {
                 ingredientRows.append(DraftIngredientRow(
@@ -618,6 +630,16 @@ struct CreateEditRecipeView: View {
 
     private var activeCookbook: Cookbook? {
         allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
+    }
+
+    /// Matches an AI-parsed chapter name (from an import's "Section:"
+    /// label) against the active cookbook's existing chapters — never
+    /// creates a new one, per the "leave it blank rather than guess" rule
+    /// for anything that can't be confidently resolved.
+    private func matchingChapter(named chapterName: String) -> CookbookSection? {
+        activeCookbook?.sections.first {
+            $0.title.caseInsensitiveCompare(chapterName) == .orderedSame
+        }
     }
 
     private func save() {
