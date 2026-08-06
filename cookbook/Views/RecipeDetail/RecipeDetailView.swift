@@ -75,16 +75,17 @@ struct RecipeDetailView: View {
                 Button {
                     recipe.isFavorite.toggle()
                     recipe.updatedAt = .now
-                    try? modelContext.save()
+                    saveOrRevert { recipe.isFavorite.toggle() }
                 } label: {
                     Image(systemName: recipe.isFavorite ? "heart.fill" : "heart")
                 }
                 .accessibilityLabel(recipe.isFavorite ? "Remove from Favorites" : "Add to Favorites")
 
                 Button {
+                    let previousRating = recipe.personalRating
                     recipe.personalRating = isLiked ? nil : 5
                     recipe.updatedAt = .now
-                    try? modelContext.save()
+                    saveOrRevert { recipe.personalRating = previousRating }
                 } label: {
                     Image(systemName: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
                 }
@@ -148,6 +149,19 @@ struct RecipeDetailView: View {
             }
         }
         showCartToast("Added all ingredients to cart")
+    }
+
+    /// Favorite/Like toggle first, save second — if the save throws, undo
+    /// the toggle so the UI doesn't claim a change that didn't persist,
+    /// and tell the user via the existing cart-toast overlay (a generic
+    /// bottom toast despite the name, not cart-specific).
+    private func saveOrRevert(undo: () -> Void) {
+        do {
+            try modelContext.save()
+        } catch {
+            undo()
+            showCartToast("Couldn't save — try again")
+        }
     }
 
     private func showCartToast(_ message: String) {

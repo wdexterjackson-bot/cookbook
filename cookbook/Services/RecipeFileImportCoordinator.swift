@@ -19,6 +19,10 @@ struct RecipeFileImportResult {
     /// the results screen can tell the user what to fix and re-import,
     /// rather than the whole batch aborting on one bad block.
     var failedChunks: [String] = []
+    /// Set if the final SwiftData save itself threw — in that case nothing
+    /// in `importedTitles` actually persisted (the save is all-or-nothing),
+    /// so the results screen must not report those as successes.
+    var saveErrorMessage: String?
 }
 
 enum RecipeFileImportCoordinator {
@@ -76,7 +80,12 @@ enum RecipeFileImportCoordinator {
             }
         }
 
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            result.saveErrorMessage = error.localizedDescription
+            result.importedTitles = []
+        }
         return result
     }
 

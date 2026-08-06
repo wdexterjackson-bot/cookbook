@@ -73,7 +73,14 @@ struct ImportRecipesFileView: View {
 
                 if let importResult {
                     Section("Results") {
-                        Text("\(importResult.importedTitles.count) recipe\(importResult.importedTitles.count == 1 ? "" : "s") imported.")
+                        if let saveErrorMessage = importResult.saveErrorMessage {
+                            Text("Couldn't save: \(saveErrorMessage)")
+                                .foregroundStyle(.red)
+                            Text("Nothing from this file was imported. Try again.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("\(importResult.importedTitles.count) recipe\(importResult.importedTitles.count == 1 ? "" : "s") imported.")
+                        }
                         if !importResult.failedChunks.isEmpty {
                             Text("\(importResult.failedChunks.count) couldn't be imported:")
                                 .foregroundStyle(.secondary)

@@ -239,9 +239,6 @@ struct CookbookConfigurationView: View {
             cookbook = existing
             cookbook.title = trimmedTitle
             cookbook.coverColorHex = coverColorHex
-            for section in cookbook.sections {
-                modelContext.delete(section)
-            }
         }
 
         cookbook.hasBeenConfigured = true
@@ -263,20 +260,47 @@ struct CookbookConfigurationView: View {
         // Catalog chapters first (in catalog order), then custom ones in
         // the order they were added — a documented simplification, not a
         // full arbitrary-reorder (see CookbookConfigurationView init).
+        //
+        // Chapters that are kept reuse their existing CookbookSection
+        // instance (and therefore its id) rather than being recreated —
+        // Recipe.sectionID is a plain scalar UUID copy, not a live
+        // relationship, so a fresh id on every edit was silently unfiling
+        // every recipe in the cookbook (RecipeListView.groupedBySection
+        // buckets any sectionID it doesn't recognize into "Unfiled"), even
+        // when the edit didn't touch chapters at all.
+        var existingSectionsByTitle: [String: CookbookSection] = [:]
+        for section in cookbook.sections {
+            existingSectionsByTitle[section.title] = section
+        }
+
         var sortOrder = 0
         var sections: [CookbookSection] = []
+        var keptTitles: Set<String> = []
         for catalogTitle in RecipeSectionCatalog.defaultChapterTitles where selectedCatalogTitles.contains(catalogTitle) {
-            sections.append(CookbookSection(title: catalogTitle, sortOrder: sortOrder))
+            let section = existingSectionsByTitle[catalogTitle] ?? CookbookSection(title: catalogTitle, sortOrder: sortOrder)
+            section.sortOrder = sortOrder
+            sections.append(section)
+            keptTitles.insert(catalogTitle)
             sortOrder += 1
         }
         for customTitle in customSectionTitles {
-            sections.append(CookbookSection(title: customTitle, sortOrder: sortOrder))
+            let section = existingSectionsByTitle[customTitle] ?? CookbookSection(title: customTitle, sortOrder: sortOrder)
+            section.sortOrder = sortOrder
+            sections.append(section)
+            keptTitles.insert(customTitle)
             sortOrder += 1
+        }
+        for section in cookbook.sections where !keptTitles.contains(section.title) {
+            modelContext.delete(section)
         }
         cookbook.sections = sections
 
-        try? modelContext.save()
-        dismiss()
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            validationMessage = "Couldn't save this cookbook: \(error.localizedDescription)"
+        }
     }
 }
 

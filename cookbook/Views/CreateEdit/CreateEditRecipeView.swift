@@ -784,8 +784,12 @@ struct CreateEditRecipeView: View {
         applyPhotoChanges(to: recipe)
         #endif
 
-        try? modelContext.save()
-        dismiss()
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            validationMessage = "Couldn't save this recipe: \(error.localizedDescription)"
+        }
     }
 
     #if os(iOS)
