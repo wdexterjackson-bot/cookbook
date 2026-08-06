@@ -13,6 +13,12 @@ import AuthenticationServices
 import GoogleSignIn
 #endif
 
+enum AuthIntent: String, CaseIterable, Identifiable {
+    case signIn = "Sign In"
+    case signUp = "Sign Up"
+    var id: String { rawValue }
+}
+
 struct SignInView: View {
     /// False for the mandatory launch gate (AuthGatedRootView) — no Cancel
     /// button, and a successful sign-in doesn't call dismiss() since the
@@ -24,6 +30,9 @@ struct SignInView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
+    /// Chosen before the user ever types an email — so the email/password
+    /// fields below always know which action they're feeding.
+    @State private var authIntent: AuthIntent = .signIn
     @State private var email = ""
     @State private var password = ""
     @State private var isBusy = false
@@ -32,6 +41,24 @@ struct SignInView: View {
 
     private let entitlementGranter: EntitlementGranting = FirestoreEntitlementGranter()
     private let lookupService: EmailProviderLookupServicing = FirebaseEmailProviderLookupService()
+
+    /// Google's brand wordmark colors, per letter — "Sign in with Google"
+    /// with "Google" rendered the way Google's own logo colors it, rather
+    /// than a plain single-color label.
+    private static var googleSignInLabel: Text {
+        let letters: [(Character, Color)] = [
+            ("G", Color(red: 0.259, green: 0.522, blue: 0.957)),
+            ("o", Color(red: 0.918, green: 0.263, blue: 0.208)),
+            ("o", Color(red: 0.984, green: 0.737, blue: 0.020)),
+            ("g", Color(red: 0.259, green: 0.522, blue: 0.957)),
+            ("l", Color(red: 0.204, green: 0.659, blue: 0.325)),
+            ("e", Color(red: 0.918, green: 0.263, blue: 0.208)),
+        ]
+        let wordmark = letters.reduce(Text("")) { partial, letter in
+            partial + Text(String(letter.0)).foregroundColor(letter.1)
+        }
+        return Text("Sign in with ").foregroundColor(.primary) + wordmark
+    }
 
     var body: some View {
         NavigationStack {
@@ -43,6 +70,15 @@ struct SignInView: View {
                     }
                 }
 
+                Section {
+                    Picker("Sign In or Sign Up", selection: $authIntent) {
+                        ForEach(AuthIntent.allCases) { intent in
+                            Text(intent.rawValue).tag(intent)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
                 Section("Email") {
                     TextField("Email", text: $email)
                         #if os(iOS)
@@ -52,13 +88,8 @@ struct SignInView: View {
                         .autocorrectionDisabled()
                     SecureField("Password", text: $password)
 
-                    Button("Sign In") {
-                        Task { await performEmailAuth(isSignUp: false) }
-                    }
-                    .disabled(email.isEmpty || password.isEmpty || isBusy)
-
-                    Button("Create Account") {
-                        Task { await performEmailAuth(isSignUp: true) }
+                    Button(authIntent.rawValue) {
+                        Task { await performEmailAuth(isSignUp: authIntent == .signUp) }
                     }
                     .disabled(email.isEmpty || password.isEmpty || isBusy)
                 }
@@ -79,7 +110,7 @@ struct SignInView: View {
                     Button {
                         Task { await signInWithGoogle() }
                     } label: {
-                        Label("Sign in with Google", systemImage: "globe")
+                        Self.googleSignInLabel
                     }
                 }
                 #endif
