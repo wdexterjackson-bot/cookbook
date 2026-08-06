@@ -20,6 +20,37 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+#if os(iOS)
+import UIKit
+#endif
+
+/// A raised, physically-pushable look — filled and shadowed at rest,
+/// flattens and shifts down while pressed. Used for "Paste Recipe" so its
+/// active/inactive state (something to paste vs. nothing) reads instantly
+/// from color alone, on top of the tap disabling itself.
+private struct PushableButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .foregroundStyle(isEnabled ? Color.white : Color.secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isEnabled ? Color.accentColor : Color.secondary.opacity(0.15))
+            )
+            .shadow(
+                color: isEnabled ? Color.accentColor.opacity(0.45) : .clear,
+                radius: configuration.isPressed ? 0 : 4,
+                y: configuration.isPressed ? 0 : 3
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .offset(y: configuration.isPressed ? 2 : 0)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
 
 private struct DraftIngredientRow: Identifiable {
     let id = UUID()
@@ -77,6 +108,8 @@ struct CreateEditRecipeView: View {
     @State private var importText = ""
     @State private var isImporting = false
     @State private var importErrorMessage: String?
+    @State private var hasClipboardText = false
+    @Environment(\.scenePhase) private var scenePhase
     private let lineImportService: RecipeLineImportServicing = FoundationModelsLineImportService()
 
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -324,9 +357,28 @@ struct CreateEditRecipeView: View {
     private var importSection: some View {
         Section {
             if lineImportService.isAvailable {
-                TextEditor(text: $importText)
-                    .frame(minHeight: 100)
-                    .accessibilityLabel("Paste ingredients and steps to import")
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $importText)
+                        .frame(minHeight: 120)
+                        .padding(6)
+                        .accessibilityLabel("Paste ingredients and steps to import")
+
+                    if importText.isEmpty {
+                        Text("Tap here to paste or type ingredients and steps…")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 14)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
 
                 Button {
                     Task { await performImport() }
@@ -350,11 +402,43 @@ struct CreateEditRecipeView: View {
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("Import")
+            HStack {
+                Text("Import")
+                Spacer()
+                #if os(iOS)
+                Button("Paste Recipe") {
+                    pasteFromClipboard()
+                }
+                .buttonStyle(PushableButtonStyle())
+                .disabled(!hasClipboardText)
+                .textCase(nil)
+                #endif
+            }
         } footer: {
             Text("Paste a full list of ingredients and steps — AI will sort them into Ingredients and Steps above.")
         }
+        #if os(iOS)
+        .onAppear {
+            refreshClipboardStatus()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                refreshClipboardStatus()
+            }
+        }
+        #endif
     }
+
+    #if os(iOS)
+    private func refreshClipboardStatus() {
+        hasClipboardText = UIPasteboard.general.hasStrings
+    }
+
+    private func pasteFromClipboard() {
+        guard let text = UIPasteboard.general.string else { return }
+        importText = text
+    }
+    #endif
 
     private func performImport() async {
         isImporting = true
