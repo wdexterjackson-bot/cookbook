@@ -3,9 +3,11 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
+const { getStorage } = require('firebase-admin/storage');
 const { applyPurchaseClaim } = require('./applyPurchaseClaim');
 const { verifyTransaction } = require('./purchaseClaimVerifier');
 const { resolveSignInProviders, RateLimitExceededError } = require('./resolveSignInProviders');
+const { deleteGroupPermanently } = require('./deleteGroupPermanently');
 
 initializeApp();
 
@@ -45,5 +47,23 @@ exports.resolveSignInProviders = onCall(async (request) => {
     }
     console.error('resolveSignInProviders failed:', error);
     throw new HttpsError('internal', 'Could not check this email right now.');
+  }
+});
+
+// Called by GroupsServicing.leaveGroup client-side, only once it's
+// determined the caller is the last active member — see
+// deleteGroupPermanently.js for why this can't be done from the client at
+// all (every collection it touches has `allow delete: if false`).
+exports.deleteGroupPermanently = onCall(async (request) => {
+  const groupID = request.data && request.data.groupID;
+  const callerUserID = request.auth && request.auth.uid;
+  if (!callerUserID) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  try {
+    return await deleteGroupPermanently({ db: getFirestore(), bucket: getStorage().bucket(), groupID, callerUserID });
+  } catch (error) {
+    console.error('deleteGroupPermanently failed:', error);
+    throw new HttpsError('internal', error.message || 'Could not delete this cookbook right now.');
   }
 });

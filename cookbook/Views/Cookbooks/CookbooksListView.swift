@@ -18,6 +18,7 @@ struct CookbooksListView: View {
     @Query private var allCookbooks: [Cookbook]
     @State private var isPresentingCreate = false
     @State private var cookbookPendingEdit: Cookbook?
+    @State private var cookbookPendingDeletion: Cookbook?
 
     private var ownedCookbooks: [Cookbook] {
         allCookbooks
@@ -37,10 +38,8 @@ struct CookbooksListView: View {
                     }
                     .buttonStyle(.plain)
                     .swipeActions {
-                        if ownedCookbooks.count > 1 {
-                            Button("Delete", role: .destructive) {
-                                delete(cookbook)
-                            }
+                        Button("Delete", role: .destructive) {
+                            cookbookPendingDeletion = cookbook
                         }
                         Button("Edit") {
                             cookbookPendingEdit = cookbook
@@ -70,27 +69,48 @@ struct CookbooksListView: View {
             .sheet(item: $cookbookPendingEdit) { cookbook in
                 CookbookConfigurationView(mode: .edit(cookbook))
             }
+            .confirmationDialog(
+                deletionConfirmationTitle,
+                isPresented: Binding(
+                    get: { cookbookPendingDeletion != nil },
+                    set: { isPresented in if !isPresented { cookbookPendingDeletion = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let cookbookPendingDeletion {
+                    Button("Delete", role: .destructive) {
+                        delete(cookbookPendingDeletion)
+                        self.cookbookPendingDeletion = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    cookbookPendingDeletion = nil
+                }
+            }
         }
     }
 
-    private func delete(_ cookbook: Cookbook) {
-        guard let fallback = ownedCookbooks.first(where: { $0.id != cookbook.id }) else { return }
+    private var deletionConfirmationTitle: String {
+        guard let cookbookPendingDeletion else { return "" }
+        let count = CookbookDeletionCoordinator.recipeCount(for: cookbookPendingDeletion, in: modelContext)
+        let recipeWord = count == 1 ? "recipe" : "recipes"
+        return "Delete \"\(cookbookPendingDeletion.title)\"? This will permanently delete this cookbook and its \(count) \(recipeWord). This cannot be undone."
+    }
 
-        let cookbookID = cookbook.id
-        let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.cookbookID == cookbookID })
-        if let orphanedRecipes = try? modelContext.fetch(descriptor) {
-            for recipe in orphanedRecipes {
-                recipe.cookbookID = fallback.id
-                recipe.sectionID = nil
+    /// No longer needs a fallback cookbook to reassign recipes into (see
+    /// CookbookDeletionCoordinator), so this works even when it's the
+    /// user's only cookbook — CookbookMigrator recreates an empty
+    /// "Personal Cookbook" next time one is needed.
+    private func delete(_ cookbook: Cookbook) {
+        if activeCookbookState.activeCookbookID == cookbook.id {
+            if let fallback = ownedCookbooks.first(where: { $0.id != cookbook.id }) {
+                activeCookbookState.setActive(fallback.id)
+            } else {
+                activeCookbookState.reset()
             }
         }
 
-        if activeCookbookState.activeCookbookID == cookbook.id {
-            activeCookbookState.setActive(fallback.id)
-        }
-
-        modelContext.delete(cookbook)
-        try? modelContext.save()
+        CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, in: modelContext)
     }
 }
 

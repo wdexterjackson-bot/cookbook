@@ -238,6 +238,10 @@ final class InMemoryGroupsService: GroupsServicing {
 
     func leaveGroup(groupID: String, userID: String) async throws {
         let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        if GroupPolicy.isLastActiveMember(userID, in: groupMemberships) {
+            try await deleteGroupPermanently(groupID: groupID)
+            return
+        }
         if GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
             throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
         }
@@ -248,14 +252,10 @@ final class InMemoryGroupsService: GroupsServicing {
         memberships[index].leftAt = .now
     }
 
-    func archiveGroup(groupID: String, actingUserID: String) async throws {
-        let groupMemberships = try await fetchMemberships(forGroup: groupID)
-        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
-            throw GroupsServiceError.notAuthorized
-        }
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else {
-            throw GroupsServiceError.groupNotFound
-        }
-        groups[index].status = .archived
+    func deleteGroupPermanently(groupID: String) async throws {
+        groups.removeAll { $0.id == groupID }
+        memberships.removeAll { $0.groupID == groupID }
+        joinRequests.removeAll { $0.groupID == groupID }
+        invitations.removeAll { $0.groupID == groupID }
     }
 }

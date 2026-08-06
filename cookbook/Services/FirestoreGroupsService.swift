@@ -10,10 +10,12 @@
 //
 
 import FirebaseFirestore
+import FirebaseFunctions
 import Foundation
 
 final class FirestoreGroupsService: GroupsServicing {
     private let db = Firestore.firestore()
+    private let functions = Functions.functions()
 
     func createGroup(_ details: NewGroupDetails, creatorUserID: String, idempotencyKey: String) async throws -> FamilyGroup {
         let requestRef = db.collection("groupCreationRequests").document(idempotencyKey)
@@ -258,6 +260,10 @@ final class FirestoreGroupsService: GroupsServicing {
 
     func leaveGroup(groupID: String, userID: String) async throws {
         let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        if GroupPolicy.isLastActiveMember(userID, in: groupMemberships) {
+            try await deleteGroupPermanently(groupID: groupID)
+            return
+        }
         if GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
             throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
         }
@@ -269,12 +275,15 @@ final class FirestoreGroupsService: GroupsServicing {
         try db.collection("memberships").document(membership.id).setData(from: membership)
     }
 
-    func archiveGroup(groupID: String, actingUserID: String) async throws {
-        let groupMemberships = try await fetchMemberships(forGroup: groupID)
-        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
-            throw GroupsServiceError.notAuthorized
-        }
-        try await db.collection("groups").document(groupID).setData(["status": GroupStatus.archived.rawValue], merge: true)
+    /// Every client-facing collection touched here (`memberships`,
+    /// `publications`, `groupUniquenessKeys`, `groups`) has
+    /// `allow delete: if false` in firestore.rules, and storage.rules only
+    /// lets a user delete files they themselves uploaded — so none of this
+    /// cleanup is possible directly from the client. The Cloud Function
+    /// runs with the Admin SDK, which bypasses both rules files.
+    func deleteGroupPermanently(groupID: String) async throws {
+        let callable = functions.httpsCallable("deleteGroupPermanently")
+        _ = try await callable.call(["groupID": groupID])
     }
 
     /// `uniquenessKey` is written onto the group document (though not part

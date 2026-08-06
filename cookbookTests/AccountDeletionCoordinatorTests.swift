@@ -118,26 +118,24 @@ struct AccountDeletionCoordinatorTests {
         #expect(memberships.first { $0.userID == "alice" }?.status == .active)
     }
 
-    /// GroupPolicy.isLastActiveAdmin (and leaveGroup, which already relies
-    /// on it) blocks unconditionally for the last admin — solo or not.
-    /// This is pre-existing behavior this feature deliberately reuses
-    /// rather than changing, so a solo admin still needs to archive their
-    /// own cookbook first (via the new Archive Cookbook action) before
-    /// deleting their account.
-    @Test func blocksEvenWhenTheSoleAdminIsTheOnlyMember() async throws {
+    /// A solo admin isn't blocked, unlike an admin who'd be stranding other
+    /// active members — leaveGroup's last-active-member rule deletes the
+    /// group entirely instead, so there's nothing left to strand.
+    @Test func deletesTheGroupWhenTheSoleAdminIsTheOnlyMember() async throws {
         let context = try makeInMemoryContext()
         let groups = InMemoryGroupsService()
         groups.creditsByUserID["alice"] = 1
         let group = try await groups.createGroup(makeDetails(name: "Solo", cookbookName: "Solo Cookbook"), creatorUserID: "alice", idempotencyKey: "req-1")
 
-        await #expect(throws: AccountDeletionError.blockedByAdminOnlyCookbooks(cookbookNames: ["Solo Cookbook"])) {
-            try await AccountDeletionCoordinator.deleteAllData(
-                for: "alice",
-                modelContext: context,
-                groupsService: groups,
-                entitlementService: InMemoryEntitlementService()
-            )
-        }
+        try await AccountDeletionCoordinator.deleteAllData(
+            for: "alice",
+            modelContext: context,
+            groupsService: groups,
+            entitlementService: InMemoryEntitlementService()
+        )
+
+        let remaining = try await groups.fetchGroup(id: group.id)
+        #expect(remaining == nil)
     }
 
     @Test func bestEffortDeletesTheEntitlementDocument() async throws {

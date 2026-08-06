@@ -97,14 +97,51 @@ struct GroupsServicingTests {
         #expect(memberships.contains { $0.userID == "carol" && $0.source == .invite })
     }
 
-    @Test func lastAdminCannotLeaveGroup() async throws {
+    /// Distinct from a solo admin leaving an otherwise-empty group (see
+    /// `lastActiveMemberLeavingDeletesTheWholeGroup`) — this is the case
+    /// where leaving would strand a still-populated group with no admin,
+    /// which stays blocked.
+    @Test func lastAdminCannotLeaveGroupWhileOtherActiveMembersRemain() async throws {
         let service = InMemoryGroupsService()
         service.creditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
 
         await #expect(throws: GroupsServiceError.lastAdminCannotLeaveOrBeDemoted) {
             try await service.leaveGroup(groupID: group.id, userID: "alice")
         }
+    }
+
+    @Test func lastActiveMemberLeavingDeletesTheWholeGroup() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 1
+        let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+
+        try await service.leaveGroup(groupID: group.id, userID: "alice")
+
+        let remaining = try await service.fetchGroup(id: group.id)
+        #expect(remaining == nil)
+        let memberships = try await service.fetchMemberships(forGroup: group.id)
+        #expect(memberships.isEmpty)
+    }
+
+    /// The "last active member" rule doesn't care whether that member is
+    /// an admin or not — role only matters for the "populated but
+    /// adminless" protection above.
+    @Test func lastActiveMemberOfAnyRoleLeavingDeletesTheGroup() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 1
+        let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
+        try await service.updateRole(groupID: group.id, userID: "bob", newRole: .admin, actingUserID: "alice")
+        try await service.leaveGroup(groupID: group.id, userID: "alice")
+
+        try await service.leaveGroup(groupID: group.id, userID: "bob")
+
+        let remaining = try await service.fetchGroup(id: group.id)
+        #expect(remaining == nil)
     }
 
     @Test func lastAdminCannotBeDemoted() async throws {

@@ -33,7 +33,12 @@ enum AccountDeletionCoordinator {
         var blockingCookbookNames: [String] = []
         for membership in memberships {
             let groupMemberships = try await groupsService.fetchMemberships(forGroup: membership.groupID)
-            guard GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) else { continue }
+            // Being the last admin only blocks deletion if it would strand
+            // a still-populated group. If they're also the last active
+            // member overall, leaveGroup below deletes the group entirely
+            // instead of stranding it, so that case doesn't need blocking.
+            guard GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships),
+                  !GroupPolicy.isLastActiveMember(userID, in: groupMemberships) else { continue }
             if let group = try await groupsService.fetchGroup(id: membership.groupID) {
                 blockingCookbookNames.append(group.cookbookName)
             }
@@ -45,7 +50,9 @@ enum AccountDeletionCoordinator {
         for membership in memberships {
             // Pre-flight already ruled out stranding any group; a failure
             // here is a secondary concern, not worth blocking the deletion
-            // the user actually asked for.
+            // the user actually asked for. When this user is a group's last
+            // active member, leaveGroup deletes the whole group rather than
+            // just marking this membership left.
             try? await groupsService.leaveGroup(groupID: membership.groupID, userID: userID)
         }
 

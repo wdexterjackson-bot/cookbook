@@ -68,6 +68,15 @@ enum GroupPolicy {
         let activeAdmins = memberships.filter { $0.role == .admin && $0.status == .active }
         return activeAdmins.count == 1 && activeAdmins.first?.userID == userID
     }
+
+    /// True when `userID` is the only active membership left, of any role —
+    /// distinct from `isLastActiveAdmin`, which only looks at admins. This
+    /// is the case where leaving deletes the whole group rather than just
+    /// marking one membership `.left`.
+    static func isLastActiveMember(_ userID: String, in memberships: [Membership]) -> Bool {
+        let active = memberships.filter { $0.status == .active }
+        return active.count == 1 && active.first?.userID == userID
+    }
 }
 
 protocol GroupsServicing {
@@ -98,7 +107,19 @@ protocol GroupsServicing {
     /// Throws `.lastAdminCannotLeaveOrBeDemoted` if this would leave the
     /// group with no active admin (GRP-008).
     func updateRole(groupID: String, userID: String, newRole: MembershipRole, actingUserID: String) async throws
-    /// Throws `.lastAdminCannotLeaveOrBeDemoted` under the same rule.
+    /// If `userID` is the last active member of any role, this deletes the
+    /// group and everything in it (see `deleteGroupPermanently`) instead of
+    /// just marking their membership `.left`. Otherwise throws
+    /// `.lastAdminCannotLeaveOrBeDemoted` under the same rule as before —
+    /// a populated-but-adminless group is still not allowed.
     func leaveGroup(groupID: String, userID: String) async throws
-    func archiveGroup(groupID: String, actingUserID: String) async throws
+    /// Permanently deletes a group and everything tied to it — memberships,
+    /// published recipes, their photos, and the cookbook-name/location
+    /// reservation. Client-side rules block direct deletes on every one of
+    /// those collections (`allow delete: if false`), so this always goes
+    /// through a Cloud Function running with elevated privileges; there is
+    /// no client-only implementation. Called automatically by `leaveGroup`
+    /// when the leaving member is the last one — not normally called
+    /// directly by UI code.
+    func deleteGroupPermanently(groupID: String) async throws
 }

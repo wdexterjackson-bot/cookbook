@@ -18,9 +18,11 @@ struct GroupCookbookView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AccountState.self) private var accountState
     @State private var publications: [Publication] = []
+    @State private var groupMemberships: [Membership] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var busyPublicationIDs: Set<String> = []
+    @State private var isPresentingLeaveConfirmation = false
 
     private let publicationsService: PublicationsServicing = FirestorePublicationsService()
     private let photoUploadService: RecipePhotoUploadServicing = FirebaseRecipePhotoUploadService()
@@ -54,12 +56,7 @@ struct GroupCookbookView: View {
 
             Section {
                 Button("Leave Family Cookbook", role: .destructive) {
-                    Task { await leave() }
-                }
-                if membership.role == .admin {
-                    Button("Archive Cookbook", role: .destructive) {
-                        Task { await archive() }
-                    }
+                    isPresentingLeaveConfirmation = true
                 }
             }
 
@@ -75,7 +72,32 @@ struct GroupCookbookView: View {
         #endif
         .task {
             await loadPublications()
+            await loadMemberships()
         }
+        .confirmationDialog(
+            leaveConfirmationMessage,
+            isPresented: $isPresentingLeaveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(isLastActiveMember ? "Delete Cookbook" : "Leave", role: .destructive) {
+                Task { await leave() }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Whether `membership.userID` leaving would be the last active
+    /// membership on this group — leaveGroup deletes the whole cookbook in
+    /// that case rather than just marking this one membership `.left`.
+    private var isLastActiveMember: Bool {
+        GroupPolicy.isLastActiveMember(membership.userID, in: groupMemberships)
+    }
+
+    private var leaveConfirmationMessage: String {
+        if isLastActiveMember {
+            return "You're the last member of \(group.cookbookName). Leaving will permanently delete this cookbook and everything in it — recipes and photos — for everyone. This cannot be undone."
+        }
+        return "Leave \(group.name)? You'll be removed from this Family Cookbook."
     }
 
     private var cookbookHeader: some View {
@@ -160,24 +182,16 @@ struct GroupCookbookView: View {
         }
     }
 
+    private func loadMemberships() async {
+        groupMemberships = (try? await groupsService.fetchMemberships(forGroup: group.id)) ?? []
+    }
+
     private func leave() async {
         do {
             try await groupsService.leaveGroup(groupID: group.id, userID: membership.userID)
             dismiss()
         } catch GroupsServiceError.lastAdminCannotLeaveOrBeDemoted {
-            errorMessage = "You're the last admin of this cookbook — promote someone else first."
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    /// Archiving (rather than leaving) is what actually resolves the
-    /// "you're the sole admin" block — leaving alone would still strand
-    /// the cookbook, which is exactly what leaveGroup refuses to allow.
-    private func archive() async {
-        do {
-            try await groupsService.archiveGroup(groupID: group.id, actingUserID: membership.userID)
-            dismiss()
+            errorMessage = "You're the last admin of this cookbook with other active members still in it — promote someone else first."
         } catch {
             errorMessage = error.localizedDescription
         }
