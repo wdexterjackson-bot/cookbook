@@ -58,6 +58,7 @@ struct DiscoverView: View {
 
                 attributionFooter
             }
+            .background(Color.potluckCream)
             .navigationTitle("Discover")
             .toolbar {
                 if sourceMode == .browse {

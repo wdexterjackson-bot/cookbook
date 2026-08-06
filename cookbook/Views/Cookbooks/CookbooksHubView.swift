@@ -14,6 +14,7 @@ import SwiftData
 
 struct CookbooksHubView: View {
     @Environment(AccountState.self) private var accountState
+    @Environment(ActiveCookbookState.self) private var activeCookbookState
     @Query(sort: \Cookbook.sortOrder) private var allCookbooks: [Cookbook]
     @State private var joinedGroups: [(membership: Membership, group: FamilyGroup)] = []
     @State private var isLoading = false
@@ -32,6 +33,9 @@ struct CookbooksHubView: View {
                         NavigationLink(cookbook.title) {
                             RecipeListView()
                         }
+                        .simultaneousGesture(TapGesture().onEnded {
+                            activeCookbookState.setActive(cookbook.id)
+                        })
                     }
                 }
 
@@ -52,6 +56,8 @@ struct CookbooksHubView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Cookbooks")
             .task(id: accountState.currentUserID) {
                 await loadJoinedGroups()

@@ -49,6 +49,8 @@ struct CookbooksListView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Cookbooks")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

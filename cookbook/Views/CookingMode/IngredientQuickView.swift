@@ -42,6 +42,8 @@ struct IngredientQuickView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Ingredients")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

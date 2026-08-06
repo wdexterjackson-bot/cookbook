@@ -65,6 +65,7 @@ struct RecipeDetailView: View {
             }
             .padding()
         }
+        .background(Color.potluckCream)
         .navigationTitle(recipe.title)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {

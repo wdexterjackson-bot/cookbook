@@ -51,6 +51,15 @@ struct cookbookApp: App {
                     GIDSignIn.sharedInstance.handle(url)
                 }
                 #endif
+                // Sketch C "Potluck" has no dark-mode variant — screens
+                // that don't set an explicit background were falling back
+                // to the system's dark-mode default (near-black) whenever
+                // the device was in Dark Mode, while only Home (which sets
+                // its own cream background explicitly) looked right.
+                // Forcing light appearance app-wide is the systemic fix;
+                // the retrofit of each screen's own background is
+                // separate and still needed for true visual consistency.
+                .preferredColorScheme(.light)
         }
         .modelContainer(sharedModelContainer)
         .environment(accountState)

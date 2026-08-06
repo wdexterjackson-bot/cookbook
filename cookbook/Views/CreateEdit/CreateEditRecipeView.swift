@@ -239,6 +239,8 @@ struct CreateEditRecipeView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle(navigationTitle)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

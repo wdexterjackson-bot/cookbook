@@ -81,6 +81,8 @@ struct ShoppingCartView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Shopping Cart")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

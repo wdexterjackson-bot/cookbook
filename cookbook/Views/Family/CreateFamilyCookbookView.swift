@@ -49,6 +49,8 @@ struct CreateFamilyCookbookView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Create a Family Cookbook")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

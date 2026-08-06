@@ -60,6 +60,8 @@ struct GroupCookbookView: View {
                 Text(errorMessage).foregroundStyle(.red)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.potluckCream)
         .navigationTitle(group.cookbookName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

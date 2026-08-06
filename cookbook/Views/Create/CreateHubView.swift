@@ -50,6 +50,8 @@ struct CreateHubView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Create")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

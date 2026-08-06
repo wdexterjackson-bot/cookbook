@@ -75,6 +75,8 @@ struct MessagesView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Messages")
             .task(id: accountState.currentUserID) {
                 await load()

@@ -70,6 +70,8 @@ struct MembershipPaywallView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Membership")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

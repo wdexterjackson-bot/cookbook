@@ -59,6 +59,8 @@ struct PublicGroupSearchView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Find a Family Cookbook")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

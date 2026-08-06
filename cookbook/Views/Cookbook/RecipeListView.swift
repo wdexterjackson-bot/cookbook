@@ -110,6 +110,8 @@ struct RecipeListView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .searchable(text: $criteria.searchText, prompt: "Search recipes, ingredients, tags")
             .navigationTitle(activeCookbook?.title ?? "Cookbook")
             .toolbar {

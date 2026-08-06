@@ -46,6 +46,7 @@ struct CookingModeView: View {
                     stepPager
                 }
             }
+            .background(Color.potluckCream)
             .navigationTitle(recipe.title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

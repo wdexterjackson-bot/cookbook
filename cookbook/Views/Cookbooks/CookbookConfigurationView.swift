@@ -127,6 +127,8 @@ struct CookbookConfigurationView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle(isEditing ? "Edit Cookbook" : "New Cookbook")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

@@ -50,6 +50,8 @@ struct FamilyView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Family")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

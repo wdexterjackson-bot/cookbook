@@ -130,6 +130,8 @@ struct SignInView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle(isDismissable ? "Sign In" : "Welcome")
             .toolbar {
                 if isDismissable {

@@ -77,6 +77,8 @@ struct AccountView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
             .navigationTitle("Account")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
