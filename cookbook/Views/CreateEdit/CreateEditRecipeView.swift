@@ -276,6 +276,10 @@ struct CreateEditRecipeView: View {
 
     private func ingredientRow(_ row: Binding<DraftIngredientRow>) -> some View {
         HStack(spacing: 8) {
+            removeRowButton(accessibilityLabel: "Remove ingredient") {
+                ingredientRows.removeAll { $0.id == row.wrappedValue.id }
+            }
+
             TextField("Ingredient", text: row.name)
                 .focused($focusedIngredientRowID, equals: row.wrappedValue.id)
                 .accessibilityLabel("Ingredient name")
@@ -326,15 +330,34 @@ struct CreateEditRecipeView: View {
         .buttonStyle(.plain)
     }
 
+    /// Explicit, always-visible per-row delete — doesn't depend on List's
+    /// native swipe/edit-mode delete chrome, which wasn't reliably
+    /// reachable in practice inside this flat List(.plain) layout.
+    private func removeRowButton(accessibilityLabel: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "minus.circle.fill")
+                .foregroundStyle(.red)
+                .font(.title3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
     // MARK: - Steps
 
     private var stepsSection: some View {
         Section("Steps") {
             ForEach($stepRows) { $row in
-                TextField("Step", text: $row.text, axis: .vertical)
-                    .focused($focusedStepRowID, equals: row.id)
-                    .padding(.vertical, 2)
-                    .accessibilityLabel("Step")
+                HStack(spacing: 8) {
+                    removeRowButton(accessibilityLabel: "Remove step") {
+                        stepRows.removeAll { $0.id == row.id }
+                    }
+
+                    TextField("Step", text: $row.text, axis: .vertical)
+                        .focused($focusedStepRowID, equals: row.id)
+                        .accessibilityLabel("Step")
+                }
+                .padding(.vertical, 2)
             }
             .onDelete { offsets in
                 stepRows.remove(atOffsets: offsets)
@@ -357,12 +380,23 @@ struct CreateEditRecipeView: View {
     private var importSection: some View {
         Section {
             if lineImportService.isAvailable {
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $importText)
-                        .frame(minHeight: 120)
-                        .padding(6)
-                        .accessibilityLabel("Paste ingredients and steps to import")
+                #if os(iOS)
+                HStack {
+                    Spacer()
+                    Button("Paste Recipe") {
+                        pasteFromClipboard()
+                    }
+                    .buttonStyle(PushableButtonStyle())
+                    .disabled(!hasClipboardText)
+                }
+                #endif
 
+                // Placeholder sits BEHIND the TextEditor (not overlaid on
+                // top of it) — an overlay in front of TextEditor's
+                // UITextView was interfering with its own long-press
+                // paste/selection gestures. scrollContentBackground(.hidden)
+                // is what lets the placeholder show through when empty.
+                ZStack(alignment: .topLeading) {
                     if importText.isEmpty {
                         Text("Tap here to paste or type ingredients and steps…")
                             .foregroundStyle(.secondary)
@@ -370,6 +404,14 @@ struct CreateEditRecipeView: View {
                             .padding(.vertical, 14)
                             .allowsHitTesting(false)
                     }
+
+                    TextEditor(text: $importText)
+                        .frame(minHeight: 120)
+                        .padding(6)
+                        #if os(iOS)
+                        .scrollContentBackground(.hidden)
+                        #endif
+                        .accessibilityLabel("Paste ingredients and steps to import")
                 }
                 .background(
                     RoundedRectangle(cornerRadius: 10)
@@ -402,18 +444,7 @@ struct CreateEditRecipeView: View {
                     .foregroundStyle(.secondary)
             }
         } header: {
-            HStack {
-                Text("Import")
-                Spacer()
-                #if os(iOS)
-                Button("Paste Recipe") {
-                    pasteFromClipboard()
-                }
-                .buttonStyle(PushableButtonStyle())
-                .disabled(!hasClipboardText)
-                .textCase(nil)
-                #endif
-            }
+            Text("Import")
         } footer: {
             Text("Paste a full list of ingredients and steps — AI will sort them into Ingredients and Steps above.")
         }
