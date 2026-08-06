@@ -111,6 +111,7 @@ struct SignInView: View {
                         Task { await signInWithGoogle() }
                     } label: {
                         Self.googleSignInLabel
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
                 }
                 #endif
