@@ -15,6 +15,7 @@ final class InMemoryGroupsService: GroupsServicing {
     /// adapter reads/writes via Firestore.
     var creditsByUserID: [String: Int] = [:]
     private var processedIdempotencyKeys: [String: String] = [:] // key -> created group id
+    private var claimedUniquenessKeys: Set<String> = []
 
     func createGroup(_ details: NewGroupDetails, creatorUserID: String, idempotencyKey: String) async throws -> FamilyGroup {
         if let existingGroupID = processedIdempotencyKeys[idempotencyKey],
@@ -27,10 +28,16 @@ final class InMemoryGroupsService: GroupsServicing {
             throw GroupsServiceError.insufficientCredits
         }
 
+        let uniquenessKey = FamilyGroup.uniquenessKey(cookbookName: details.cookbookName, familyName: details.name, locationText: details.locationText)
+        guard !claimedUniquenessKeys.contains(uniquenessKey) else {
+            throw GroupsServiceError.duplicateCookbookIdentity
+        }
+
         let group = FamilyGroup(
             id: UUID().uuidString,
             slug: UUID().uuidString.lowercased(),
             name: details.name,
+            cookbookName: details.cookbookName,
             description: details.description,
             type: details.type,
             locationText: details.locationText,
@@ -58,14 +65,22 @@ final class InMemoryGroupsService: GroupsServicing {
         groups.append(group)
         upsertMembership(founderMembership)
         processedIdempotencyKeys[idempotencyKey] = group.id
+        claimedUniquenessKeys.insert(uniquenessKey)
 
         return group
     }
 
-    func fetchPublicGroups(matching query: String?) async throws -> [FamilyGroup] {
-        let publicGroups = groups.filter { $0.visibility == .publicGroup && $0.status == .active }
-        guard let query, !query.isEmpty else { return publicGroups }
-        return publicGroups.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    func fetchPublicGroups(matching filter: PublicGroupSearchFilter) async throws -> [FamilyGroup] {
+        var publicGroups = groups.filter { $0.visibility == .publicGroup && $0.status == .active }
+        if let text = filter.text, !text.isEmpty {
+            publicGroups = publicGroups.filter {
+                $0.cookbookName.localizedCaseInsensitiveContains(text) || $0.name.localizedCaseInsensitiveContains(text)
+            }
+        }
+        if let locationText = filter.locationText, !locationText.isEmpty {
+            publicGroups = publicGroups.filter { $0.locationText.localizedCaseInsensitiveContains(locationText) }
+        }
+        return publicGroups
     }
 
     func fetchGroup(id: String) async throws -> FamilyGroup? {
@@ -134,6 +149,18 @@ final class InMemoryGroupsService: GroupsServicing {
                 leftAt: nil
             ))
         }
+    }
+
+    func fetchJoinRequests(forGroup groupID: String) async throws -> [JoinRequest] {
+        joinRequests.filter { $0.groupID == groupID && $0.state == .pending }
+    }
+
+    func fetchJoinRequests(byRequester userID: String) async throws -> [JoinRequest] {
+        joinRequests.filter { $0.requesterID == userID }
+    }
+
+    func fetchInvitations(forInvitee identifier: String) async throws -> [Invitation] {
+        invitations.filter { $0.inviteeIdentifier == identifier && $0.state == .pending }
     }
 
     func invite(groupID: String, inviterID: String, inviteeIdentifier: String, role: MembershipRole) async throws -> Invitation {

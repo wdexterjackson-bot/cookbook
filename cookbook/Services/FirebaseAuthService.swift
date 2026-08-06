@@ -15,6 +15,10 @@ final class FirebaseAuthService: AuthServicing {
         Auth.auth().currentUser?.uid
     }
 
+    var currentUserEmail: String? {
+        Auth.auth().currentUser?.email
+    }
+
     func signInWithEmail(email: String, password: String) async throws -> AuthResult {
         let result = try await Auth.auth().signIn(withEmail: email, password: password)
         return AuthResult(userID: result.user.uid, isNewAccount: result.additionalUserInfo?.isNewUser ?? false)

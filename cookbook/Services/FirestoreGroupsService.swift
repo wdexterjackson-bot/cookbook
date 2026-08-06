@@ -20,6 +20,8 @@ final class FirestoreGroupsService: GroupsServicing {
         let entitlementRef = db.collection("entitlements").document(creatorUserID)
         let groupRef = db.collection("groups").document()
         let membershipRef = db.collection("memberships").document(Membership.compositeID(groupID: groupRef.documentID, userID: creatorUserID))
+        let uniquenessKey = FamilyGroup.uniquenessKey(cookbookName: details.cookbookName, familyName: details.name, locationText: details.locationText)
+        let uniquenessRef = db.collection("groupUniquenessKeys").document(uniquenessKey)
 
         let transactionResult: Any = try await db.runTransaction { transaction, errorPointer -> Any? in
             do {
@@ -35,14 +37,26 @@ final class FirestoreGroupsService: GroupsServicing {
                     return nil
                 }
 
+                // Checked defensively for a clean error even though the
+                // rules' create-vs-update semantics are the real
+                // enforcement (see firestore.rules) — without this check
+                // the transaction would still fail, just with a raw
+                // permission-denied instead of a catchable Swift error.
+                let uniquenessSnapshot = try transaction.getDocument(uniquenessRef)
+                guard !uniquenessSnapshot.exists else {
+                    errorPointer?.pointee = GroupsServiceError.duplicateCookbookIdentity as NSError
+                    return nil
+                }
+
                 let now = Date()
                 transaction.setData([
                     "creationCredits": creationCredits - 1,
                 ], forDocument: entitlementRef, merge: true)
 
-                transaction.setData(Self.groupData(details, id: groupRef.documentID, creatorUserID: creatorUserID, createdAt: now), forDocument: groupRef)
+                transaction.setData(Self.groupData(details, id: groupRef.documentID, uniquenessKey: uniquenessKey, creatorUserID: creatorUserID, createdAt: now), forDocument: groupRef)
                 transaction.setData(Self.founderMembershipData(id: membershipRef.documentID, groupID: groupRef.documentID, userID: creatorUserID, joinedAt: now), forDocument: membershipRef)
                 transaction.setData(["groupID": groupRef.documentID, "requestedByUserID": creatorUserID, "createdAt": now], forDocument: requestRef)
+                transaction.setData(["groupID": groupRef.documentID, "createdAt": now], forDocument: uniquenessRef)
 
                 return groupRef.documentID
             } catch {
@@ -60,14 +74,22 @@ final class FirestoreGroupsService: GroupsServicing {
         return group
     }
 
-    func fetchPublicGroups(matching query: String?) async throws -> [FamilyGroup] {
+    func fetchPublicGroups(matching filter: PublicGroupSearchFilter) async throws -> [FamilyGroup] {
         let snapshot = try await db.collection("groups")
             .whereField("visibility", isEqualTo: GroupVisibility.publicGroup.rawValue)
             .whereField("status", isEqualTo: GroupStatus.active.rawValue)
             .getDocuments()
-        let allGroups = try snapshot.documents.map { try $0.data(as: FamilyGroup.self) }
-        guard let query, !query.isEmpty else { return allGroups }
-        return allGroups.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        var groups = try snapshot.documents.map { try $0.data(as: FamilyGroup.self) }
+
+        if let text = filter.text, !text.isEmpty {
+            groups = groups.filter {
+                $0.cookbookName.localizedCaseInsensitiveContains(text) || $0.name.localizedCaseInsensitiveContains(text)
+            }
+        }
+        if let locationText = filter.locationText, !locationText.isEmpty {
+            groups = groups.filter { $0.locationText.localizedCaseInsensitiveContains(locationText) }
+        }
+        return groups
     }
 
     func fetchGroup(id: String) async throws -> FamilyGroup? {
@@ -141,6 +163,29 @@ final class FirestoreGroupsService: GroupsServicing {
             )
             try db.collection("memberships").document(membership.id).setData(from: membership)
         }
+    }
+
+    func fetchJoinRequests(forGroup groupID: String) async throws -> [JoinRequest] {
+        let snapshot = try await db.collection("joinRequests")
+            .whereField("groupID", isEqualTo: groupID)
+            .whereField("state", isEqualTo: JoinRequestState.pending.rawValue)
+            .getDocuments()
+        return try snapshot.documents.map { try $0.data(as: JoinRequest.self) }
+    }
+
+    func fetchJoinRequests(byRequester userID: String) async throws -> [JoinRequest] {
+        let snapshot = try await db.collection("joinRequests")
+            .whereField("requesterID", isEqualTo: userID)
+            .getDocuments()
+        return try snapshot.documents.map { try $0.data(as: JoinRequest.self) }
+    }
+
+    func fetchInvitations(forInvitee identifier: String) async throws -> [Invitation] {
+        let snapshot = try await db.collection("invitations")
+            .whereField("inviteeIdentifier", isEqualTo: identifier)
+            .whereField("state", isEqualTo: InvitationState.pending.rawValue)
+            .getDocuments()
+        return try snapshot.documents.map { try $0.data(as: Invitation.self) }
     }
 
     func invite(groupID: String, inviterID: String, inviteeIdentifier: String, role: MembershipRole) async throws -> Invitation {
@@ -232,11 +277,18 @@ final class FirestoreGroupsService: GroupsServicing {
         try await db.collection("groups").document(groupID).setData(["status": GroupStatus.archived.rawValue], merge: true)
     }
 
-    private static func groupData(_ details: NewGroupDetails, id: String, creatorUserID: String, createdAt: Date) -> [String: Any] {
+    /// `uniquenessKey` is written onto the group document (though not part
+    /// of the `FamilyGroup` Swift model — nothing client-side reads it
+    /// back) purely so firestore.rules' `groups` create rule can
+    /// `getAfter()`-check it against the matching `groupUniquenessKeys/{key}`
+    /// reservation doc written in the same transaction.
+    private static func groupData(_ details: NewGroupDetails, id: String, uniquenessKey: String, creatorUserID: String, createdAt: Date) -> [String: Any] {
         [
             "id": id,
             "slug": UUID().uuidString.lowercased(),
             "name": details.name,
+            "cookbookName": details.cookbookName,
+            "uniquenessKey": uniquenessKey,
             "description": details.description,
             "type": details.type,
             "locationText": details.locationText,

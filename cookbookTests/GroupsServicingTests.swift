@@ -9,12 +9,18 @@ import Testing
 
 struct GroupsServicingTests {
 
-    private func makeDetails(name: String = "Barrentine Family", visibility: GroupVisibility = .publicGroup) -> NewGroupDetails {
+    private func makeDetails(
+        name: String = "Barrentine Family",
+        cookbookName: String = "Barrentine Family Reunion",
+        locationText: String = "Memphis, TN",
+        visibility: GroupVisibility = .publicGroup
+    ) -> NewGroupDetails {
         NewGroupDetails(
             name: name,
+            cookbookName: cookbookName,
             description: "A family cookbook",
             type: "Family",
-            locationText: "Memphis, TN",
+            locationText: locationText,
             structuredRegion: nil,
             visibility: visibility,
             allowsMemberInvites: false,
@@ -123,5 +129,74 @@ struct GroupsServicingTests {
 
         let memberships = try await service.fetchMemberships(forGroup: group.id)
         #expect(memberships.first { $0.userID == "alice" }?.status == .left)
+    }
+
+    @Test func createGroupRejectsADuplicateCookbookNameFamilyNameLocationCombination() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 2
+        _ = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+
+        await #expect(throws: GroupsServiceError.duplicateCookbookIdentity) {
+            try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-2")
+        }
+    }
+
+    @Test func createGroupAllowsDistinctCombinationsEvenWithASharedField() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 3
+        _ = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+
+        // Same family name and location, different cookbook name — a
+        // distinct combination, so this should succeed.
+        let second = try await service.createGroup(
+            makeDetails(cookbookName: "Barrentine Summer Cookout"),
+            creatorUserID: "alice",
+            idempotencyKey: "req-2"
+        )
+
+        #expect(service.groups.count == 2)
+        #expect(second.cookbookName == "Barrentine Summer Cookout")
+    }
+
+    @Test func fetchJoinRequestsForGroupOnlyReturnsPending() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 1
+        let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+        let bobRequest = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        _ = try await service.requestToJoin(groupID: group.id, requesterID: "carol", note: nil)
+        try await service.decideJoinRequest(bobRequest.id, approve: true, decidedByUserID: "alice")
+
+        let pending = try await service.fetchJoinRequests(forGroup: group.id)
+
+        #expect(pending.count == 1)
+        #expect(pending.first?.requesterID == "carol")
+    }
+
+    @Test func fetchJoinRequestsByRequesterIncludesDecidedOnes() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 1
+        let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(request.id, approve: false, decidedByUserID: "alice")
+
+        let bobsRequests = try await service.fetchJoinRequests(byRequester: "bob")
+
+        #expect(bobsRequests.count == 1)
+        #expect(bobsRequests.first?.state == .denied)
+    }
+
+    @Test func fetchInvitationsForInviteeOnlyReturnsPendingOnesForThatEmail() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 1
+        let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+        let carolInvite = try await service.invite(groupID: group.id, inviterID: "alice", inviteeIdentifier: "carol@example.com", role: .member)
+        _ = try await service.invite(groupID: group.id, inviterID: "alice", inviteeIdentifier: "dave@example.com", role: .member)
+        try await service.respondToInvitation(carolInvite.id, accept: true, respondingUserID: "carol")
+
+        let pendingForDave = try await service.fetchInvitations(forInvitee: "dave@example.com")
+        let pendingForCarol = try await service.fetchInvitations(forInvitee: "carol@example.com")
+
+        #expect(pendingForDave.count == 1)
+        #expect(pendingForCarol.isEmpty)
     }
 }

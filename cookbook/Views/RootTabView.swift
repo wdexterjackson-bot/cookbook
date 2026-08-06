@@ -23,9 +23,24 @@ struct RootTabView: View {
                     Label("My Cookbook", systemImage: "book.closed")
                 }
 
+            FamilyView()
+                .tabItem {
+                    Label("Family", systemImage: "person.3")
+                }
+
+            MessagesView()
+                .tabItem {
+                    Label("Messages", systemImage: "tray")
+                }
+
             DiscoverView()
                 .tabItem {
                     Label("Discover", systemImage: "sparkle.magnifyingglass")
+                }
+
+            AccountView()
+                .tabItem {
+                    Label("Account", systemImage: "person.crop.circle")
                 }
         }
         .sheet(item: $cookbookNeedingFirstRunConfiguration) { cookbook in

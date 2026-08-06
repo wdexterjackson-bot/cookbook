@@ -16,6 +16,7 @@ final class AccountState {
     private let authService: AuthServicing
 
     private(set) var currentUserID: String?
+    var currentUserEmail: String? { authService.currentUserEmail }
 
     /// Set by SignInView right after PostSignInCoordinator reports a
     /// brand-new, promo-eligible account — AccountView shows the redemption

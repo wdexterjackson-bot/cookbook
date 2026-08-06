@@ -98,6 +98,28 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // FC milestone: reservation doc enforcing "Cookbook Name +
+    // Family/Group Name + Home Location" uniqueness
+    // (FamilyGroup.uniquenessKey). Firestore's own create-vs-update
+    // semantics do the real enforcement — create is only permitted while
+    // the doc doesn't yet exist, so a second claim of the same key is
+    // evaluated as an update, which is denied, atomically preventing two
+    // concurrent creators from both winning the same combination.
+    //
+    // Scope note: this guards against real accidental collisions between
+    // good-faith clients (the actual scenario this exists for), not a
+    // maliciously reverse-engineered client that lies about its own
+    // normalization of the three fields — a fully tamper-proof version
+    // would need a Cloud Function to independently recompute the key
+    // server-side, which is a deferred hardening follow-up, not attempted
+    // here.
+    match /groupUniquenessKeys/{key} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if false;
+      allow delete: if false;
+    }
+
     match /groups/{groupID} {
       allow read: if resource.data.visibility == 'public' || isMember(groupID);
 
@@ -106,7 +128,14 @@ service cloud.firestore {
         && request.resource.data.status == 'active'
         && request.resource.data.visibility in ['public', 'private']
         && get(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.creationCredits
-           - getAfter(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.creationCredits == 1;
+           - getAfter(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.creationCredits == 1
+        // Cookbook Name + Family/Group Name + Home Location uniqueness
+        // (FC milestone): a group can only be created alongside a matching
+        // groupUniquenessKeys reservation doc in the same transaction —
+        // without this, nothing would stop a client from creating a group
+        // whose fields collide with an existing one while simply skipping
+        // the reservation write.
+        && getAfter(/databases/$(database)/documents/groupUniquenessKeys/$(request.resource.data.uniquenessKey)).data.groupID == request.resource.data.id;
 
       allow update: if isAdmin(groupID)
         && request.resource.data.createdByUserID == resource.data.createdByUserID

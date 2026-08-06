@@ -36,11 +36,15 @@ async function seed(setupFn) {
   });
 }
 
+const GROUP1_UNIQUENESS_KEY = 'barrentine family reunion|barrentines|memphis';
+
 function groupData(overrides = {}) {
   return {
     id: 'group1',
     slug: 'group1',
     name: 'Barrentines',
+    cookbookName: 'Barrentine Family Reunion',
+    uniquenessKey: GROUP1_UNIQUENESS_KEY,
     description: '',
     type: 'Family',
     locationText: 'Memphis',
@@ -135,17 +139,44 @@ describe('entitlements', () => {
 });
 
 describe('group creation', () => {
-  it('succeeds when paired with a matching entitlement decrement in one batch', async () => {
+  it('succeeds when paired with a matching entitlement decrement and uniqueness-key claim in one batch', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 1 })));
     const alice = testEnv.authenticatedContext('alice').firestore();
     const batch = writeBatch(alice);
     batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 0 }));
     batch.set(doc(alice, 'groups/group1'), groupData());
+    batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
     batch.set(doc(alice, 'memberships/group1_alice'), {
       id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
       status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
     });
     await assertSucceeds(batch.commit());
+  });
+
+  it('rejects creating a group without a matching uniqueness-key claim in the same batch', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 1 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 0 }));
+    batch.set(doc(alice, 'groups/group1'), groupData());
+    // No groupUniquenessKeys write this time — even with a correct credit
+    // decrement, the create rule's second getAfter() check should reject it.
+    await assertFails(batch.commit());
+  });
+
+  it('rejects claiming a Cookbook Name + Family Name + Location combination that is already taken', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 5 }));
+      await setDoc(doc(db, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group0', createdAt: Timestamp.now() });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 4 }));
+    batch.set(doc(alice, 'groups/group1'), groupData());
+    batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
+    // The reservation doc already exists (from "group0"), so this write is
+    // an update, not a create — denied, and the whole batch fails with it.
+    await assertFails(batch.commit());
   });
 
   it('rejects creating a group without spending a credit', async () => {

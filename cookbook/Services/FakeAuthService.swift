@@ -9,6 +9,7 @@ import Foundation
 
 final class FakeAuthService: AuthServicing {
     private(set) var currentUserID: String?
+    private(set) var currentUserEmail: String?
     private var registeredEmails: Set<String> = []
 
     /// Every distinct (idToken) seen for Apple/Google sign-in is treated as
@@ -23,6 +24,7 @@ final class FakeAuthService: AuthServicing {
         }
         let userID = "fake-user-\(email)"
         currentUserID = userID
+        currentUserEmail = email
         return AuthResult(userID: userID, isNewAccount: false)
     }
 
@@ -30,6 +32,7 @@ final class FakeAuthService: AuthServicing {
         registeredEmails.insert(email)
         let userID = "fake-user-\(email)"
         currentUserID = userID
+        currentUserEmail = email
         return AuthResult(userID: userID, isNewAccount: true)
     }
 
@@ -46,11 +49,13 @@ final class FakeAuthService: AuthServicing {
         let isNewAccount = !seenFederatedTokens.contains(token)
         seenFederatedTokens.insert(token)
         currentUserID = userID
+        currentUserEmail = "\(provider)-\(token)@example.com"
         return AuthResult(userID: userID, isNewAccount: isNewAccount)
     }
 
     func signOut() throws {
         currentUserID = nil
+        currentUserEmail = nil
     }
 
     func deleteAccount() async throws {
@@ -59,5 +64,6 @@ final class FakeAuthService: AuthServicing {
         }
         deleteAccountCallCount += 1
         currentUserID = nil
+        currentUserEmail = nil
     }
 }

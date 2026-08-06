@@ -21,7 +21,13 @@ enum GroupStatus: String, Codable {
 struct FamilyGroup: Codable, Identifiable, Equatable {
     var id: String
     var slug: String
+    /// The family/group's own name (e.g. "Jackson") — distinct from
+    /// `cookbookName`, which is this particular cookbook's display name
+    /// (e.g. "Jackson Family Reunion 2020"). One family could plausibly
+    /// have more than one cookbook someday; `name` + `cookbookName` +
+    /// `locationText` together are what `uniquenessKey` guards.
     var name: String
+    var cookbookName: String
     var description: String
     var type: String
     var locationText: String
@@ -35,4 +41,26 @@ struct FamilyGroup: Codable, Identifiable, Equatable {
     /// unless a group explicitly opts in to letting any member invite.
     var allowsMemberInvites: Bool
     var allowsMemberPublishing: Bool
+}
+
+extension FamilyGroup {
+    /// Deterministic identity for the "Cookbook Name + Family/Group Name +
+    /// Home Location must be unique" invariant — same reasoning as
+    /// `Membership.compositeID`: rules can't run arbitrary queries, so
+    /// uniqueness is enforced via a reservation doc keyed by this exact
+    /// string (see `groupUniquenessKeys/{key}` in firestore.rules).
+    /// Normalizes so "Jackson" and " jackson  " collide as intended.
+    static func uniquenessKey(cookbookName: String, familyName: String, locationText: String) -> String {
+        [cookbookName, familyName, locationText]
+            .map(normalize)
+            .joined(separator: "|")
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .joined(separator: " ")
+    }
 }

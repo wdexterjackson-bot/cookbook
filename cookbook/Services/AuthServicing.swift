@@ -24,6 +24,10 @@ enum AuthServiceError: Error, Equatable {
 
 protocol AuthServicing {
     var currentUserID: String? { get }
+    /// Used to look up invitations addressed to this user (Invitation's
+    /// `inviteeIdentifier` is an email, not a UID, since an invite can be
+    /// sent before the invitee has ever signed up).
+    var currentUserEmail: String? { get }
 
     func signInWithEmail(email: String, password: String) async throws -> AuthResult
     func signUpWithEmail(email: String, password: String) async throws -> AuthResult
