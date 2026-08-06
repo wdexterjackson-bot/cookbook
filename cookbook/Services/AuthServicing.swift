@@ -33,11 +33,16 @@ protocol AuthServicing {
     /// `inviteeIdentifier` is an email, not a UID, since an invite can be
     /// sent before the invitee has ever signed up).
     var currentUserEmail: String? { get }
+    /// First + last name, entered at sign-up (or pulled from an Apple/Google
+    /// credential on first federated sign-in) — powers the Home greeting
+    /// and, later, recipe-lineage attribution. Nil until set.
+    var currentUserDisplayName: String? { get }
 
     func signInWithEmail(email: String, password: String) async throws -> AuthResult
-    func signUpWithEmail(email: String, password: String) async throws -> AuthResult
+    func signUpWithEmail(email: String, password: String, displayName: String) async throws -> AuthResult
     func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult
     func signInWithGoogle(idToken: String, accessToken: String) async throws -> AuthResult
+    func updateDisplayName(_ displayName: String) async throws
     func signOut() throws
     func deleteAccount() async throws
 }

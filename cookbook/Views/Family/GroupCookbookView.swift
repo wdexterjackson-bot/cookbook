@@ -28,6 +28,13 @@ struct GroupCookbookView: View {
     var body: some View {
         List {
             Section {
+                cookbookHeader
+                    .frame(maxWidth: .infinity)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
+
+            Section {
                 LabeledContent("Family/Group", value: group.name)
                 LabeledContent("Location", value: group.locationText)
                 LabeledContent("Your Role", value: membership.role.rawValue.capitalized)
@@ -62,13 +69,35 @@ struct GroupCookbookView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Color.potluckCream)
-        .navigationTitle(group.cookbookName)
+        .navigationTitle("")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task {
             await loadPublications()
         }
+    }
+
+    private var cookbookHeader: some View {
+        VStack(spacing: 8) {
+            Text(group.cookbookName)
+                .font(.potluckHeadline(24))
+                .foregroundStyle(Color.potluckDeepTeal)
+                .multilineTextAlignment(.center)
+
+            if let urlString = group.coverImageURL, let url = URL(string: urlString) {
+                AsyncImage(url: url) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Color.secondary.opacity(0.1)
+                }
+                .frame(height: 140)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+                .potluckCardShadow()
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder

@@ -17,6 +17,7 @@ final class AccountState {
 
     private(set) var currentUserID: String?
     var currentUserEmail: String? { authService.currentUserEmail }
+    var currentUserDisplayName: String? { authService.currentUserDisplayName }
 
     /// Set by SignInView right after PostSignInCoordinator reports a
     /// brand-new, promo-eligible account — AccountView shows the redemption
@@ -45,10 +46,14 @@ final class AccountState {
     }
 
     @discardableResult
-    func signUp(email: String, password: String) async throws -> AuthResult {
-        let result = try await authService.signUpWithEmail(email: email, password: password)
+    func signUp(email: String, password: String, displayName: String) async throws -> AuthResult {
+        let result = try await authService.signUpWithEmail(email: email, password: password, displayName: displayName)
         currentUserID = result.userID
         return result
+    }
+
+    func updateDisplayName(_ displayName: String) async throws {
+        try await authService.updateDisplayName(displayName)
     }
 
     @discardableResult

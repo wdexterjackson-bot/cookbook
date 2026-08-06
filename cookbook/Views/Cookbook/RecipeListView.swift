@@ -66,54 +66,62 @@ struct RecipeListView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if ownedRecipes.isEmpty {
-                    ContentUnavailableView(
-                        "No Recipes Yet",
-                        systemImage: "fork.knife",
-                        description: Text("Tap the + button to add your first recipe to \(activeCookbook?.title ?? "your cookbook").")
-                    )
-                } else if filteredRecipes.isEmpty {
-                    ContentUnavailableView(
-                        "No Matching Recipes",
-                        systemImage: "magnifyingglass",
-                        description: Text("Try a different search term or clear your filters.")
-                    )
-                } else {
-                    List {
-                        if criteria.hasActiveFilters {
-                            Section {
-                                activeFilterChips
+            VStack(spacing: 0) {
+                cookbookHeader
+
+                Group {
+                    if ownedRecipes.isEmpty {
+                        ContentUnavailableView(
+                            "No Recipes Yet",
+                            systemImage: "fork.knife",
+                            description: Text("Tap the + button to add your first recipe to \(activeCookbook?.title ?? "your cookbook").")
+                        )
+                    } else if filteredRecipes.isEmpty {
+                        ContentUnavailableView(
+                            "No Matching Recipes",
+                            systemImage: "magnifyingglass",
+                            description: Text("Try a different search term or clear your filters.")
+                        )
+                    } else {
+                        List {
+                            if criteria.hasActiveFilters {
+                                Section {
+                                    activeFilterChips
+                                }
+                                .listRowInsets(EdgeInsets())
                             }
-                            .listRowInsets(EdgeInsets())
-                        }
-                        ForEach(Array(groupedBySection.enumerated()), id: \.offset) { _, group in
-                            Section {
-                                ForEach(group.recipes) { recipe in
-                                    NavigationLink {
-                                        RecipeDetailView(recipe: recipe)
-                                    } label: {
-                                        RecipeRow(recipe: recipe)
-                                    }
-                                    .swipeActions {
-                                        Button("Delete", role: .destructive) {
-                                            deleteRecipe(recipe)
+                            ForEach(Array(groupedBySection.enumerated()), id: \.offset) { _, group in
+                                Section {
+                                    ForEach(group.recipes) { recipe in
+                                        NavigationLink {
+                                            RecipeDetailView(recipe: recipe)
+                                        } label: {
+                                            RecipeRow(recipe: recipe)
+                                        }
+                                        .swipeActions {
+                                            Button("Delete", role: .destructive) {
+                                                deleteRecipe(recipe)
+                                            }
                                         }
                                     }
-                                }
-                            } header: {
-                                if let title = group.title {
-                                    Text(title)
+                                } header: {
+                                    if let title = group.title {
+                                        Text(title)
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(Color.potluckCream)
             }
-            .scrollContentBackground(.hidden)
             .background(Color.potluckCream)
             .searchable(text: $criteria.searchText, prompt: "Search recipes, ingredients, tags")
-            .navigationTitle(activeCookbook?.title ?? "Cookbook")
+            .navigationTitle("")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -169,6 +177,34 @@ struct RecipeListView: View {
             .sheet(isPresented: $isPresentingAccount) {
                 AccountView()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var cookbookHeader: some View {
+        if let activeCookbook {
+            VStack(spacing: 8) {
+                Text(activeCookbook.title)
+                    .font(.potluckHeadline(24))
+                    .foregroundStyle(Color.potluckDeepTeal)
+                    .multilineTextAlignment(.center)
+
+                #if os(iOS)
+                if let filename = activeCookbook.coverImageFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 140)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+                        .potluckCardShadow()
+                        .padding(.horizontal)
+                }
+                #endif
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
         }
     }
 

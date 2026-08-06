@@ -11,6 +11,14 @@ final class FakeAuthService: AuthServicing {
     private(set) var currentUserID: String?
     private(set) var currentUserEmail: String?
     private var registeredEmails: Set<String> = []
+    /// Keyed by userID, not tied to sign-in/sign-out, mirroring how a real
+    /// Firebase display name persists on the account record.
+    private var displayNamesByUserID: [String: String] = [:]
+
+    var currentUserDisplayName: String? {
+        guard let currentUserID else { return nil }
+        return displayNamesByUserID[currentUserID]
+    }
 
     /// Every distinct (idToken) seen for Apple/Google sign-in is treated as
     /// a distinct account, mirroring Firebase's isNewUser semantics.
@@ -31,12 +39,20 @@ final class FakeAuthService: AuthServicing {
         return AuthResult(userID: userID, isNewAccount: false)
     }
 
-    func signUpWithEmail(email: String, password: String) async throws -> AuthResult {
+    func signUpWithEmail(email: String, password: String, displayName: String) async throws -> AuthResult {
         registeredEmails.insert(email)
         let userID = "fake-user-\(email)"
+        displayNamesByUserID[userID] = displayName
         currentUserID = userID
         currentUserEmail = email
         return AuthResult(userID: userID, isNewAccount: true)
+    }
+
+    func updateDisplayName(_ displayName: String) async throws {
+        guard let currentUserID else {
+            throw AuthServiceError.notSignedIn
+        }
+        displayNamesByUserID[currentUserID] = displayName
     }
 
     func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult {

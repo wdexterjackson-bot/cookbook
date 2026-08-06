@@ -125,6 +125,10 @@ struct HomeView: View {
                     }
                 }
             }
+            .navigationDestination(for: UUID.self) { cookbookID in
+                RecipeListView()
+                    .onAppear { activeCookbookState.setActive(cookbookID) }
+            }
             .sheet(isPresented: $isPresentingMessages) {
                 MessagesView()
             }
@@ -175,7 +179,17 @@ struct HomeView: View {
         case 12..<17: timeOfDay = "afternoon"
         default: timeOfDay = "evening"
         }
+        if let firstName {
+            return "Good \(timeOfDay), \(firstName)!"
+        }
         return "Good \(timeOfDay)!"
+    }
+
+    private var firstName: String? {
+        guard let displayName = accountState.currentUserDisplayName else { return nil }
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.split(separator: " ").first.map(String.init)
     }
 
     // MARK: - Continue Cooking
@@ -304,9 +318,12 @@ struct HomeView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(ownedCookbooks) { cookbook in
-                        NavigationLink {
-                            RecipeListView()
-                        } label: {
+                        // Value-based link, not a destination-builder
+                        // NavigationLink with a .simultaneousGesture layered
+                        // on — that combination breaks full-row/cover
+                        // tappability (see CookbooksHubView). The active
+                        // cookbook is set in .navigationDestination below.
+                        NavigationLink(value: cookbook.id) {
                             cookbookCover(
                                 title: cookbook.title,
                                 subtitle: "\(ownedRecipes.filter { $0.cookbookID == cookbook.id }.count) recipes",
@@ -314,9 +331,6 @@ struct HomeView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .simultaneousGesture(TapGesture().onEnded {
-                            activeCookbookState.setActive(cookbook.id)
-                        })
                     }
                     ForEach(joinedGroups, id: \.group.id) { entry in
                         NavigationLink {

@@ -30,12 +30,16 @@ struct CookbooksHubView: View {
             List {
                 Section("Personal") {
                     ForEach(ownedCookbooks) { cookbook in
-                        NavigationLink(cookbook.title) {
-                            RecipeListView()
-                        }
-                        .simultaneousGesture(TapGesture().onEnded {
-                            activeCookbookState.setActive(cookbook.id)
-                        })
+                        // A plain value-based NavigationLink, not a
+                        // destination-builder one with a .simultaneousGesture
+                        // layered on for the side effect — that combination
+                        // is a known SwiftUI trap where the gesture and the
+                        // link's own tap recognizer compete for the row,
+                        // leaving only the trailing chevron reliably
+                        // tappable. Setting the active cookbook happens in
+                        // the destination's .onAppear instead, so the whole
+                        // row is a single, unambiguous tap target.
+                        NavigationLink(cookbook.title, value: cookbook.id)
                     }
                 }
 
@@ -59,6 +63,10 @@ struct CookbooksHubView: View {
             .scrollContentBackground(.hidden)
             .background(Color.potluckCream)
             .navigationTitle("Cookbooks")
+            .navigationDestination(for: UUID.self) { cookbookID in
+                RecipeListView()
+                    .onAppear { activeCookbookState.setActive(cookbookID) }
+            }
             .task(id: accountState.currentUserID) {
                 await loadJoinedGroups()
             }

@@ -12,7 +12,7 @@ struct AuthServicingTests {
     @Test func signUpCreatesANewAccount() async throws {
         let service = FakeAuthService()
 
-        let result = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2")
+        let result = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2", displayName: "Cook Example")
 
         #expect(result.isNewAccount == true)
         #expect(service.currentUserID == result.userID)
@@ -20,7 +20,7 @@ struct AuthServicingTests {
 
     @Test func signInToExistingAccountIsNotNew() async throws {
         let service = FakeAuthService()
-        _ = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2")
+        _ = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2", displayName: "Cook Example")
         try service.signOut()
 
         let result = try await service.signInWithEmail(email: "cook@example.com", password: "hunter2")
@@ -50,7 +50,7 @@ struct AuthServicingTests {
 
     @Test func signOutClearsCurrentUser() async throws {
         let service = FakeAuthService()
-        _ = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2")
+        _ = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2", displayName: "Cook Example")
 
         try service.signOut()
 

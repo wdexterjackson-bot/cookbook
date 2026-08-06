@@ -33,6 +33,8 @@ struct SignInView: View {
     /// Chosen before the user ever types an email — so the email/password
     /// fields below always know which action they're feeding.
     @State private var authIntent: AuthIntent = .signIn
+    @State private var firstName = ""
+    @State private var lastName = ""
     @State private var email = ""
     @State private var password = ""
     @State private var isBusy = false
@@ -79,6 +81,25 @@ struct SignInView: View {
                     .pickerStyle(.segmented)
                 }
 
+                if authIntent == .signUp {
+                    Section {
+                        TextField("First Name", text: $firstName)
+                            #if os(iOS)
+                            .textInputAutocapitalization(.words)
+                            #endif
+                            .accessibilityIdentifier("firstNameField")
+                        TextField("Last Name", text: $lastName)
+                            #if os(iOS)
+                            .textInputAutocapitalization(.words)
+                            #endif
+                            .accessibilityIdentifier("lastNameField")
+                    } header: {
+                        Text("Your Name")
+                    } footer: {
+                        Text("Used to greet you by name and, later, to credit who added a recipe.")
+                    }
+                }
+
                 Section("Email") {
                     TextField("Email", text: $email)
                         #if os(iOS)
@@ -93,7 +114,7 @@ struct SignInView: View {
                     Button(authIntent.rawValue) {
                         Task { await performEmailAuth(isSignUp: authIntent == .signUp) }
                     }
-                    .disabled(email.isEmpty || password.isEmpty || isBusy)
+                    .disabled(!canSubmit || isBusy)
                     .accessibilityIdentifier("signInSubmitButton")
                 }
 
@@ -143,19 +164,31 @@ struct SignInView: View {
         }
     }
 
+    private var canSubmit: Bool {
+        guard !email.isEmpty, !password.isEmpty else { return false }
+        guard authIntent == .signUp else { return true }
+        return !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private func performEmailAuth(isSignUp: Bool) async {
         isBusy = true
         errorMessage = nil
         defer { isBusy = false }
         do {
             let result = isSignUp
-                ? try await accountState.signUp(email: email, password: password)
+                ? try await accountState.signUp(email: email, password: password, displayName: fullName)
                 : try await accountState.signIn(email: email, password: password)
             accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(result, modelContext: modelContext, entitlementGranter: entitlementGranter)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: email, context: isSignUp ? .signUp : .signIn)
         }
+    }
+
+    private var fullName: String {
+        "\(firstName.trimmingCharacters(in: .whitespacesAndNewlines)) \(lastName.trimmingCharacters(in: .whitespacesAndNewlines))"
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Turns a raw auth error into a user-facing message, running a
@@ -188,6 +221,15 @@ struct SignInView: View {
                 return
             }
             let authResult = try await accountState.signInWithApple(idToken: idToken, rawNonce: rawNonce)
+            // Apple only ever includes the name on the very first
+            // authorization for a given account, so this is the one chance
+            // to capture it — best-effort, the user can still set it later.
+            if authResult.isNewAccount, let fullName = credential.fullName {
+                let name = [fullName.givenName, fullName.familyName].compactMap { $0 }.joined(separator: " ")
+                if !name.isEmpty {
+                    try? await accountState.updateDisplayName(name)
+                }
+            }
             accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
             if isDismissable { dismiss() }
         } catch {
@@ -211,6 +253,9 @@ struct SignInView: View {
             }
             let accessToken = signInResult.user.accessToken.tokenString
             let authResult = try await accountState.signInWithGoogle(idToken: idToken, accessToken: accessToken)
+            if authResult.isNewAccount, let name = signInResult.user.profile?.name, !name.isEmpty {
+                try? await accountState.updateDisplayName(name)
+            }
             accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
             if isDismissable { dismiss() }
         } catch {

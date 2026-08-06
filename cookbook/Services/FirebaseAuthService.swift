@@ -19,14 +19,33 @@ final class FirebaseAuthService: AuthServicing {
         Auth.auth().currentUser?.email
     }
 
+    var currentUserDisplayName: String? {
+        Auth.auth().currentUser?.displayName
+    }
+
     func signInWithEmail(email: String, password: String) async throws -> AuthResult {
         let result = try await Auth.auth().signIn(withEmail: email, password: password)
         return AuthResult(userID: result.user.uid, isNewAccount: result.additionalUserInfo?.isNewUser ?? false)
     }
 
-    func signUpWithEmail(email: String, password: String) async throws -> AuthResult {
+    func signUpWithEmail(email: String, password: String, displayName: String) async throws -> AuthResult {
         let result = try await Auth.auth().createUser(withEmail: email, password: password)
+        // Best-effort: the account itself is what matters, a display-name
+        // write hiccup shouldn't fail sign-up — the user can always set it
+        // again from Settings.
+        let changeRequest = result.user.createProfileChangeRequest()
+        changeRequest.displayName = displayName
+        try? await changeRequest.commitChanges()
         return AuthResult(userID: result.user.uid, isNewAccount: true)
+    }
+
+    func updateDisplayName(_ displayName: String) async throws {
+        guard let user = Auth.auth().currentUser else {
+            throw AuthServiceError.notSignedIn
+        }
+        let changeRequest = user.createProfileChangeRequest()
+        changeRequest.displayName = displayName
+        try await changeRequest.commitChanges()
     }
 
     func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult {

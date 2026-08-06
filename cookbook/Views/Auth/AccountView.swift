@@ -21,6 +21,9 @@ struct AccountView: View {
     @State private var isDeletingAccount = false
     @State private var signOutErrorMessage: String?
     @State private var deleteAccountErrorMessage: String?
+    @State private var fullNameDraft = ""
+    @State private var isSavingName = false
+    @State private var saveNameErrorMessage: String?
 
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
@@ -33,6 +36,20 @@ struct AccountView: View {
                 if accountState.isSignedIn {
                     Section("Account") {
                         LabeledContent("Signed in", value: accountState.currentUserID ?? "")
+                        TextField("Full Name", text: $fullNameDraft)
+                            #if os(iOS)
+                            .textInputAutocapitalization(.words)
+                            #endif
+                            .onSubmit { Task { await saveFullName() } }
+                        if fullNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != (accountState.currentUserDisplayName ?? "") {
+                            Button("Save Name") {
+                                Task { await saveFullName() }
+                            }
+                            .disabled(isSavingName || fullNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        if let saveNameErrorMessage {
+                            Text(saveNameErrorMessage).foregroundStyle(.red)
+                        }
                         Button("Sign Out", role: .destructive) {
                             signOut()
                         }
@@ -109,6 +126,22 @@ struct AccountView: View {
                 isPresentingMembership = true
                 accountState.pendingFamilyUserPromoOffer = false
             }
+            .task(id: accountState.currentUserID) {
+                fullNameDraft = accountState.currentUserDisplayName ?? ""
+            }
+        }
+    }
+
+    private func saveFullName() async {
+        let trimmed = fullNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        isSavingName = true
+        saveNameErrorMessage = nil
+        defer { isSavingName = false }
+        do {
+            try await accountState.updateDisplayName(trimmed)
+        } catch {
+            saveNameErrorMessage = error.localizedDescription
         }
     }
 

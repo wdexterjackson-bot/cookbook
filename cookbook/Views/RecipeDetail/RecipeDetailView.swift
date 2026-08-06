@@ -66,8 +66,10 @@ struct RecipeDetailView: View {
             .padding()
         }
         .background(Color.potluckCream)
-        .navigationTitle(recipe.title)
-        .navigationBarTitleDisplayMode(.large)
+        .navigationTitle("")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -159,7 +161,15 @@ struct RecipeDetailView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(spacing: 8) {
+            Text(recipe.title)
+                .font(.potluckHeadline(26))
+                .foregroundStyle(Color.potluckDeepTeal)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            heroImage
+
             // Owner is always shown, never an editable field — even though
             // in Phase 1 it's just "You" on every recipe (PRD COOK-001).
             Label("You", systemImage: "person.crop.circle")
@@ -167,6 +177,22 @@ struct RecipeDetailView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Owner: You")
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var heroImage: some View {
+        #if os(iOS)
+        if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(height: 220)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+                .potluckCardShadow()
+        }
+        #endif
     }
 
     /// A quick, distinct signal from Favorite — a single tap sets a fixed
