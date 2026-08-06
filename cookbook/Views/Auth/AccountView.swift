@@ -13,7 +13,12 @@ struct AccountView: View {
     @Environment(AccountState.self) private var accountState
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingSignIn = false
+    @State private var isPresentingMembership = false
     @State private var signOutErrorMessage: String?
+
+    private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
+    private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
 
     var body: some View {
         NavigationStack {
@@ -23,6 +28,12 @@ struct AccountView: View {
                         LabeledContent("Signed in", value: accountState.currentUserID ?? "")
                         Button("Sign Out", role: .destructive) {
                             signOut()
+                        }
+                    }
+
+                    Section("Membership") {
+                        Button("View Membership & Credits") {
+                            isPresentingMembership = true
                         }
                     }
                 } else {
@@ -50,6 +61,21 @@ struct AccountView: View {
             }
             .sheet(isPresented: $isPresentingSignIn) {
                 SignInView()
+            }
+            .sheet(isPresented: $isPresentingMembership) {
+                if let userID = accountState.currentUserID {
+                    MembershipPaywallView(
+                        userID: userID,
+                        purchaseService: purchaseService,
+                        claimWriter: claimWriter,
+                        entitlementService: entitlementService
+                    )
+                }
+            }
+            .onChange(of: accountState.pendingFamilyUserPromoOffer) { _, isPending in
+                guard isPending else { return }
+                isPresentingMembership = true
+                accountState.pendingFamilyUserPromoOffer = false
             }
         }
     }

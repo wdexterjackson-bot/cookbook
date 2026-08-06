@@ -83,6 +83,9 @@ struct CreateEditRecipeView: View {
     @State private var heroImageData: Data?
     @State private var removesExistingPhoto = false
 
+    @FocusState private var focusedIngredientRowID: UUID?
+    @FocusState private var focusedStepRowID: UUID?
+
     init(mode: Mode) {
         self.mode = mode
         switch mode {
@@ -230,10 +233,10 @@ struct CreateEditRecipeView: View {
             }
             .environment(\.editMode, .constant(.active))
 
-            Button {
-                ingredientRows.append(DraftIngredientRow())
-            } label: {
-                Label("Add Ingredient", systemImage: "plus")
+            addRowButton(label: "Add an ingredient") {
+                let row = DraftIngredientRow()
+                ingredientRows.append(row)
+                focusedIngredientRowID = row.id
             }
         }
     }
@@ -241,6 +244,7 @@ struct CreateEditRecipeView: View {
     private func ingredientRow(_ row: Binding<DraftIngredientRow>) -> some View {
         HStack(spacing: 8) {
             TextField("Ingredient", text: row.name)
+                .focused($focusedIngredientRowID, equals: row.wrappedValue.id)
                 .accessibilityLabel("Ingredient name")
 
             TextField("Amount", text: row.quantityText)
@@ -266,6 +270,27 @@ struct CreateEditRecipeView: View {
                 .accessibilityLabel("Choose a unit")
             }
         }
+        .padding(.vertical, 2)
+    }
+
+    /// Styled to read as part of the list itself — a green "+" circle
+    /// matching the size/weight of the system red delete circle edit mode
+    /// already renders on every row above it — rather than a separate
+    /// button hanging off the bottom of the section.
+    private func addRowButton(label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.title3)
+                Text(label)
+                    .foregroundStyle(.secondary)
+                    .italic()
+                Spacer()
+            }
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Steps
@@ -274,6 +299,8 @@ struct CreateEditRecipeView: View {
         Section("Steps") {
             ForEach($stepRows) { $row in
                 TextField("Step", text: $row.text, axis: .vertical)
+                    .focused($focusedStepRowID, equals: row.id)
+                    .padding(.vertical, 2)
                     .accessibilityLabel("Step")
             }
             .onDelete { offsets in
@@ -284,10 +311,10 @@ struct CreateEditRecipeView: View {
             }
             .environment(\.editMode, .constant(.active))
 
-            Button {
-                stepRows.append(DraftStepRow())
-            } label: {
-                Label("Add Step", systemImage: "plus")
+            addRowButton(label: "Add a step") {
+                let row = DraftStepRow()
+                stepRows.append(row)
+                focusedStepRowID = row.id
             }
         }
     }

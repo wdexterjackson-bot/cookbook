@@ -11,12 +11,20 @@ import Foundation
 import SwiftData
 
 enum PostSignInCoordinator {
-    static func handle(_ result: AuthResult, modelContext: ModelContext, entitlementGranter: EntitlementGranting) async {
+    /// Returns whether the caller should offer the free Family User promo
+    /// credit redemption prompt — true only for a brand-new, promo-eligible
+    /// account that was actually granted a credit just now.
+    @discardableResult
+    static func handle(_ result: AuthResult, modelContext: ModelContext, entitlementGranter: EntitlementGranting) async -> Bool {
         RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: modelContext, to: result.userID)
         CookbookMigrator.migrateGuestCookbooksIfNeeded(in: modelContext, to: result.userID)
 
-        if result.isNewAccount {
-            try? await entitlementGranter.grantPromoCreditsIfEligible(userID: result.userID)
+        guard result.isNewAccount, PromoCredit.isEligible(on: .now) else { return false }
+        do {
+            try await entitlementGranter.grantPromoCreditsIfEligible(userID: result.userID)
+            return true
+        } catch {
+            return false
         }
     }
 }

@@ -17,6 +17,12 @@ final class AccountState {
 
     private(set) var currentUserID: String?
 
+    /// Set by SignInView right after PostSignInCoordinator reports a
+    /// brand-new, promo-eligible account — AccountView shows the redemption
+    /// prompt once and clears this. A stray "true" here is harmless (worst
+    /// case the user sees the prompt again and it's a no-op if unavailable).
+    var pendingFamilyUserPromoOffer = false
+
     var isSignedIn: Bool { currentUserID != nil }
 
     /// What new/changed Recipe.ownerID values should use: the signed-in

@@ -61,6 +61,7 @@ function entitlementData(overrides = {}) {
     userID: 'alice',
     creationCredits: 3,
     hasFamilyUser: false,
+    familyUserPromoCreditAvailable: true,
     grantedPromoCredits: true,
     createdAt: Timestamp.now(),
     ...overrides,
@@ -100,6 +101,37 @@ describe('entitlements', () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 2, hasFamilyUser: true })));
   });
+
+  it('allows redeeming the free Family User promo credit', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      hasFamilyUser: true,
+      familyUserPromoCreditAvailable: false,
+    })));
+  });
+
+  it('rejects redeeming the promo credit a second time', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({
+      hasFamilyUser: true,
+      familyUserPromoCreditAvailable: false,
+    })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      hasFamilyUser: true,
+      familyUserPromoCreditAvailable: false,
+    })));
+  });
+
+  it('rejects redeeming the promo credit while also touching creationCredits', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      hasFamilyUser: true,
+      familyUserPromoCreditAvailable: false,
+      creationCredits: 2,
+    })));
+  });
 });
 
 describe('group creation', () => {
@@ -138,6 +170,36 @@ describe('group creation', () => {
     batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 0 }));
     batch.set(doc(alice, 'groups/group1'), groupData({ createdByUserID: 'bob' }));
     await assertFails(batch.commit());
+  });
+});
+
+describe('purchase claims', () => {
+  it('allows submitting your own claim', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'purchaseClaims/txn1'), {
+      userID: 'alice', productID: 'VibeApp.cookbook.familyUser.lifetime',
+      transactionID: 'txn1', jwsRepresentation: 'stub-jws', submittedAt: Timestamp.now(),
+    }));
+  });
+
+  it("rejects submitting a claim on someone else's behalf", async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'purchaseClaims/txn1'), {
+      userID: 'bob', productID: 'VibeApp.cookbook.familyUser.lifetime',
+      transactionID: 'txn1', jwsRepresentation: 'stub-jws', submittedAt: Timestamp.now(),
+    }));
+  });
+
+  it('rejects a client marking its own claim processed', async () => {
+    await seed((db) => setDoc(doc(db, 'purchaseClaims/txn1'), {
+      userID: 'alice', productID: 'VibeApp.cookbook.familyUser.lifetime',
+      transactionID: 'txn1', jwsRepresentation: 'stub-jws', submittedAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'purchaseClaims/txn1'), {
+      userID: 'alice', productID: 'VibeApp.cookbook.familyUser.lifetime',
+      transactionID: 'txn1', jwsRepresentation: 'stub-jws', submittedAt: Timestamp.now(), processed: true,
+    }));
   });
 });
 

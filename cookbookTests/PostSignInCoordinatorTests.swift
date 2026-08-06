@@ -25,10 +25,11 @@ struct PostSignInCoordinatorTests {
         let granter = FakeEntitlementGranter()
         let result = AuthResult(userID: "new-uid", isNewAccount: true)
 
-        await PostSignInCoordinator.handle(result, modelContext: context, entitlementGranter: granter)
+        let shouldOfferPromo = await PostSignInCoordinator.handle(result, modelContext: context, entitlementGranter: granter)
 
         #expect(recipe.ownerID == "new-uid")
         #expect(granter.grantedUserIDs == ["new-uid"])
+        #expect(shouldOfferPromo)
     }
 
     @Test func existingSignInMigratesButDoesNotGrantCredits() async throws {
@@ -39,9 +40,10 @@ struct PostSignInCoordinatorTests {
         let granter = FakeEntitlementGranter()
         let result = AuthResult(userID: "existing-uid", isNewAccount: false)
 
-        await PostSignInCoordinator.handle(result, modelContext: context, entitlementGranter: granter)
+        let shouldOfferPromo = await PostSignInCoordinator.handle(result, modelContext: context, entitlementGranter: granter)
 
         #expect(recipe.ownerID == "existing-uid")
         #expect(granter.grantedUserIDs.isEmpty)
+        #expect(!shouldOfferPromo)
     }
 }

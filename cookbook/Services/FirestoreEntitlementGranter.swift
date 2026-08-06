@@ -21,6 +21,7 @@ final class FirestoreEntitlementGranter: EntitlementGranting {
             "userID": userID,
             "creationCredits": PromoCredit.creditCount,
             "hasFamilyUser": false,
+            "familyUserPromoCreditAvailable": true,
             "grantedPromoCredits": true,
             "createdAt": FieldValue.serverTimestamp(),
         ])

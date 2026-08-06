@@ -98,7 +98,7 @@ struct SignInView: View {
             let result = isSignUp
                 ? try await accountState.signUp(email: email, password: password)
                 : try await accountState.signIn(email: email, password: password)
-            await PostSignInCoordinator.handle(result, modelContext: modelContext, entitlementGranter: entitlementGranter)
+            accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(result, modelContext: modelContext, entitlementGranter: entitlementGranter)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

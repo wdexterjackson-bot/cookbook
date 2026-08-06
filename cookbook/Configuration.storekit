@@ -1,0 +1,50 @@
+{
+  "identifier" : "C5CD4612-54E9-4D52-AA0A-35CCAD7E09B7",
+  "nonRenewingSubscriptions" : [],
+  "products" : [
+    {
+      "displayPrice" : "0.99",
+      "familyShareable" : false,
+      "internalID" : "83AF5E48-799E-45D8-8631-DCE7BB8CC6A3",
+      "localizations" : [
+        {
+          "description" : "Lifetime ability to join and contribute to unlimited family cookbooks. One-time purchase, no subscription.",
+          "displayName" : "Family User",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "VibeApp.cookbook.familyUser.lifetime",
+      "referenceName" : "Family User (Lifetime)",
+      "type" : "NonConsumable"
+    },
+    {
+      "displayPrice" : "1.99",
+      "familyShareable" : false,
+      "internalID" : "351DF1F7-808A-401F-BAD7-E7CDCD9FF624",
+      "localizations" : [
+        {
+          "description" : "Create one new family cookbook you can name, invite people to, and administer. One-time purchase.",
+          "displayName" : "Create a Family",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "VibeApp.cookbook.groupCreationCredit",
+      "referenceName" : "Group Creation Credit",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_askToBuyEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_disableDialogView" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : []
+  },
+  "subscriptionGroups" : [],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

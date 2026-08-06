@@ -24,6 +24,12 @@ rules_version = '2';
 //   decrement. Purchase-driven increases (Milestone 2D) are expected to be
 //   written server-side via the Admin SDK, which bypasses these rules
 //   entirely — the client should never be trusted to grant itself credits.
+//   The one exception is redeeming the free familyUserPromoCreditAvailable
+//   flag granted at sign-up: since that credit already lives on the user's
+//   own document (nothing external to verify, unlike a StoreKit purchase),
+//   the client may flip it to hasFamilyUser directly, but only as an exact
+//   paired transition — never independently, and never alongside a
+//   creationCredits change.
 // - Rate limiting (SAFE-002) isn't enforceable from rules alone and isn't
 //   attempted here; it needs a backend, which is a known gap for now.
 //
@@ -64,18 +70,30 @@ service cloud.firestore {
         && request.resource.data.userID == userID
         && request.resource.data.creationCredits == 3
         && request.resource.data.hasFamilyUser == false
+        && request.resource.data.familyUserPromoCreditAvailable == true
         && request.resource.data.grantedPromoCredits == true
         && request.time < timestamp.date(2029, 1, 1);
 
-      // Spending a credit (group creation) — the only client-writable
-      // transition is an exact decrement of 1, never below zero, and
-      // nothing else about the document may change here.
+      // Exactly two client-writable transitions, nothing else:
       allow update: if isSignedIn() && request.auth.uid == userID
         && request.resource.data.userID == resource.data.userID
-        && request.resource.data.hasFamilyUser == resource.data.hasFamilyUser
         && request.resource.data.grantedPromoCredits == resource.data.grantedPromoCredits
-        && request.resource.data.creationCredits == resource.data.creationCredits - 1
-        && request.resource.data.creationCredits >= 0;
+        && (
+          // Spending a credit (group creation) — exact decrement of 1,
+          // never below zero, hasFamilyUser/promo-flag untouched.
+          (request.resource.data.creationCredits == resource.data.creationCredits - 1
+            && request.resource.data.creationCredits >= 0
+            && request.resource.data.hasFamilyUser == resource.data.hasFamilyUser
+            && request.resource.data.familyUserPromoCreditAvailable == resource.data.familyUserPromoCreditAvailable)
+          ||
+          // Redeeming the free Family User promo credit — flips both
+          // fields together, exactly once, credits untouched.
+          (resource.data.familyUserPromoCreditAvailable == true
+            && request.resource.data.familyUserPromoCreditAvailable == false
+            && resource.data.hasFamilyUser == false
+            && request.resource.data.hasFamilyUser == true
+            && request.resource.data.creationCredits == resource.data.creationCredits)
+        );
 
       allow delete: if false;
     }
@@ -240,6 +258,19 @@ service cloud.firestore {
     match /groupCreationRequests/{idempotencyKey} {
       allow read: if isSignedIn() && request.auth.uid == resource.data.requestedByUserID;
       allow create: if isSignedIn() && request.auth.uid == request.resource.data.requestedByUserID;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Milestone 2D: the client submits a signed StoreKit transaction here
+    // after a locally-verified purchase; it is otherwise inert from the
+    // client's point of view — only the purchaseClaims Cloud Function
+    // (Admin SDK, bypasses these rules) re-verifies the JWS against Apple
+    // and grants the matching entitlements/{uid} update. A client can
+    // never mark its own claim processed or edit it after the fact.
+    match /purchaseClaims/{claimID} {
+      allow read: if isSignedIn() && request.auth.uid == resource.data.userID;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userID;
       allow update: if false;
       allow delete: if false;
     }
