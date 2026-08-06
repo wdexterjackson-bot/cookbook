@@ -34,6 +34,12 @@ struct ParsedRecipeLines: Equatable {
     /// "Notes:" label, or inferred as non-instructional text following the
     /// last real step. Nil when there's nothing like that to separate out.
     var notes: String? = nil
+    /// Raw text following a "By:" label — a name, or "Name of Location".
+    /// Preserved as-is (not split into name/location here) so the caller
+    /// can use it directly as the recipe's stamped authorship, taking
+    /// precedence over the current user's own profile. Nil when there's no
+    /// such label.
+    var authorLineageText: String? = nil
 }
 
 enum RecipeLineImportError: Error, Equatable {

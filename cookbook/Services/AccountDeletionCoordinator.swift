@@ -26,7 +26,8 @@ enum AccountDeletionCoordinator {
         for userID: String,
         modelContext: ModelContext,
         groupsService: GroupsServicing,
-        entitlementService: EntitlementServicing
+        entitlementService: EntitlementServicing,
+        userProfileService: UserProfileServicing
     ) async throws {
         let memberships = try await groupsService.fetchMemberships(forUser: userID).filter { $0.status == .active }
 
@@ -59,6 +60,7 @@ enum AccountDeletionCoordinator {
         deleteLocalData(ownerID: userID, in: modelContext)
 
         try? await entitlementService.deleteEntitlement(userID: userID)
+        try? await userProfileService.deleteProfile(userID: userID)
     }
 
     private static func deleteLocalData(ownerID: String, in context: ModelContext) {

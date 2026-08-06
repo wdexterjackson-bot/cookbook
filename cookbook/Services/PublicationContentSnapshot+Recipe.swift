@@ -39,7 +39,8 @@ extension PublicationContentSnapshot {
                 },
             notes: recipe.notes,
             tags: recipe.tags,
-            coverImageURL: coverImageURL
+            coverImageURL: coverImageURL,
+            authorLineage: recipe.authorLineage
         )
     }
 }

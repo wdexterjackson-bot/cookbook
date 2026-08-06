@@ -24,11 +24,19 @@ struct AccountView: View {
     @State private var fullNameDraft = ""
     @State private var isSavingName = false
     @State private var saveNameErrorMessage: String?
+    @State private var locationCity = ""
+    @State private var locationIsUS = true
+    @State private var locationStateCode = ""
+    @State private var locationCountry = ""
+    @State private var savedLocation: UserLocation?
+    @State private var isSavingLocation = false
+    @State private var saveLocationErrorMessage: String?
 
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let groupsService: GroupsServicing = FirestoreGroupsService()
+    private let userProfileService: UserProfileServicing = FirestoreUserProfileService()
 
     var body: some View {
         NavigationStack {
@@ -53,6 +61,28 @@ struct AccountView: View {
                         Button("Sign Out", role: .destructive) {
                             signOut()
                         }
+                    }
+
+                    Section {
+                        LocationFieldsView(
+                            city: $locationCity,
+                            isUS: $locationIsUS,
+                            stateCode: $locationStateCode,
+                            country: $locationCountry
+                        )
+                        if locationHasUnsavedChanges {
+                            Button("Save Location") {
+                                Task { await saveLocation() }
+                            }
+                            .disabled(isSavingLocation || locationCity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        if let saveLocationErrorMessage {
+                            Text(saveLocationErrorMessage).foregroundStyle(.red)
+                        }
+                    } header: {
+                        Text("Location")
+                    } footer: {
+                        Text("Optional. Used, along with your name, to credit who added a recipe — never shown elsewhere in the app.")
                     }
 
                     Section("Membership") {
@@ -128,7 +158,49 @@ struct AccountView: View {
             }
             .task(id: accountState.currentUserID) {
                 fullNameDraft = accountState.currentUserDisplayName ?? ""
+                await loadLocation()
             }
+        }
+    }
+
+    private var locationHasUnsavedChanges: Bool {
+        let draft = UserLocation(
+            city: locationCity.trimmingCharacters(in: .whitespacesAndNewlines),
+            isUS: locationIsUS,
+            stateCode: locationIsUS ? locationStateCode : nil,
+            country: locationIsUS ? nil : locationCountry.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        return draft != (savedLocation ?? UserLocation(city: "", isUS: true, stateCode: nil, country: nil))
+    }
+
+    private func loadLocation() async {
+        guard let userID = accountState.currentUserID else { return }
+        guard let location = try? await userProfileService.fetchLocation(userID: userID) else { return }
+        savedLocation = location
+        locationCity = location.city
+        locationIsUS = location.isUS
+        locationStateCode = location.stateCode ?? ""
+        locationCountry = location.country ?? ""
+    }
+
+    private func saveLocation() async {
+        guard let userID = accountState.currentUserID else { return }
+        let trimmedCity = locationCity.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCity.isEmpty else { return }
+        isSavingLocation = true
+        saveLocationErrorMessage = nil
+        defer { isSavingLocation = false }
+        let location = UserLocation(
+            city: trimmedCity,
+            isUS: locationIsUS,
+            stateCode: locationIsUS ? (locationStateCode.isEmpty ? nil : locationStateCode) : nil,
+            country: locationIsUS ? nil : locationCountry.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        do {
+            try await userProfileService.setLocation(location, userID: userID)
+            savedLocation = location
+        } catch {
+            saveLocationErrorMessage = error.localizedDescription
         }
     }
 
@@ -164,7 +236,8 @@ struct AccountView: View {
                 for: userID,
                 modelContext: modelContext,
                 groupsService: groupsService,
-                entitlementService: entitlementService
+                entitlementService: entitlementService,
+                userProfileService: userProfileService
             )
             try await accountState.deleteAccount()
             activeCookbookState.reset()

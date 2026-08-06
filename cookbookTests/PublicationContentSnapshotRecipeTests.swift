@@ -29,6 +29,16 @@ struct PublicationContentSnapshotRecipeTests {
         #expect(snapshot.notes == "Best in a cast iron pan.")
         #expect(snapshot.tags == ["breakfast", "southern"])
         #expect(snapshot.coverImageURL == nil)
+        #expect(snapshot.authorLineage == nil)
+    }
+
+    @Test func mapsAuthorLineageWhenSet() {
+        let recipe = Recipe(ownerID: "alice", title: "Cornbread")
+        recipe.authorLineage = "Mary Jackson of Memphis, TN"
+
+        let snapshot = PublicationContentSnapshot.make(from: recipe)
+
+        #expect(snapshot.authorLineage == "Mary Jackson of Memphis, TN")
     }
 
     @Test func mapsIngredientAndStepSectionsInSortOrder() {

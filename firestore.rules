@@ -304,6 +304,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // A user's own optional profile data (currently just Location) — Full
+    // Name lives on Firebase Auth's displayName instead, since Auth
+    // doesn't support arbitrary custom fields. Nothing here is
+    // security-sensitive, so unlike group deletion this doesn't need a
+    // Cloud Function — the owner manages their own doc directly.
+    match /userProfiles/{userID} {
+      allow read, write, delete: if isSignedIn() && request.auth.uid == userID;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

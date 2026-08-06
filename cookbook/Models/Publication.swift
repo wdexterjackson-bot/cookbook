@@ -44,6 +44,11 @@ struct PublicationContentSnapshot: Codable, Equatable {
     /// had one and the upload succeeded. Nil is a normal, expected state
     /// (text-only recipe, or a non-fatal upload failure) — never required.
     var coverImageURL: String?
+    /// "FName LName of City, ST" (or "Anonymous") — the source Recipe's
+    /// immutable author lineage, carried through so other group members
+    /// see who a published recipe is credited to. Nil for recipes
+    /// published before this field existed.
+    var authorLineage: String?
 
     init(
         title: String,
@@ -54,7 +59,8 @@ struct PublicationContentSnapshot: Codable, Equatable {
         stepSections: [PublicationStepSection],
         notes: String,
         tags: [String],
-        coverImageURL: String? = nil
+        coverImageURL: String? = nil,
+        authorLineage: String? = nil
     ) {
         self.title = title
         self.summary = summary
@@ -65,6 +71,7 @@ struct PublicationContentSnapshot: Codable, Equatable {
         self.notes = notes
         self.tags = tags
         self.coverImageURL = coverImageURL
+        self.authorLineage = authorLineage
     }
 }
 

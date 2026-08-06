@@ -98,6 +98,14 @@ final class Recipe {
     var sourceOwnerSnapshot: String?
     var sourceGroupSnapshot: String?
 
+    /// Who entered this recipe — "FName LName of City, ST" (or "...,
+    /// Country" outside the US), "FName LName" with no location on file,
+    /// or "Anonymous". Stamped once at creation and never changed again,
+    /// even if the author's own profile name/location changes later —
+    /// unrelated to the copy-chain lineage fields above. Nil only for
+    /// recipes created before this field existed.
+    var authorLineage: String?
+
     init(
         ownerID: String,
         title: String,
@@ -151,5 +159,6 @@ final class Recipe {
         self.immediateSourceRecipeID = nil
         self.sourceOwnerSnapshot = nil
         self.sourceGroupSnapshot = nil
+        self.authorLineage = nil
     }
 }

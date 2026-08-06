@@ -13,6 +13,10 @@ enum RecipeTextFormatter {
     static func plainText(for recipe: Recipe) -> String {
         var lines: [String] = [recipe.title]
 
+        if let authorLineage = recipe.authorLineage, !authorLineage.isEmpty {
+            lines.append("by \(authorLineage)")
+        }
+
         if !recipe.summary.isEmpty {
             lines.append("")
             lines.append(recipe.summary)

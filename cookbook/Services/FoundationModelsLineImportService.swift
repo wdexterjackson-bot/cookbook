@@ -37,7 +37,8 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
             """
             You extract structured recipe data from pasted, possibly messy
             text. The text may use explicit labels ("Name:", "Section:",
-            "Notes:") — treat those as authoritative when present. Extract:
+            "By:", "Notes:") — treat those as authoritative when present.
+            Extract:
 
             - title: the dish's name. Look for a "Name:" label first, or an
               unambiguous title-like first line. Leave blank if not clearly
@@ -46,6 +47,11 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
               belongs to (e.g. "Desserts", "Appetizers"), from a "Section:"
               label. Leave blank if there's no such label — never infer this
               from the recipe's content.
+            - authorLineageText: who this recipe is credited to, from a
+              "By:" label — copy the text after it verbatim, whether it's
+              just a name ("By: Jane Doe") or a name with a location ("By:
+              Jane Doe of Baltimore, MD"). Leave blank if there's no such
+              label — never infer authorship from the recipe's content.
             - ingredients and steps: classify each remaining line as either
               an ingredient or an instruction step, preserving original
               order within each list. For ingredients, separate the
@@ -74,7 +80,8 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
                 chapterName: Self.nonBlank(content.chapterName),
                 ingredients: ingredients,
                 steps: content.steps,
-                notes: Self.nonBlank(content.notes)
+                notes: Self.nonBlank(content.notes),
+                authorLineageText: Self.nonBlank(content.authorLineageText)
             )
         } catch {
             throw RecipeLineImportError.parsingFailed
@@ -100,6 +107,7 @@ private struct GeneratedRecipeLines {
 
     var title: String?
     var chapterName: String?
+    var authorLineageText: String?
     var ingredients: [GeneratedIngredient]
     var steps: [String]
     var notes: String?

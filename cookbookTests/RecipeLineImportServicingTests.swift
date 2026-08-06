@@ -28,6 +28,25 @@ struct RecipeLineImportServicingTests {
         #expect(service.lastParsedText == "2 cups flour\nPreheat the oven.")
     }
 
+    @Test func parsesTitleChapterAuthorAndNotesFromStubbedResult() async throws {
+        let service = FakeRecipeLineImportService()
+        service.stubbedResult = ParsedRecipeLines(
+            title: "Skillet Cornbread",
+            chapterName: "Desserts",
+            ingredients: [],
+            steps: [],
+            notes: "Feeds 6-8.",
+            authorLineageText: "Jane Doe of Baltimore, MD"
+        )
+
+        let result = try await service.parseLines(from: "Name: Skillet Cornbread")
+
+        #expect(result.title == "Skillet Cornbread")
+        #expect(result.chapterName == "Desserts")
+        #expect(result.notes == "Feeds 6-8.")
+        #expect(result.authorLineageText == "Jane Doe of Baltimore, MD")
+    }
+
     @Test func throwsOnEmptyInput() async throws {
         let service = FakeRecipeLineImportService()
 

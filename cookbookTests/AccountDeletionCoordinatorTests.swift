@@ -46,7 +46,8 @@ struct AccountDeletionCoordinatorTests {
             for: "alice",
             modelContext: context,
             groupsService: InMemoryGroupsService(),
-            entitlementService: InMemoryEntitlementService()
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: InMemoryUserProfileService()
         )
 
         #expect(try context.fetch(FetchDescriptor<Recipe>()).isEmpty)
@@ -65,7 +66,8 @@ struct AccountDeletionCoordinatorTests {
             for: "alice",
             modelContext: context,
             groupsService: InMemoryGroupsService(),
-            entitlementService: InMemoryEntitlementService()
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: InMemoryUserProfileService()
         )
 
         let remaining = try context.fetch(FetchDescriptor<Recipe>())
@@ -84,7 +86,8 @@ struct AccountDeletionCoordinatorTests {
             for: "bob",
             modelContext: context,
             groupsService: groups,
-            entitlementService: InMemoryEntitlementService()
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: InMemoryUserProfileService()
         )
 
         let memberships = try await groups.fetchMemberships(forGroup: group.id)
@@ -108,7 +111,8 @@ struct AccountDeletionCoordinatorTests {
                 for: "alice",
                 modelContext: context,
                 groupsService: groups,
-                entitlementService: InMemoryEntitlementService()
+                entitlementService: InMemoryEntitlementService(),
+                userProfileService: InMemoryUserProfileService()
             )
         }
 
@@ -131,7 +135,8 @@ struct AccountDeletionCoordinatorTests {
             for: "alice",
             modelContext: context,
             groupsService: groups,
-            entitlementService: InMemoryEntitlementService()
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: InMemoryUserProfileService()
         )
 
         let remaining = try await groups.fetchGroup(id: group.id)
@@ -150,9 +155,26 @@ struct AccountDeletionCoordinatorTests {
             for: "alice",
             modelContext: context,
             groupsService: InMemoryGroupsService(),
-            entitlementService: entitlements
+            entitlementService: entitlements,
+            userProfileService: InMemoryUserProfileService()
         )
 
         #expect(entitlements.entitlementsByUserID["alice"] == nil)
+    }
+
+    @Test func bestEffortDeletesTheProfileDocument() async throws {
+        let context = try makeInMemoryContext()
+        let userProfiles = InMemoryUserProfileService()
+        userProfiles.locationsByUserID["alice"] = UserLocation(city: "Memphis", isUS: true, stateCode: "TN", country: nil)
+
+        try await AccountDeletionCoordinator.deleteAllData(
+            for: "alice",
+            modelContext: context,
+            groupsService: InMemoryGroupsService(),
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: userProfiles
+        )
+
+        #expect(userProfiles.locationsByUserID["alice"] == nil)
     }
 }

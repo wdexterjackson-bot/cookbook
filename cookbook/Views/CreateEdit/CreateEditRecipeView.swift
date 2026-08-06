@@ -109,8 +109,13 @@ struct CreateEditRecipeView: View {
     @State private var isImporting = false
     @State private var importErrorMessage: String?
     @State private var hasClipboardText = false
+    @State private var importedAuthorLineage: String?
     @Environment(\.scenePhase) private var scenePhase
     private let lineImportService: RecipeLineImportServicing = FoundationModelsLineImportService()
+    private let userProfileService: UserProfileServicing = FirestoreUserProfileService()
+
+    @State private var isPresentingAuthorPrompt = false
+    @State private var authorPromptWasHandled = false
 
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var heroImageData: Data?
@@ -249,6 +254,36 @@ struct CreateEditRecipeView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
                 }
+            }
+            .sheet(isPresented: $isPresentingAuthorPrompt, onDismiss: {
+                // Swiping the sheet away without an explicit choice still
+                // needs to finish the save — defaults to Anonymous rather
+                // than leaving the recipe unsaved.
+                if !authorPromptWasHandled {
+                    finishSave(authorLineage: "Anonymous")
+                }
+                authorPromptWasHandled = false
+            }) {
+                RecipeAuthorPromptView(
+                    onSaveWithName: { name, location in
+                        authorPromptWasHandled = true
+                        isPresentingAuthorPrompt = false
+                        if let userID = accountState.currentUserID {
+                            Task {
+                                try? await accountState.updateDisplayName(name)
+                                if let location {
+                                    try? await userProfileService.setLocation(location, userID: userID)
+                                }
+                            }
+                        }
+                        finishSave(authorLineage: location.map { "\(name) of \($0.formatted)" } ?? name)
+                    },
+                    onSaveAnonymous: {
+                        authorPromptWasHandled = true
+                        isPresentingAuthorPrompt = false
+                        finishSave(authorLineage: "Anonymous")
+                    }
+                )
             }
         }
     }
@@ -492,6 +527,9 @@ struct CreateEditRecipeView: View {
                     ? parsedNotes
                     : notes + "\n\n" + parsedNotes
             }
+            if let authorLineageText = result.authorLineageText {
+                importedAuthorLineage = authorLineageText
+            }
 
             ingredientRows.removeAll { $0.isBlank }
             for parsed in result.ingredients {
@@ -642,6 +680,12 @@ struct CreateEditRecipeView: View {
         }
     }
 
+    /// Validates, then resolves this recipe's author lineage (immutable
+    /// once set — never touched again in `.edit` mode) before actually
+    /// constructing/saving anything: an imported "By:" line wins if
+    /// present, otherwise the signed-in user's own name+location if
+    /// they've set one, otherwise the dismissable author prompt (which
+    /// itself calls `finishSave` once resolved).
     private func save() {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasIngredientContent = ingredientRows.contains { !$0.isBlank }
@@ -657,11 +701,35 @@ struct CreateEditRecipeView: View {
         }
         validationMessage = nil
 
+        guard case .edit = mode else {
+            if let importedAuthorLineage {
+                finishSave(authorLineage: importedAuthorLineage)
+            } else if let displayName = accountState.currentUserDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines), !displayName.isEmpty {
+                if let userID = accountState.currentUserID {
+                    Task {
+                        let location = try? await userProfileService.fetchLocation(userID: userID)
+                        finishSave(authorLineage: location.map { "\(displayName) of \($0.formatted)" } ?? displayName)
+                    }
+                } else {
+                    finishSave(authorLineage: displayName)
+                }
+            } else {
+                isPresentingAuthorPrompt = true
+            }
+            return
+        }
+        finishSave(authorLineage: nil)
+    }
+
+    private func finishSave(authorLineage: String?) {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+
         let recipe: Recipe
         switch mode {
         case .create:
             recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .manual)
             recipe.cookbookID = activeCookbookState.activeCookbookID
+            recipe.authorLineage = authorLineage
             modelContext.insert(recipe)
         case .edit(let existing):
             recipe = existing
@@ -675,6 +743,7 @@ struct CreateEditRecipeView: View {
         case .importing(let discovered):
             recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .webImport)
             recipe.cookbookID = activeCookbookState.activeCookbookID
+            recipe.authorLineage = authorLineage
             recipe.sourceURL = discovered.sourceURL
             recipe.sourceAuthorText = discovered.attributionText
             recipe.externalSource = discovered.source.rawValue
@@ -779,6 +848,77 @@ struct CreateEditRecipeView: View {
             Step(text: row.text.trimmingCharacters(in: .whitespacesAndNewlines), sortOrder: index)
         }
         return section
+    }
+}
+
+/// Shown at recipe-save time whenever the signed-in user's profile has no
+/// name set — dismissable (swiping away saves the recipe as Anonymous, see
+/// CreateEditRecipeView's .sheet(onDismiss:)), and lets the user fill in
+/// their name/location right here rather than needing to go to Settings
+/// first.
+private struct RecipeAuthorPromptView: View {
+    let onSaveWithName: (String, UserLocation?) -> Void
+    let onSaveAnonymous: () -> Void
+
+    @State private var firstName = ""
+    @State private var lastName = ""
+    @State private var city = ""
+    @State private var isUS = true
+    @State private var stateCode = ""
+    @State private var country = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("First Name", text: $firstName)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.words)
+                        #endif
+                    TextField("Last Name", text: $lastName)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.words)
+                        #endif
+                } header: {
+                    Text("Credit This Recipe To")
+                } footer: {
+                    Text("Saved to your profile so future recipes use it automatically — you can change it anytime in Settings.")
+                }
+
+                Section("Location (Optional)") {
+                    LocationFieldsView(city: $city, isUS: $isUS, stateCode: $stateCode, country: $country)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color.potluckCream)
+            .navigationTitle("Add Your Name?")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Save as Anonymous", action: onSaveAnonymous)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save My Name") {
+                        let name = "\(firstName.trimmingCharacters(in: .whitespacesAndNewlines)) \(lastName.trimmingCharacters(in: .whitespacesAndNewlines))"
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        let trimmedCity = city.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let location: UserLocation? = trimmedCity.isEmpty ? nil : UserLocation(
+                            city: trimmedCity,
+                            isUS: isUS,
+                            stateCode: isUS ? (stateCode.isEmpty ? nil : stateCode) : nil,
+                            country: isUS ? nil : country.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                        onSaveWithName(name, location)
+                    }
+                    .disabled(
+                        firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                }
+            }
+        }
     }
 }
 

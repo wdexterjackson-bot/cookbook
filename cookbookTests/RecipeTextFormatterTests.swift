@@ -40,4 +40,21 @@ struct RecipeTextFormatterTests {
         #expect(!text.contains("INGREDIENTS"))
         #expect(!text.contains("STEPS"))
     }
+
+    @Test func plainTextIncludesAuthorLineageWhenSet() {
+        let recipe = Recipe(ownerID: "test-owner", title: "Skillet Cornbread")
+        recipe.authorLineage = "Mary Jackson of Memphis, TN"
+
+        let text = RecipeTextFormatter.plainText(for: recipe)
+
+        #expect(text.contains("by Mary Jackson of Memphis, TN"))
+    }
+
+    @Test func plainTextOmitsAuthorLineageWhenNil() {
+        let recipe = Recipe(ownerID: "test-owner", title: "Skillet Cornbread")
+
+        let text = RecipeTextFormatter.plainText(for: recipe)
+
+        #expect(!text.contains("by "))
+    }
 }
