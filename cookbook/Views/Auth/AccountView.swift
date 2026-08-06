@@ -17,6 +17,7 @@ struct AccountView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingSignIn = false
     @State private var isPresentingMembership = false
+    @State private var isPresentingAdministrator = false
     @State private var isPresentingDeleteConfirmation = false
     @State private var isDeletingAccount = false
     @State private var signOutErrorMessage: String?
@@ -92,6 +93,14 @@ struct AccountView: View {
                     }
 
                     Section {
+                        Button("Administrator") {
+                            isPresentingAdministrator = true
+                        }
+                    } footer: {
+                        Text("Data tools, including bulk recipe import from a file.")
+                    }
+
+                    Section {
                         Button("Delete Account", role: .destructive) {
                             isPresentingDeleteConfirmation = true
                         }
@@ -150,6 +159,9 @@ struct AccountView: View {
                     isPresentingDeleteConfirmation = false
                     Task { await deleteAccount() }
                 }
+            }
+            .sheet(isPresented: $isPresentingAdministrator) {
+                AdministratorView()
             }
             .onChange(of: accountState.pendingFamilyUserPromoOffer) { _, isPending in
                 guard isPending else { return }
