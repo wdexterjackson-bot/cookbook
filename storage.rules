@@ -1,0 +1,37 @@
+rules_version = '2';
+
+// Publish-to-Family-Cookbook milestone. The only thing this app stores in
+// Cloud Storage: a recipe's own photo, uploaded alongside a Publication
+// (see firestore.rules' publications/{id} block for the Firestore side of
+// this feature). Reuses the exact memberships/{groupID}_{userID}
+// composite-ID convention firestore.rules already established, via
+// cross-service firestore.get()/firestore.exists() — rather than
+// duplicating group-membership logic in a second rules language.
+//
+// Not emulator-verified beyond storage-tests/storage.test.js — see that
+// file for what's actually been proven against the real emulator versus
+// reviewed by eye. Local cross-service (Storage <-> Firestore) emulator
+// testing is a known rough edge upstream; confirm storage-tests still
+// passes before trusting this file blindly after any future change here.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /publications/{groupID}/{fileName} {
+      allow read: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid))
+        && firestore.get(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid)).data.status == 'active';
+
+      // fileName is always "{ownerUserID}_{sourceRecipeID}.jpg" — a client
+      // can only ever write/delete its own uploads, never someone else's.
+      allow write: if request.auth != null
+        && fileName.matches(request.auth.uid + '_.*')
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+
+      allow delete: if request.auth != null && fileName.matches(request.auth.uid + '_.*');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

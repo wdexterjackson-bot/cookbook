@@ -12,6 +12,7 @@
 		FBFB00000000000000000016 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = FBFB00000000000000000015 /* FirebaseFirestore */; };
 		FBFB00000000000000000018 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = FBFB00000000000000000017 /* GoogleSignIn */; };
 		FBFB0000000000000000001A /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = FBFB00000000000000000019 /* FirebaseFunctions */; };
+		FBFB0000000000000000001B /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = FBFB0000000000000000001C /* FirebaseStorage */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -78,6 +79,7 @@
 				FBFB00000000000000000016 /* FirebaseFirestore in Frameworks */,
 				FBFB00000000000000000018 /* GoogleSignIn in Frameworks */,
 				FBFB0000000000000000001A /* FirebaseFunctions in Frameworks */,
+				FBFB0000000000000000001B /* FirebaseStorage in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -143,6 +145,7 @@
 				FBFB00000000000000000015 /* FirebaseFirestore */,
 				FBFB00000000000000000017 /* GoogleSignIn */,
 				FBFB00000000000000000019 /* FirebaseFunctions */,
+				FBFB0000000000000000001C /* FirebaseStorage */,
 			);
 			productName = cookbook;
 			productReference = AA61DDF83023768D00168E3B /* cookbook.app */;
@@ -697,6 +700,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FBFB00000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFunctions;
+		};
+		FBFB0000000000000000001C /* FirebaseStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FBFB00000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseStorage;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

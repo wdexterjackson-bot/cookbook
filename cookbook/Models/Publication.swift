@@ -40,6 +40,32 @@ struct PublicationContentSnapshot: Codable, Equatable {
     var stepSections: [PublicationStepSection]
     var notes: String
     var tags: [String]
+    /// Firebase Storage download URL for the recipe's hero photo, if it
+    /// had one and the upload succeeded. Nil is a normal, expected state
+    /// (text-only recipe, or a non-fatal upload failure) — never required.
+    var coverImageURL: String?
+
+    init(
+        title: String,
+        summary: String,
+        yield: String,
+        totalTimeMinutes: Int?,
+        ingredientSections: [PublicationIngredientSection],
+        stepSections: [PublicationStepSection],
+        notes: String,
+        tags: [String],
+        coverImageURL: String? = nil
+    ) {
+        self.title = title
+        self.summary = summary
+        self.yield = yield
+        self.totalTimeMinutes = totalTimeMinutes
+        self.ingredientSections = ingredientSections
+        self.stepSections = stepSections
+        self.notes = notes
+        self.tags = tags
+        self.coverImageURL = coverImageURL
+    }
 }
 
 struct Publication: Codable, Identifiable, Equatable {

@@ -11,6 +11,7 @@ struct RecipeDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var isPresentingEdit = false
     @State private var isPresentingCookingMode = false
+    @State private var isPresentingPublish = false
 
     var body: some View {
         ScrollView {
@@ -92,6 +93,13 @@ struct RecipeDetailView: View {
                     Image(systemName: "square.and.arrow.up")
                 }
                 .accessibilityLabel("Share Recipe")
+
+                Button {
+                    isPresentingPublish = true
+                } label: {
+                    Image(systemName: "person.3")
+                }
+                .accessibilityLabel("Publish to a Family Cookbook")
             }
         }
         .sheet(isPresented: $isPresentingEdit) {
@@ -99,6 +107,14 @@ struct RecipeDetailView: View {
         }
         .sheet(isPresented: $isPresentingCookingMode) {
             CookingModeView(recipe: recipe)
+        }
+        .sheet(isPresented: $isPresentingPublish) {
+            PublishToFamilyCookbookView(
+                recipe: recipe,
+                groupsService: FirestoreGroupsService(),
+                publicationsService: FirestorePublicationsService(),
+                photoUploadService: FirebaseRecipePhotoUploadService()
+            )
         }
     }
 

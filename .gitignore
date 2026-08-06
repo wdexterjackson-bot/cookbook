@@ -19,6 +19,7 @@ firebase-debug.log
 .firebase/
 rules-tests/node_modules/
 functions/node_modules/
+storage-tests/node_modules/
 
 # Apple root certs for App Store Server Library verification — fetched
 # manually per functions/certs/README.md, not committed.

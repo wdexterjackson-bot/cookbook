@@ -61,4 +61,14 @@ struct PublicationsServicingTests {
             try await service.unpublish(publication.id, actingUserID: "bob")
         }
     }
+
+    @Test func coverImageURLRoundTripsThroughPublish() async throws {
+        let service = InMemoryPublicationsService()
+        var content = makeContent()
+        content.coverImageURL = "https://example.com/photo.jpg"
+
+        let publication = try await service.publish(content, sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+
+        #expect(publication.content.coverImageURL == "https://example.com/photo.jpg")
+    }
 }
