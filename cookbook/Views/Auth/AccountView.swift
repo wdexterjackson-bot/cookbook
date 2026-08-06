@@ -38,7 +38,7 @@ struct AccountView: View {
                     }
                 } else {
                     Section {
-                        Text("Your Personal Cookbook works fully offline without an account. Sign in only when you're ready to join or create a family cookbook.")
+                        Text("Sign in or create an account to continue.")
                             .foregroundStyle(.secondary)
                         Button("Sign In / Create Account") {
                             isPresentingSignIn = true

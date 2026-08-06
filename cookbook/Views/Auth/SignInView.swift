@@ -14,6 +14,12 @@ import GoogleSignIn
 #endif
 
 struct SignInView: View {
+    /// False for the mandatory launch gate (AuthGatedRootView) — no Cancel
+    /// button, and a successful sign-in doesn't call dismiss() since the
+    /// gate swaps itself out automatically once accountState.isSignedIn
+    /// flips. True (default) preserves the existing AccountView sheet use.
+    var isDismissable: Bool = true
+
     @Environment(AccountState.self) private var accountState
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -25,10 +31,18 @@ struct SignInView: View {
     @State private var currentAppleNonce: String?
 
     private let entitlementGranter: EntitlementGranting = FirestoreEntitlementGranter()
+    private let lookupService: EmailProviderLookupServicing = FirebaseEmailProviderLookupService()
 
     var body: some View {
         NavigationStack {
             Form {
+                if !isDismissable {
+                    Section {
+                        Text("Sign in or create an account to use The Official Family & Friends Cookbook.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("Email") {
                     TextField("Email", text: $email)
                         #if os(iOS)
@@ -81,10 +95,12 @@ struct SignInView: View {
                     }
                 }
             }
-            .navigationTitle("Sign In")
+            .navigationTitle(isDismissable ? "Sign In" : "Welcome")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                if isDismissable {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
                 }
             }
         }
@@ -99,9 +115,23 @@ struct SignInView: View {
                 ? try await accountState.signUp(email: email, password: password)
                 : try await accountState.signIn(email: email, password: password)
             accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(result, modelContext: modelContext, entitlementGranter: entitlementGranter)
-            dismiss()
+            if isDismissable { dismiss() }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = await resolveErrorMessage(error, attemptedEmail: email, context: isSignUp ? .signUp : .signIn)
+        }
+    }
+
+    /// Turns a raw auth error into a user-facing message, running a
+    /// server-side EmailProviderLookupServicing lookup when the error is
+    /// ambiguous (see SignInErrorMessaging) rather than showing Firebase's
+    /// generic wording.
+    private func resolveErrorMessage(_ error: Error, attemptedEmail: String, context: SignInAttemptContext) async -> String {
+        switch SignInErrorMessaging.classify(error, attemptedEmail: attemptedEmail, context: context) {
+        case .immediateMessage(let message):
+            return message
+        case .needsProviderLookup(let email, let lookupContext):
+            let status = (try? await lookupService.resolveProviders(email: email)) ?? .notFound
+            return SignInErrorMessaging.message(for: status, context: lookupContext)
         }
     }
 
@@ -121,10 +151,10 @@ struct SignInView: View {
                 return
             }
             let authResult = try await accountState.signInWithApple(idToken: idToken, rawNonce: rawNonce)
-            await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
-            dismiss()
+            accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
+            if isDismissable { dismiss() }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
         }
     }
 
@@ -144,10 +174,10 @@ struct SignInView: View {
             }
             let accessToken = signInResult.user.accessToken.tokenString
             let authResult = try await accountState.signInWithGoogle(idToken: idToken, accessToken: accessToken)
-            await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
-            dismiss()
+            accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
+            if isDismissable { dismiss() }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
         }
     }
     #endif
