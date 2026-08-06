@@ -39,4 +39,8 @@ final class FirestoreEntitlementService: EntitlementServicing {
 
         return (result as? Bool) ?? false
     }
+
+    func deleteEntitlement(userID: String) async throws {
+        try await db.collection("entitlements").document(userID).delete()
+    }
 }

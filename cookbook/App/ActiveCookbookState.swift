@@ -27,4 +27,12 @@ final class ActiveCookbookState {
         activeCookbookID = cookbookID
         UserDefaults.standard.set(cookbookID.uuidString, forKey: Self.defaultsKey)
     }
+
+    /// Called after account deletion — without this, the next signed-in
+    /// (or guest) owner would inherit a stale id pointing at a Cookbook
+    /// that no longer belongs to them.
+    func reset() {
+        activeCookbookID = nil
+        UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+    }
 }

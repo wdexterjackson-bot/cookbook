@@ -26,4 +26,8 @@ final class InMemoryEntitlementService: EntitlementServicing {
         entitlementsByUserID[userID] = entitlement
         return true
     }
+
+    func deleteEntitlement(userID: String) async throws {
+        entitlementsByUserID.removeValue(forKey: userID)
+    }
 }

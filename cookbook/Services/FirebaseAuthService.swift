@@ -49,6 +49,14 @@ final class FirebaseAuthService: AuthServicing {
         guard let user = Auth.auth().currentUser else {
             throw AuthServiceError.notSignedIn
         }
-        try await user.delete()
+        do {
+            try await user.delete()
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == AuthErrors.domain, nsError.code == AuthErrorCode.requiresRecentLogin.rawValue {
+                throw AuthServiceError.requiresRecentLogin
+            }
+            throw error
+        }
     }
 }

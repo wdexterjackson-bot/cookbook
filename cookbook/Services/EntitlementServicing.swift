@@ -29,6 +29,10 @@ protocol EntitlementServicing {
     /// callers use this to distinguish "already handled" from "went wrong."
     @discardableResult
     func redeemFamilyUserPromoCredit(userID: String) async throws -> Bool
+
+    /// Account deletion cleanup — best-effort by design (callers should
+    /// treat failure here as non-fatal, same as Storage cleanup elsewhere).
+    func deleteEntitlement(userID: String) async throws
 }
 
 extension EntitlementServicing {

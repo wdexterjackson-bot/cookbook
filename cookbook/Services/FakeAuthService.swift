@@ -17,6 +17,9 @@ final class FakeAuthService: AuthServicing {
     private var seenFederatedTokens: Set<String> = []
 
     var deleteAccountCallCount = 0
+    /// Lets tests simulate Firebase's requiresRecentLogin (or any other)
+    /// failure without needing a real stale session.
+    var deleteAccountError: Error?
 
     func signInWithEmail(email: String, password: String) async throws -> AuthResult {
         guard registeredEmails.contains(email) else {
@@ -61,6 +64,9 @@ final class FakeAuthService: AuthServicing {
     func deleteAccount() async throws {
         guard currentUserID != nil else {
             throw AuthServiceError.notSignedIn
+        }
+        if let deleteAccountError {
+            throw deleteAccountError
         }
         deleteAccountCallCount += 1
         currentUserID = nil

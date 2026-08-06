@@ -412,6 +412,7 @@ struct CreateEditRecipeView: View {
                         .scrollContentBackground(.hidden)
                         #endif
                         .accessibilityLabel("Paste ingredients and steps to import")
+                        .accessibilityIdentifier("importTextEditor")
                 }
                 .background(
                     RoundedRectangle(cornerRadius: 10)

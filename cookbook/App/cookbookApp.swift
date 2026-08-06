@@ -29,6 +29,7 @@ struct cookbookApp: App {
             Step.self,
             Cookbook.self,
             CookbookSection.self,
+            CartItem.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

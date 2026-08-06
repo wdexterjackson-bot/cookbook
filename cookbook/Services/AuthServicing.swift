@@ -20,6 +20,11 @@ struct AuthResult: Equatable {
 enum AuthServiceError: Error, Equatable {
     case notSignedIn
     case invalidCredential
+    /// Firebase requires a recent sign-in for security-sensitive actions
+    /// like account deletion. Callers should ask the user to sign out and
+    /// back in, then retry, rather than the app attempting inline
+    /// re-authentication.
+    case requiresRecentLogin
 }
 
 protocol AuthServicing {

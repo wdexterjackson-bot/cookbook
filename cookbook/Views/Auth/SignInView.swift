@@ -86,12 +86,15 @@ struct SignInView: View {
                         .keyboardType(.emailAddress)
                         #endif
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("emailField")
                     SecureField("Password", text: $password)
+                        .accessibilityIdentifier("passwordField")
 
                     Button(authIntent.rawValue) {
                         Task { await performEmailAuth(isSignUp: authIntent == .signUp) }
                     }
                     .disabled(email.isEmpty || password.isEmpty || isBusy)
+                    .accessibilityIdentifier("signInSubmitButton")
                 }
 
                 #if os(iOS)

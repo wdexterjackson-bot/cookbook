@@ -49,6 +49,11 @@ struct GroupCookbookView: View {
                 Button("Leave Family Cookbook", role: .destructive) {
                     Task { await leave() }
                 }
+                if membership.role == .admin {
+                    Button("Archive Cookbook", role: .destructive) {
+                        Task { await archive() }
+                    }
+                }
             }
 
             if let errorMessage {
@@ -130,6 +135,18 @@ struct GroupCookbookView: View {
             dismiss()
         } catch GroupsServiceError.lastAdminCannotLeaveOrBeDemoted {
             errorMessage = "You're the last admin of this cookbook — promote someone else first."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Archiving (rather than leaving) is what actually resolves the
+    /// "you're the sole admin" block — leaving alone would still strand
+    /// the cookbook, which is exactly what leaveGroup refuses to allow.
+    private func archive() async {
+        do {
+            try await groupsService.archiveGroup(groupID: group.id, actingUserID: membership.userID)
+            dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
