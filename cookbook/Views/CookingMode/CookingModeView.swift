@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import SwiftData
 #if os(iOS)
 import UIKit
 #endif
@@ -12,6 +13,8 @@ struct CookingModeView: View {
     let recipe: Recipe
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(AccountState.self) private var accountState
+    @Environment(CookingSessionState.self) private var cookingSessionState
 
     @State private var currentStepIndex = 0
     @State private var checkedStepIDs: Set<UUID> = []
@@ -87,6 +90,21 @@ struct CookingModeView: View {
             #endif
             timerManager.stop()
         }
+        .onAppear { persistSession() }
+        .onChange(of: currentStepIndex) { _, _ in persistSession() }
+    }
+
+    /// So Home's "Continue Cooking" hero card can resume exactly where the
+    /// user left off, even after the app relaunches.
+    private func persistSession() {
+        guard !flattenedSteps.isEmpty else { return }
+        cookingSessionState.update(
+            recipeID: recipe.id,
+            ownerID: accountState.currentOwnerID,
+            recipeTitle: recipe.title,
+            currentStepIndex: currentStepIndex,
+            totalSteps: flattenedSteps.count
+        )
     }
 
     private var timersButtonAccessibilityLabel: String {
@@ -201,4 +219,7 @@ struct CookingModeView: View {
     ]
     recipe.stepSections = [section]
     return CookingModeView(recipe: recipe)
+        .modelContainer(for: Recipe.self, inMemory: true)
+        .environment(AccountState(authService: FakeAuthService()))
+        .environment(CookingSessionState())
 }

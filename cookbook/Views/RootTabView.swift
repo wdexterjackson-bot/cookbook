@@ -2,46 +2,74 @@
 //  RootTabView.swift
 //  cookbook
 //
-//  Minimal, provisional navigation: the smallest thing that makes Discover
-//  and multiple Cookbooks reachable. Not a final home-screen/navigation
-//  decision — that's being designed separately.
+//  Home dashboard spec's 5-tab navigation: Home / Cookbooks / Create /
+//  Messages / Profile — replaces the earlier provisional layout. Create
+//  isn't a persistent destination (it's "a centered, visually-elevated
+//  tab button" per spec) — selecting it presents CreateHubView as a
+//  sheet and immediately reverts the tab selection, so it never "sticks"
+//  as an active tab the way a real destination would.
 //
 
 import SwiftUI
 import SwiftData
+
+private enum RootTab: Hashable {
+    case home, cookbooks, create, messages, profile
+}
 
 struct RootTabView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
     @Environment(ActiveCookbookState.self) private var activeCookbookState
     @State private var cookbookNeedingFirstRunConfiguration: Cookbook?
+    @State private var selectedTab: RootTab = .home
+    @State private var previousTab: RootTab = .home
+    @State private var isPresentingCreate = false
 
     var body: some View {
-        TabView {
-            RecipeListView()
+        TabView(selection: $selectedTab) {
+            HomeView()
                 .tabItem {
-                    Label("My Cookbook", systemImage: "book.closed")
+                    Label("Home", systemImage: "house")
                 }
+                .tag(RootTab.home)
 
-            FamilyView()
+            CookbooksHubView()
                 .tabItem {
-                    Label("Family", systemImage: "person.3")
+                    Label("Cookbooks", systemImage: "book.closed")
                 }
+                .tag(RootTab.cookbooks)
+
+            Color.clear
+                .tabItem {
+                    Image(systemName: "plus.circle.fill")
+                    Text("Create")
+                }
+                .tag(RootTab.create)
 
             MessagesView()
                 .tabItem {
                     Label("Messages", systemImage: "tray")
                 }
-
-            DiscoverView()
-                .tabItem {
-                    Label("Discover", systemImage: "sparkle.magnifyingglass")
-                }
+                .tag(RootTab.messages)
 
             AccountView()
                 .tabItem {
-                    Label("Account", systemImage: "person.crop.circle")
+                    Label("Profile", systemImage: "person.crop.circle")
                 }
+                .tag(RootTab.profile)
+        }
+        .tint(Color.potluckTomato)
+        .onChange(of: selectedTab) { _, newTab in
+            if newTab == .create {
+                isPresentingCreate = true
+                selectedTab = previousTab
+            } else {
+                previousTab = newTab
+            }
+        }
+        .sheet(isPresented: $isPresentingCreate) {
+            CreateHubView()
         }
         .sheet(item: $cookbookNeedingFirstRunConfiguration) { cookbook in
             CookbookConfigurationView(mode: .edit(cookbook))
@@ -76,4 +104,5 @@ struct RootTabView: View {
         .modelContainer(for: Recipe.self, inMemory: true)
         .environment(AccountState(authService: FakeAuthService()))
         .environment(ActiveCookbookState())
+        .environment(CookingSessionState())
 }

@@ -17,6 +17,7 @@ struct cookbookApp: App {
     var sharedModelContainer: ModelContainer
     @State private var accountState: AccountState
     @State private var activeCookbookState = ActiveCookbookState()
+    @State private var cookingSessionState = CookingSessionState()
 
     init() {
         FirebaseApp.configure()
@@ -54,5 +55,6 @@ struct cookbookApp: App {
         .modelContainer(sharedModelContainer)
         .environment(accountState)
         .environment(activeCookbookState)
+        .environment(cookingSessionState)
     }
 }

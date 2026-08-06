@@ -10,6 +10,9 @@ struct IngredientQuickView: View {
     @Binding var servingMultiplier: Double
     @Binding var checkedIngredientIDs: Set<UUID>
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Environment(AccountState.self) private var accountState
+    @State private var cartToastMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -44,8 +47,50 @@ struct IngredientQuickView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Add all to cart") {
+                        addAllIngredientsToCart()
+                    }
+                }
             }
         }
+        .cartToast($cartToastMessage)
+    }
+
+    private func addAllIngredientsToCart() {
+        let ownerID = accountState.currentOwnerID
+        let sourceRecipeID = recipe.id.uuidString
+        for section in recipe.ingredientSections {
+            for ingredient in section.ingredients {
+                let (scaledValue, scaledText) = scaled(ingredient)
+                CartItemStore.addFromRecipe(
+                    ownerID: ownerID,
+                    displayText: scaledText,
+                    quantityValue: scaledValue,
+                    unit: ingredient.unit,
+                    sourceRecipeID: sourceRecipeID,
+                    sourceRecipeTitleSnapshot: recipe.title,
+                    in: modelContext
+                )
+            }
+        }
+        cartToastMessage = "Added all ingredients to cart"
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            cartToastMessage = nil
+        }
+    }
+
+    /// (scaled quantity, scaled display text) — mirrors scaledText(for:)'s
+    /// math so the cart entry reflects "whatever serving size the recipe
+    /// is currently scaled to," per the spec. Non-scalable lines (no
+    /// parsed quantityValue) are carried over exactly as written.
+    private func scaled(_ ingredient: Ingredient) -> (Double?, String) {
+        guard let value = ingredient.quantityValue, servingMultiplier != 1 else {
+            return (ingredient.quantityValue, ingredient.displayText)
+        }
+        let scaledValue = value * servingMultiplier
+        return (scaledValue, scaledText(for: ingredient))
     }
 
     private func sectionTitle(_ section: IngredientSection) -> String {
@@ -56,19 +101,33 @@ struct IngredientQuickView: View {
     private func ingredientRow(_ ingredient: Ingredient) -> some View {
         let isChecked = checkedIngredientIDs.contains(ingredient.id)
         let text = scaledText(for: ingredient)
-        return Button {
-            toggle(ingredient.id)
-        } label: {
-            HStack {
-                Image(systemName: isChecked ? "checkmark.square.fill" : "square")
-                Text(text)
-                    .strikethrough(isChecked)
-                    .foregroundStyle(isChecked ? .secondary : .primary)
+        let (scaledValue, scaledDisplayText) = scaled(ingredient)
+        return HStack {
+            Button {
+                toggle(ingredient.id)
+            } label: {
+                HStack {
+                    Image(systemName: isChecked ? "checkmark.square.fill" : "square")
+                    Text(text)
+                        .strikethrough(isChecked)
+                        .foregroundStyle(isChecked ? .secondary : .primary)
+                }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(text)
+            .accessibilityAddTraits(isChecked ? [.isSelected] : [])
+
+            Spacer()
+
+            AddToCartButton(
+                ownerID: accountState.currentOwnerID,
+                sourceRecipeID: recipe.id.uuidString,
+                sourceRecipeTitleSnapshot: recipe.title,
+                displayText: scaledDisplayText,
+                quantityValue: scaledValue,
+                unit: ingredient.unit
+            )
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(text)
-        .accessibilityAddTraits(isChecked ? [.isSelected] : [])
     }
 
     private func toggle(_ id: UUID) {

@@ -9,9 +9,11 @@ import SwiftData
 struct RecipeDetailView: View {
     @Bindable var recipe: Recipe
     @Environment(\.modelContext) private var modelContext
+    @Environment(AccountState.self) private var accountState
     @State private var isPresentingEdit = false
     @State private var isPresentingCookingMode = false
     @State private var isPresentingPublish = false
+    @State private var cartToastMessage: String?
 
     var body: some View {
         ScrollView {
@@ -26,7 +28,14 @@ struct RecipeDetailView: View {
                 metadataRow
 
                 if !recipe.ingredientSections.isEmpty {
-                    sectionHeader("Ingredients")
+                    HStack {
+                        sectionHeader("Ingredients")
+                        Spacer()
+                        Button("Add all to cart") {
+                            addAllIngredientsToCart()
+                        }
+                        .font(.subheadline)
+                    }
                     ForEach(recipe.ingredientSections.sorted(by: { $0.sortOrder < $1.sortOrder })) { section in
                         ingredientSection(section)
                     }
@@ -116,6 +125,36 @@ struct RecipeDetailView: View {
                 photoUploadService: FirebaseRecipePhotoUploadService()
             )
         }
+        .cartToast($cartToastMessage)
+    }
+
+    private func addAllIngredientsToCart() {
+        let ownerID = accountState.currentOwnerID
+        let sourceRecipeID = recipe.id.uuidString
+        for section in recipe.ingredientSections {
+            for ingredient in section.ingredients {
+                CartItemStore.addFromRecipe(
+                    ownerID: ownerID,
+                    displayText: ingredient.displayText,
+                    quantityValue: ingredient.quantityValue,
+                    unit: ingredient.unit,
+                    sourceRecipeID: sourceRecipeID,
+                    sourceRecipeTitleSnapshot: recipe.title,
+                    in: modelContext
+                )
+            }
+        }
+        showCartToast("Added all ingredients to cart")
+    }
+
+    private func showCartToast(_ message: String) {
+        cartToastMessage = message
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if cartToastMessage == message {
+                cartToastMessage = nil
+            }
+        }
     }
 
     private var header: some View {
@@ -169,6 +208,15 @@ struct RecipeDetailView: View {
                         Text("(optional)")
                             .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    AddToCartButton(
+                        ownerID: accountState.currentOwnerID,
+                        sourceRecipeID: recipe.id.uuidString,
+                        sourceRecipeTitleSnapshot: recipe.title,
+                        displayText: ingredient.displayText,
+                        quantityValue: ingredient.quantityValue,
+                        unit: ingredient.unit
+                    )
                 }
                 .accessibilityElement(children: .combine)
             }
