@@ -21,7 +21,6 @@ struct RootTabView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
     @Environment(ActiveCookbookState.self) private var activeCookbookState
-    @State private var cookbookNeedingFirstRunConfiguration: Cookbook?
     @State private var selectedTab: RootTab = .home
     @State private var previousTab: RootTab = .home
     @State private var isPresentingCreate = false
@@ -71,30 +70,30 @@ struct RootTabView: View {
         .sheet(isPresented: $isPresentingCreate) {
             CreateHubView()
         }
-        .sheet(item: $cookbookNeedingFirstRunConfiguration) { cookbook in
-            CookbookConfigurationView(mode: .edit(cookbook))
-        }
         .task(id: accountState.currentOwnerID) {
             bootstrapActiveCookbook()
         }
     }
 
     /// Ensures a Cookbook exists for whoever the current owner is (guest or
-    /// signed-in), makes it active if nothing else is, and — for a
-    /// genuinely fresh cookbook nobody has configured yet — offers the
-    /// first-run configuration sheet (4E). Runs on every launch and every
-    /// owner change (sign-in/out), same as RecipeOwnershipMigrator's
-    /// idempotent-by-design shape.
+    /// signed-in), and makes it active if nothing else is. Runs on every
+    /// launch and every owner change (sign-in/out), same as
+    /// RecipeOwnershipMigrator's idempotent-by-design shape.
+    ///
+    /// Used to also auto-present CookbookConfigurationView for a
+    /// freshly-created, never-configured cookbook (4E's first-run sheet) —
+    /// removed because this runs in a `.task`, which fires after the tab
+    /// view is already interactive, so it could pop up moments after the
+    /// user had already started navigating on their own (e.g. tapping into
+    /// Personal Cookbook), reading as a random interruption that "undid"
+    /// their tap. Configuring a cookbook is still reachable any time via
+    /// the Cookbooks switcher's swipe-to-Edit (CookbooksListView).
     private func bootstrapActiveCookbook() {
         let ownerID = accountState.currentOwnerID
         let cookbook = CookbookMigrator.ensureDefaultCookbookExists(in: modelContext, ownerID: ownerID)
 
         if activeCookbookState.activeCookbookID == nil {
             activeCookbookState.setActive(cookbook.id)
-        }
-
-        if !cookbook.hasBeenConfigured {
-            cookbookNeedingFirstRunConfiguration = cookbook
         }
     }
 }

@@ -65,7 +65,13 @@ struct RecipeListView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        // No NavigationStack here — this view is always pushed as a
+        // destination now (from CookbooksHubView or HomeView's own
+        // NavigationStack), never a tab root. A NavigationStack nested
+        // inside another one silently breaks the push: the destination
+        // never actually appears, and the parent's list just sits there
+        // as if the tap did nothing.
+        Group {
             VStack(spacing: 0) {
                 cookbookHeader
 
@@ -328,8 +334,10 @@ private struct RecipeRow: View {
 }
 
 #Preview {
-    RecipeListView()
-        .modelContainer(for: Recipe.self, inMemory: true)
-        .environment(AccountState(authService: FakeAuthService()))
+    NavigationStack {
+        RecipeListView()
+    }
+    .modelContainer(for: Recipe.self, inMemory: true)
+    .environment(AccountState(authService: FakeAuthService()))
         .environment(ActiveCookbookState())
 }
