@@ -35,6 +35,7 @@ struct NewGroupDetails {
     var visibility: GroupVisibility
     var allowsMemberInvites: Bool
     var allowsMemberPublishing: Bool
+    var autoApproveJoinRequests: Bool
 }
 
 /// Search/filter for the public-cookbook-directory screen — `text` matches

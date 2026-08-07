@@ -13,7 +13,8 @@ struct GroupsServicingTests {
         name: String = "Barrentine Family",
         cookbookName: String = "Barrentine Family Reunion",
         locationText: String = "Memphis, TN",
-        visibility: GroupVisibility = .publicGroup
+        visibility: GroupVisibility = .publicGroup,
+        autoApproveJoinRequests: Bool = false
     ) -> NewGroupDetails {
         NewGroupDetails(
             name: name,
@@ -24,7 +25,8 @@ struct GroupsServicingTests {
             structuredRegion: nil,
             visibility: visibility,
             allowsMemberInvites: false,
-            allowsMemberPublishing: true
+            allowsMemberPublishing: true,
+            autoApproveJoinRequests: autoApproveJoinRequests
         )
     }
 
@@ -72,6 +74,35 @@ struct GroupsServicingTests {
 
         let memberships = try await service.fetchMemberships(forGroup: group.id)
         #expect(memberships.contains { $0.userID == "bob" && $0.role == .member && $0.status == .active })
+    }
+
+    @Test func requestToJoinGrantsMembershipImmediatelyWhenTheGroupAutoApproves() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 1
+        let group = try await service.createGroup(
+            makeDetails(autoApproveJoinRequests: true), creatorUserID: "alice", idempotencyKey: "req-1"
+        )
+
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+
+        #expect(request.state == .approved)
+        let memberships = try await service.fetchMemberships(forGroup: group.id)
+        #expect(memberships.contains { $0.userID == "bob" && $0.role == .member && $0.status == .active && $0.source == .auto })
+        // No pending join request is left behind for an admin to review.
+        let pending = try await service.fetchJoinRequests(forGroup: group.id)
+        #expect(pending.isEmpty)
+    }
+
+    @Test func requestToJoinStillRequiresApprovalWhenTheGroupDoesNotAutoApprove() async throws {
+        let service = InMemoryGroupsService()
+        service.creditsByUserID["alice"] = 1
+        let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+
+        #expect(request.state == .pending)
+        let memberships = try await service.fetchMemberships(forGroup: group.id)
+        #expect(!memberships.contains { $0.userID == "bob" })
     }
 
     @Test func nonAdminCannotDecideJoinRequest() async throws {

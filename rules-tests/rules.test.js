@@ -56,6 +56,7 @@ function groupData(overrides = {}) {
     status: 'active',
     allowsMemberInvites: false,
     allowsMemberPublishing: true,
+    autoApproveJoinRequests: false,
     ...overrides,
   };
 }
@@ -251,6 +252,33 @@ describe('memberships', () => {
     }));
     const mallory = testEnv.authenticatedContext('mallory').firestore();
     await assertFails(getDoc(doc(mallory, 'memberships/group1_alice')));
+  });
+
+  it('a user can self-create a member membership when the group auto-approves', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'active', source: 'auto', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('a user cannot self-create a membership via the auto path when the group does not auto-approve', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: false })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'active', source: 'auto', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('a user cannot self-grant admin via the auto-approve path even when the group allows it', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
+      status: 'active', source: 'auto', joinedAt: Timestamp.now(), leftAt: null,
+    }));
   });
 });
 

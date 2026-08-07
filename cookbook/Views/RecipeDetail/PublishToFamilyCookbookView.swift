@@ -113,22 +113,11 @@ struct PublishToFamilyCookbookView: View {
         statusMessage = nil
         defer { busyGroupIDs.remove(group.id) }
 
-        var coverImageURL: String?
-        if let filename = recipe.heroPhotoFilename, let imageData = PhotoStore.data(for: filename) {
-            // Best-effort: a photo upload hiccup shouldn't block publishing
-            // the recipe's text content.
-            coverImageURL = try? await photoUploadService.upload(
-                imageData: imageData,
-                groupID: group.id,
-                ownerUserID: userID,
-                sourceRecipeID: recipe.id.uuidString
-            ).absoluteString
-        }
-
-        let content = PublicationContentSnapshot.make(from: recipe, coverImageURL: coverImageURL)
-
         do {
-            _ = try await publicationsService.publish(content, sourceRecipeID: recipe.id.uuidString, to: group.id, ownerUserID: userID)
+            try await RecipePublishingCoordinator.publish(
+                recipe, to: group, ownerUserID: userID,
+                publicationsService: publicationsService, photoUploadService: photoUploadService
+            )
             publishedGroupIDs.insert(group.id)
             statusMessage = "Published to \(group.cookbookName)."
         } catch {

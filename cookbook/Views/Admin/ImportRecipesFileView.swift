@@ -21,8 +21,8 @@ struct ImportRecipesFileView: View {
     @State private var selectedCookbookID: UUID?
     @State private var isPresentingFilePicker = false
     @State private var pendingFileText: String?
-    @State private var isImporting = false
-    @State private var importResult: RecipeFileImportResult?
+    @State private var isParsing = false
+    @State private var preview: RecipeFileImportPreview?
     @State private var errorMessage: String?
     @State private var isPresentingAuthorPrompt = false
     @State private var authorPromptWasHandled = false
@@ -56,39 +56,17 @@ struct ImportRecipesFileView: View {
                         Button("Choose File") {
                             isPresentingFilePicker = true
                         }
-                        .disabled(selectedCookbookID == nil || isImporting)
+                        .disabled(selectedCookbookID == nil || isParsing)
                     } footer: {
-                        Text("A plain text file with one or more recipes — see Recipe_Import_Format.md for the format.")
+                        Text("A plain text or PDF file with one or more recipes — see Recipe_Import_Format.md for the format.")
                     }
                 }
 
-                if isImporting {
+                if isParsing {
                     Section {
                         HStack {
                             ProgressView()
-                            Text("Importing…")
-                        }
-                    }
-                }
-
-                if let importResult {
-                    Section("Results") {
-                        if let saveErrorMessage = importResult.saveErrorMessage {
-                            Text("Couldn't save: \(saveErrorMessage)")
-                                .foregroundStyle(.red)
-                            Text("Nothing from this file was imported. Try again.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("\(importResult.importedTitles.count) recipe\(importResult.importedTitles.count == 1 ? "" : "s") imported.")
-                        }
-                        if !importResult.failedChunks.isEmpty {
-                            Text("\(importResult.failedChunks.count) couldn't be imported:")
-                                .foregroundStyle(.secondary)
-                            ForEach(importResult.failedChunks, id: \.self) { snippet in
-                                Text(snippet)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Text("Reading recipes…")
                         }
                     }
                 }
@@ -110,12 +88,20 @@ struct ImportRecipesFileView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .fileImporter(isPresented: $isPresentingFilePicker, allowedContentTypes: [.plainText]) { result in
+            .fileImporter(isPresented: $isPresentingFilePicker, allowedContentTypes: [.plainText, .pdf]) { result in
                 handleFileSelection(result)
+            }
+            .sheet(isPresented: Binding(
+                get: { preview != nil },
+                set: { isPresented in if !isPresented { preview = nil } }
+            )) {
+                if let preview, let cookbook = ownedCookbooks.first(where: { $0.id == selectedCookbookID }) {
+                    ImportReviewView(preview: preview, cookbook: cookbook, ownerID: accountState.currentOwnerID)
+                }
             }
             .sheet(isPresented: $isPresentingAuthorPrompt, onDismiss: {
                 if !authorPromptWasHandled {
-                    runImport(defaultAuthorLineage: "Anonymous")
+                    runParse(defaultAuthorLineage: "Anonymous")
                 }
                 authorPromptWasHandled = false
             }) {
@@ -131,12 +117,12 @@ struct ImportRecipesFileView: View {
                                 }
                             }
                         }
-                        runImport(defaultAuthorLineage: location.map { "\(name) of \($0.formatted)" } ?? name)
+                        runParse(defaultAuthorLineage: location.map { "\(name) of \($0.formatted)" } ?? name)
                     },
                     onSaveAnonymous: {
                         authorPromptWasHandled = true
                         isPresentingAuthorPrompt = false
-                        runImport(defaultAuthorLineage: "Anonymous")
+                        runParse(defaultAuthorLineage: "Anonymous")
                     }
                 )
             }
@@ -144,7 +130,7 @@ struct ImportRecipesFileView: View {
     }
 
     private func handleFileSelection(_ result: Result<URL, Error>) {
-        importResult = nil
+        preview = nil
         errorMessage = nil
         switch result {
         case .failure(let error):
@@ -155,12 +141,12 @@ struct ImportRecipesFileView: View {
                 return
             }
             defer { url.stopAccessingSecurityScopedResource() }
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                errorMessage = "Couldn't read that file as text."
-                return
+            do {
+                pendingFileText = try RecipeFileTextExtractor.extractText(from: url)
+                resolveAuthorLineageAndImport()
+            } catch {
+                errorMessage = error.localizedDescription
             }
-            pendingFileText = text
-            resolveAuthorLineageAndImport()
         }
     }
 
@@ -173,34 +159,36 @@ struct ImportRecipesFileView: View {
             if let userID = accountState.currentUserID {
                 Task {
                     let location = try? await userProfileService.fetchLocation(userID: userID)
-                    runImport(defaultAuthorLineage: location.map { "\(displayName) of \($0.formatted)" } ?? displayName)
+                    runParse(defaultAuthorLineage: location.map { "\(displayName) of \($0.formatted)" } ?? displayName)
                 }
             } else {
-                runImport(defaultAuthorLineage: displayName)
+                runParse(defaultAuthorLineage: displayName)
             }
         } else {
             isPresentingAuthorPrompt = true
         }
     }
 
-    private func runImport(defaultAuthorLineage: String?) {
-        guard let pendingFileText, let selectedCookbookID,
-              let cookbook = ownedCookbooks.first(where: { $0.id == selectedCookbookID }) else {
-            return
-        }
-        isImporting = true
+    /// Parsing only — nothing is written to modelContext here. A
+    /// successful parse hands the drafts to ImportReviewView, which is
+    /// the only place RecipeFileImportCoordinator.commit gets called,
+    /// once the user has reviewed and approved them.
+    private func runParse(defaultAuthorLineage: String?) {
+        guard let pendingFileText else { return }
+        isParsing = true
         Task {
-            let result = await RecipeFileImportCoordinator.importRecipes(
+            let result = await RecipeFileImportCoordinator.parseRecipes(
                 from: pendingFileText,
-                into: cookbook,
-                ownerID: accountState.currentOwnerID,
                 defaultAuthorLineage: defaultAuthorLineage,
-                lineImportService: lineImportService,
-                modelContext: modelContext
+                lineImportService: lineImportService
             )
-            importResult = result
-            isImporting = false
+            isParsing = false
             self.pendingFileText = nil
+            if result.drafts.isEmpty && result.failedChunks.isEmpty {
+                errorMessage = "No recipes found in that file — make sure each recipe starts with a \"Name:\" line."
+            } else {
+                preview = result
+            }
         }
     }
 }

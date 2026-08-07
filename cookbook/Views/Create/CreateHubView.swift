@@ -16,38 +16,54 @@ import SwiftData
 
 struct CreateHubView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AccountState.self) private var accountState
     @State private var activeSheet: ActiveSheet?
 
     private enum ActiveSheet: String, Identifiable {
-        case manual, pasteText, searchOnline
+        case manual, pasteText, searchOnline, newPersonalCookbook, newFamilyCookbook
         var id: String { rawValue }
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Button {
-                    activeSheet = .manual
-                } label: {
-                    Label("Manual Recipe", systemImage: "square.and.pencil")
+                Section("Recipes") {
+                    Button {
+                        activeSheet = .manual
+                    } label: {
+                        Label("Manual Recipe", systemImage: "square.and.pencil")
+                    }
+                    Button {
+                        activeSheet = .pasteText
+                    } label: {
+                        Label("Paste Text", systemImage: "doc.on.clipboard")
+                    }
+                    Button {
+                        activeSheet = .searchOnline
+                    } label: {
+                        Label("Search Online", systemImage: "sparkle.magnifyingglass")
+                    }
+                    HStack {
+                        Label("Photo / Scan", systemImage: "camera")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("Coming soon")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Button {
-                    activeSheet = .pasteText
-                } label: {
-                    Label("Paste Text", systemImage: "doc.on.clipboard")
-                }
-                Button {
-                    activeSheet = .searchOnline
-                } label: {
-                    Label("Search Online", systemImage: "sparkle.magnifyingglass")
-                }
-                HStack {
-                    Label("Photo / Scan", systemImage: "camera")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("Coming soon")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+
+                Section("Cookbooks") {
+                    Button {
+                        activeSheet = .newPersonalCookbook
+                    } label: {
+                        Label("New Personal Cookbook", systemImage: "book.closed")
+                    }
+                    Button {
+                        activeSheet = .newFamilyCookbook
+                    } label: {
+                        Label("New Family Cookbook", systemImage: "person.3")
+                    }
                 }
             }
             .scrollContentBackground(.hidden)
@@ -71,6 +87,10 @@ struct CreateHubView: View {
                 CreateEditRecipeView(mode: .create)
             case .searchOnline:
                 DiscoverView()
+            case .newPersonalCookbook:
+                CookbookConfigurationView(mode: .create(ownerID: accountState.currentOwnerID))
+            case .newFamilyCookbook:
+                CreateFamilyCookbookView(groupsService: FirestoreGroupsService())
             }
         }
     }

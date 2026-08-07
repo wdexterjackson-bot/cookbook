@@ -44,7 +44,7 @@ struct AccountView: View {
             Form {
                 if accountState.isSignedIn {
                     Section("Account") {
-                        LabeledContent("Signed in", value: accountState.currentUserID ?? "")
+                        LabeledContent("Signed in", value: accountState.currentUserEmail ?? accountState.currentUserID ?? "")
                         TextField("Full Name", text: $fullNameDraft)
                             #if os(iOS)
                             .textInputAutocapitalization(.words)

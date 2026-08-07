@@ -50,7 +50,7 @@ struct CookingModeView: View {
             .navigationTitle(recipe.title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") { finish() }
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
@@ -106,6 +106,18 @@ struct CookingModeView: View {
             currentStepIndex: currentStepIndex,
             totalSteps: flattenedSteps.count
         )
+    }
+
+    /// "Done" only clears the saved bookmark when the user has actually
+    /// reached the last step — a genuine "I finished this recipe" signal.
+    /// Tapping Done from an earlier step is just a pause (interrupted,
+    /// switching to check something else, etc.), so the bookmark stays
+    /// and Home's Continue Cooking card can still resume it later.
+    private func finish() {
+        if !flattenedSteps.isEmpty && currentStepIndex >= flattenedSteps.count - 1 {
+            cookingSessionState.clear()
+        }
+        dismiss()
     }
 
     private var timersButtonAccessibilityLabel: String {

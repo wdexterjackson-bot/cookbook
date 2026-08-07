@@ -48,7 +48,8 @@ final class InMemoryGroupsService: GroupsServicing {
             createdAt: .now,
             status: .active,
             allowsMemberInvites: details.allowsMemberInvites,
-            allowsMemberPublishing: details.allowsMemberPublishing
+            allowsMemberPublishing: details.allowsMemberPublishing,
+            autoApproveJoinRequests: details.autoApproveJoinRequests
         )
         let founderMembership = Membership(
             id: Membership.compositeID(groupID: group.id, userID: creatorUserID),
@@ -96,12 +97,36 @@ final class InMemoryGroupsService: GroupsServicing {
     }
 
     func requestToJoin(groupID: String, requesterID: String, note: String?) async throws -> JoinRequest {
-        guard groups.contains(where: { $0.id == groupID }) else {
+        guard let group = groups.first(where: { $0.id == groupID }) else {
             throw GroupsServiceError.groupNotFound
         }
         let groupMemberships = try await fetchMemberships(forGroup: groupID)
         guard !GroupPolicy.isActiveMember(requesterID, in: groupMemberships) else {
             throw GroupsServiceError.alreadyMember
+        }
+
+        if group.autoApproveJoinRequests {
+            let membership = Membership(
+                id: Membership.compositeID(groupID: groupID, userID: requesterID),
+                groupID: groupID,
+                userID: requesterID,
+                role: .member,
+                status: .active,
+                source: .auto,
+                joinedAt: .now,
+                leftAt: nil
+            )
+            upsertMembership(membership)
+            return JoinRequest(
+                id: membership.id,
+                groupID: groupID,
+                requesterID: requesterID,
+                note: note,
+                state: .approved,
+                decidedByUserID: requesterID,
+                createdAt: .now,
+                decidedAt: .now
+            )
         }
 
         let request = JoinRequest(

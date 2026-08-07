@@ -166,6 +166,16 @@ service cloud.firestore {
           // The invitee accepting their own invitation.
           (request.auth.uid == request.resource.data.userID
             && request.resource.data.source == 'invite')
+          ||
+          // Auto-approve: the requester joins directly as a plain member
+          // when the target group has opted into instant joining (e.g. a
+          // global seed cookbook everyone's invited to) — independently
+          // re-checked against the stored group doc, never trusted from
+          // the client alone.
+          (request.auth.uid == request.resource.data.userID
+            && request.resource.data.source == 'auto'
+            && request.resource.data.role == 'member'
+            && get(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.autoApproveJoinRequests == true)
         );
 
       allow update: if isSignedIn()

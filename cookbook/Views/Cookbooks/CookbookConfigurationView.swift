@@ -40,8 +40,14 @@ struct CookbookConfigurationView: View {
     @State private var coverImageData: Data?
     @State private var removesExistingCoverImage = false
     @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var selectedCatalogTitles: Set<String>
-    @State private var customSectionTitles: [String]
+    /// One ordered list for every chapter currently included — whether it
+    /// came from a catalog toggle or the custom-name field — so the two
+    /// can be freely reordered together instead of always showing catalog
+    /// chapters first. Display/save order is exactly this array's order.
+    @State private var chapterTitles: [String]
+    /// Flips to true the moment the user actually drags to reorder (not
+    /// from adding/removing a chapter) — see Cookbook.chaptersManuallyReordered.
+    @State private var chaptersManuallyReordered: Bool
     @State private var newCustomSectionTitle = ""
     @State private var validationMessage: String?
 
@@ -52,8 +58,8 @@ struct CookbookConfigurationView: View {
             _title = State(initialValue: "My Cookbook")
             _coverColorHex = State(initialValue: Cookbook.defaultColorHex)
             _coverImageData = State(initialValue: nil)
-            _selectedCatalogTitles = State(initialValue: [])
-            _customSectionTitles = State(initialValue: [])
+            _chapterTitles = State(initialValue: [])
+            _chaptersManuallyReordered = State(initialValue: false)
 
         case .edit(let cookbook):
             _title = State(initialValue: cookbook.title)
@@ -65,9 +71,8 @@ struct CookbookConfigurationView: View {
             }
 
             let sortedSections = cookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
-            let catalogSet = Set(RecipeSectionCatalog.defaultChapterTitles)
-            _selectedCatalogTitles = State(initialValue: Set(sortedSections.map(\.title).filter(catalogSet.contains)))
-            _customSectionTitles = State(initialValue: sortedSections.map(\.title).filter { !catalogSet.contains($0) })
+            _chapterTitles = State(initialValue: sortedSections.map(\.title))
+            _chaptersManuallyReordered = State(initialValue: cookbook.chaptersManuallyReordered)
         }
     }
 
@@ -104,13 +109,18 @@ struct CookbookConfigurationView: View {
                     Text("Choose as many or as few as you'd like — recipes without a chapter still show up in one flat list.")
                 }
 
-                Section("Custom Chapters") {
-                    ForEach(customSectionTitles, id: \.self) { customTitle in
-                        Text(customTitle)
+                Section {
+                    ForEach(chapterTitles, id: \.self) { title in
+                        Text(title)
                     }
                     .onDelete { offsets in
-                        customSectionTitles.remove(atOffsets: offsets)
+                        chapterTitles.remove(atOffsets: offsets)
                     }
+                    .onMove { from, to in
+                        chapterTitles.move(fromOffsets: from, toOffset: to)
+                        chaptersManuallyReordered = true
+                    }
+                    .environment(\.editMode, .constant(.active))
 
                     HStack {
                         TextField("Other (custom chapter name)", text: $newCustomSectionTitle)
@@ -118,6 +128,10 @@ struct CookbookConfigurationView: View {
                         Button("Add", action: addCustomSection)
                             .disabled(newCustomSectionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
+                } header: {
+                    Text("Chapter Order")
+                } footer: {
+                    Text("Drag to reorder — this is the order chapters will appear in when viewing the cookbook. Swipe to remove.")
                 }
 
                 if let validationMessage {
@@ -199,12 +213,14 @@ struct CookbookConfigurationView: View {
 
     private func catalogBinding(for title: String) -> Binding<Bool> {
         Binding(
-            get: { selectedCatalogTitles.contains(title) },
+            get: { chapterTitles.contains(title) },
             set: { isSelected in
                 if isSelected {
-                    selectedCatalogTitles.insert(title)
+                    if !chapterTitles.contains(title) {
+                        chapterTitles.append(title)
+                    }
                 } else {
-                    selectedCatalogTitles.remove(title)
+                    chapterTitles.removeAll { $0 == title }
                 }
             }
         )
@@ -212,8 +228,8 @@ struct CookbookConfigurationView: View {
 
     private func addCustomSection() {
         let trimmed = newCustomSectionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !customSectionTitles.contains(trimmed) else { return }
-        customSectionTitles.append(trimmed)
+        guard !trimmed.isEmpty, !chapterTitles.contains(trimmed) else { return }
+        chapterTitles.append(trimmed)
         newCustomSectionTitle = ""
     }
 
@@ -242,6 +258,7 @@ struct CookbookConfigurationView: View {
         }
 
         cookbook.hasBeenConfigured = true
+        cookbook.chaptersManuallyReordered = chaptersManuallyReordered
         cookbook.updatedAt = .now
 
         #if os(iOS)
@@ -257,9 +274,8 @@ struct CookbookConfigurationView: View {
         }
         #endif
 
-        // Catalog chapters first (in catalog order), then custom ones in
-        // the order they were added — a documented simplification, not a
-        // full arbitrary-reorder (see CookbookConfigurationView init).
+        // Display/save order is exactly chapterTitles' order — the user's
+        // own drag-to-reorder, not a fixed catalog-then-custom order.
         //
         // Chapters that are kept reuse their existing CookbookSection
         // instance (and therefore its id) rather than being recreated —
@@ -273,23 +289,13 @@ struct CookbookConfigurationView: View {
             existingSectionsByTitle[section.title] = section
         }
 
-        var sortOrder = 0
         var sections: [CookbookSection] = []
-        var keptTitles: Set<String> = []
-        for catalogTitle in RecipeSectionCatalog.defaultChapterTitles where selectedCatalogTitles.contains(catalogTitle) {
-            let section = existingSectionsByTitle[catalogTitle] ?? CookbookSection(title: catalogTitle, sortOrder: sortOrder)
-            section.sortOrder = sortOrder
+        for (index, title) in chapterTitles.enumerated() {
+            let section = existingSectionsByTitle[title] ?? CookbookSection(title: title, sortOrder: index)
+            section.sortOrder = index
             sections.append(section)
-            keptTitles.insert(catalogTitle)
-            sortOrder += 1
         }
-        for customTitle in customSectionTitles {
-            let section = existingSectionsByTitle[customTitle] ?? CookbookSection(title: customTitle, sortOrder: sortOrder)
-            section.sortOrder = sortOrder
-            sections.append(section)
-            keptTitles.insert(customTitle)
-            sortOrder += 1
-        }
+        let keptTitles = Set(chapterTitles)
         for section in cookbook.sections where !keptTitles.contains(section.title) {
             modelContext.delete(section)
         }

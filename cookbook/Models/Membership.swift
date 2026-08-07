@@ -20,6 +20,11 @@ enum MembershipSource: String, Codable {
     case request
     case invite
     case founder
+    /// Self-granted the instant a user requests to join a group that has
+    /// FamilyGroup.autoApproveJoinRequests set — distinct from `.request`
+    /// (which always requires an admin's separate approval) so a
+    /// membership document itself records how it came to exist.
+    case auto
 }
 
 struct Membership: Codable, Identifiable, Equatable {

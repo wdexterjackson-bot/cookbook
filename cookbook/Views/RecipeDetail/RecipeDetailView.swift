@@ -48,8 +48,11 @@ struct RecipeDetailView: View {
                     }
                 }
 
-                if !recipe.notes.isEmpty {
-                    sectionHeader("Notes")
+                sectionHeader("Notes")
+                if recipe.notes.isEmpty {
+                    Text("No notes yet.")
+                        .foregroundStyle(.secondary)
+                } else {
                     Text(recipe.notes)
                 }
 
@@ -184,14 +187,23 @@ struct RecipeDetailView: View {
 
             heroImage
 
-            // Owner is always shown, never an editable field — even though
-            // in Phase 1 it's just "You" on every recipe (PRD COOK-001).
-            Label("You", systemImage: "person.crop.circle")
+            // Owner/credit line, never an editable field here. "Inspired
+            // by" only shows when the recipe actually has a stamped
+            // authorLineage (imported "By:" line, or the creator's own
+            // name/location if they set one) — otherwise it's just "You."
+            Label(lineageLabelText, systemImage: "person.crop.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("Owner: You")
+                .accessibilityLabel("Credit: \(lineageLabelText)")
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var lineageLabelText: String {
+        if let lineage = recipe.authorLineage?.trimmingCharacters(in: .whitespacesAndNewlines), !lineage.isEmpty {
+            return "Inspired by \(lineage)"
+        }
+        return "You"
     }
 
     @ViewBuilder

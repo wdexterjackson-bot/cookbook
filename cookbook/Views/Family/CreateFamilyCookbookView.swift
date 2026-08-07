@@ -23,6 +23,16 @@ struct CreateFamilyCookbookView: View {
     /// Private by default — a Family Cookbook is invite/request-only
     /// unless the creator explicitly opts into public search.
     @State private var isPublic = false
+    /// On by default — matches the behavior every Family Cookbook had
+    /// before this toggle existed, where any member could publish. Off
+    /// is for a curated, read-only cookbook (e.g. a seed cookbook only
+    /// the creator adds to).
+    @State private var allowsMemberPublishing = true
+    /// Off by default — joining still goes through the normal
+    /// request/approve flow. On skips approval entirely, meant for a
+    /// small number of intentionally open cookbooks (e.g. one global
+    /// cookbook everyone's invited to), not typical family use.
+    @State private var autoApproveJoinRequests = false
     @State private var isBusy = false
     @State private var errorMessage: String?
     @State private var idempotencyKey = UUID().uuidString
@@ -40,7 +50,19 @@ struct CreateFamilyCookbookView: View {
                 Section {
                     Toggle("Publicly searchable", isOn: $isPublic)
                 } footer: {
-                    Text("Private cookbooks are only found by invitation or a join request you approve. This can be changed later.")
+                    Text("Private cookbooks are only found by invitation or a join request you approve.")
+                }
+
+                Section {
+                    Toggle("Anyone can join instantly", isOn: $autoApproveJoinRequests)
+                } footer: {
+                    Text("Off means you approve each join request yourself, like a normal Family Cookbook. On skips that — meant for a cookbook you want genuinely open to everyone, not a typical family group.")
+                }
+
+                Section {
+                    Toggle("Members can publish recipes here", isOn: $allowsMemberPublishing)
+                } footer: {
+                    Text("Off makes this a read-only cookbook — only you can add recipes to it, even after others join.")
                 }
 
                 if let errorMessage {
@@ -87,7 +109,8 @@ struct CreateFamilyCookbookView: View {
             structuredRegion: nil,
             visibility: isPublic ? .publicGroup : .privateGroup,
             allowsMemberInvites: false,
-            allowsMemberPublishing: true
+            allowsMemberPublishing: allowsMemberPublishing,
+            autoApproveJoinRequests: autoApproveJoinRequests
         )
 
         do {

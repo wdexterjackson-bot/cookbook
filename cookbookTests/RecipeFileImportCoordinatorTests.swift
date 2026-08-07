@@ -66,14 +66,9 @@ struct RecipeFileImportCoordinatorTests {
         #expect(chunks.isEmpty)
     }
 
-    // MARK: - importRecipes
+    // MARK: - parseRecipes (stage 1 — read-only)
 
-    @Test func importsMultipleRecipesIntoTheChosenCookbook() async throws {
-        let context = try makeInMemoryContext()
-        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
-        context.insert(cookbook)
-        try context.save()
-
+    @Test func parsesMultipleRecipesIntoDraftsWithoutTouchingModelContext() async throws {
         let text = "Name: Cornbread\nchunk one\n\nName: Pumpkin Pie\nchunk two"
         let service = FakeRecipeLineImportService()
         service.stubbedResultsByInput["Name: Cornbread\nchunk one"] = ParsedRecipeLines(
@@ -83,23 +78,79 @@ struct RecipeFileImportCoordinatorTests {
             title: "Pumpkin Pie", ingredients: [], steps: ["Bake."]
         )
 
-        let result = await RecipeFileImportCoordinator.importRecipes(
-            from: text,
-            into: cookbook,
-            ownerID: "alice",
-            defaultAuthorLineage: "Anonymous",
-            lineImportService: service,
-            modelContext: context
+        let preview = await RecipeFileImportCoordinator.parseRecipes(
+            from: text, defaultAuthorLineage: "Anonymous", lineImportService: service
         )
 
-        #expect(result.importedTitles == ["Cornbread", "Pumpkin Pie"])
-        #expect(result.failedChunks.isEmpty)
+        #expect(preview.drafts.map(\.title) == ["Cornbread", "Pumpkin Pie"])
+        #expect(preview.failedChunks.isEmpty)
+    }
+
+    @Test func aChunksOwnByLineOverridesTheBatchDefaultAuthorLineage() async throws {
+        let service = FakeRecipeLineImportService()
+        service.stubbedResult = ParsedRecipeLines(
+            title: "Grandma's Pie", ingredients: [], steps: [], authorLineageText: "Grandma Jackson of Memphis, TN"
+        )
+
+        let preview = await RecipeFileImportCoordinator.parseRecipes(
+            from: "Name: Grandma's Pie", defaultAuthorLineage: "Anonymous", lineImportService: service
+        )
+
+        #expect(preview.drafts.first?.authorLineage == "Grandma Jackson of Memphis, TN")
+    }
+
+    @Test func fallsBackToTheBatchDefaultAuthorLineageWhenAChunkHasNoByLine() async throws {
+        let service = FakeRecipeLineImportService()
+        service.stubbedResult = ParsedRecipeLines(title: "Cornbread", ingredients: [], steps: [])
+
+        let preview = await RecipeFileImportCoordinator.parseRecipes(
+            from: "Name: Cornbread", defaultAuthorLineage: "Anonymous", lineImportService: service
+        )
+
+        #expect(preview.drafts.first?.authorLineage == "Anonymous")
+    }
+
+    @Test func oneFailingChunkDoesNotBlockTheRestOfTheBatch() async throws {
+        let text = "Name: Bad Recipe\nbroken\n\nName: Good Recipe\nfine"
+        let service = FakeRecipeLineImportService()
+        service.stubbedErrorsByInput["Name: Bad Recipe\nbroken"] = RecipeLineImportError.parsingFailed
+        service.stubbedResultsByInput["Name: Good Recipe\nfine"] = ParsedRecipeLines(title: "Good Recipe", ingredients: [], steps: [])
+
+        let preview = await RecipeFileImportCoordinator.parseRecipes(
+            from: text, defaultAuthorLineage: nil, lineImportService: service
+        )
+
+        #expect(preview.drafts.map(\.title) == ["Good Recipe"])
+        #expect(preview.failedChunks.count == 1)
+        #expect(preview.failedChunks[0].hasPrefix("Name: Bad Recipe"))
+    }
+
+    // MARK: - commit (stage 2 — only runs once the user approves)
+
+    @Test func commitSavesEveryDraftIntoTheChosenCookbook() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
+        context.insert(cookbook)
+        try context.save()
+
+        let drafts = [
+            DraftRecipe(title: "Cornbread", chapterName: nil, notes: "", authorLineage: nil, ingredients: [], steps: ["Bake."]),
+            DraftRecipe(title: "Pumpkin Pie", chapterName: nil, notes: "", authorLineage: nil, ingredients: [], steps: ["Bake."]),
+        ]
+
+        let result = RecipeFileImportCoordinator.commit(drafts, into: cookbook, ownerID: "alice", modelContext: context)
+
+        guard case .success(let count) = result else {
+            Issue.record("Expected commit to succeed")
+            return
+        }
+        #expect(count == 2)
         let recipes = try context.fetch(FetchDescriptor<Recipe>())
         #expect(recipes.count == 2)
         #expect(recipes.allSatisfy { $0.cookbookID == cookbook.id })
     }
 
-    @Test func matchesChapterByNameCaseInsensitively() async throws {
+    @Test func commitMatchesChapterByNameCaseInsensitively() throws {
         let context = try makeInMemoryContext()
         let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
         let dessertsChapter = CookbookSection(title: "Desserts", sortOrder: 0)
@@ -107,95 +158,57 @@ struct RecipeFileImportCoordinatorTests {
         context.insert(cookbook)
         try context.save()
 
-        let text = "Name: Pumpkin Pie"
-        let service = FakeRecipeLineImportService()
-        service.stubbedResult = ParsedRecipeLines(title: "Pumpkin Pie", chapterName: "desserts", ingredients: [], steps: [])
-
-        _ = await RecipeFileImportCoordinator.importRecipes(
-            from: text, into: cookbook, ownerID: "alice", defaultAuthorLineage: nil,
-            lineImportService: service, modelContext: context
-        )
+        let draft = DraftRecipe(title: "Pumpkin Pie", chapterName: "desserts", notes: "", authorLineage: nil, ingredients: [], steps: [])
+        _ = RecipeFileImportCoordinator.commit([draft], into: cookbook, ownerID: "alice", modelContext: context)
 
         let recipe = try #require(try context.fetch(FetchDescriptor<Recipe>()).first)
         #expect(recipe.sectionID == dessertsChapter.id)
+        #expect(cookbook.sections.count == 1)
     }
 
-    @Test func leavesRecipeUnfiledWhenChapterNameDoesNotMatchAnExistingChapter() async throws {
+    @Test func commitCreatesAMissingChapterInsteadOfLeavingTheRecipeUnfiled() throws {
         let context = try makeInMemoryContext()
         let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
         context.insert(cookbook)
         try context.save()
 
-        let service = FakeRecipeLineImportService()
-        service.stubbedResult = ParsedRecipeLines(title: "Pumpkin Pie", chapterName: "Nonexistent Chapter", ingredients: [], steps: [])
-
-        _ = await RecipeFileImportCoordinator.importRecipes(
-            from: "Name: Pumpkin Pie", into: cookbook, ownerID: "alice", defaultAuthorLineage: nil,
-            lineImportService: service, modelContext: context
-        )
+        let draft = DraftRecipe(title: "Pumpkin Pie", chapterName: "Desserts", notes: "", authorLineage: nil, ingredients: [], steps: [])
+        _ = RecipeFileImportCoordinator.commit([draft], into: cookbook, ownerID: "alice", modelContext: context)
 
         let recipe = try #require(try context.fetch(FetchDescriptor<Recipe>()).first)
-        #expect(recipe.sectionID == nil)
+        #expect(cookbook.sections.map(\.title) == ["Desserts"])
+        #expect(recipe.sectionID == cookbook.sections.first?.id)
     }
 
-    @Test func aChunksOwnByLineOverridesTheBatchDefaultAuthorLineage() async throws {
+    @Test func commitReusesOneNewChapterForMultipleDraftsInTheSameBatch() throws {
         let context = try makeInMemoryContext()
         let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
         context.insert(cookbook)
         try context.save()
 
-        let service = FakeRecipeLineImportService()
-        service.stubbedResult = ParsedRecipeLines(
-            title: "Grandma's Pie", ingredients: [], steps: [], authorLineageText: "Grandma Jackson of Memphis, TN"
-        )
+        let drafts = [
+            DraftRecipe(title: "Pumpkin Pie", chapterName: "Desserts", notes: "", authorLineage: nil, ingredients: [], steps: []),
+            DraftRecipe(title: "Apple Crumble", chapterName: "desserts", notes: "", authorLineage: nil, ingredients: [], steps: []),
+        ]
+        _ = RecipeFileImportCoordinator.commit(drafts, into: cookbook, ownerID: "alice", modelContext: context)
 
-        _ = await RecipeFileImportCoordinator.importRecipes(
-            from: "Name: Grandma's Pie", into: cookbook, ownerID: "alice", defaultAuthorLineage: "Anonymous",
-            lineImportService: service, modelContext: context
-        )
-
-        let recipe = try #require(try context.fetch(FetchDescriptor<Recipe>()).first)
-        #expect(recipe.authorLineage == "Grandma Jackson of Memphis, TN")
-    }
-
-    @Test func fallsBackToTheBatchDefaultAuthorLineageWhenAChunkHasNoByLine() async throws {
-        let context = try makeInMemoryContext()
-        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
-        context.insert(cookbook)
-        try context.save()
-
-        let service = FakeRecipeLineImportService()
-        service.stubbedResult = ParsedRecipeLines(title: "Cornbread", ingredients: [], steps: [])
-
-        _ = await RecipeFileImportCoordinator.importRecipes(
-            from: "Name: Cornbread", into: cookbook, ownerID: "alice", defaultAuthorLineage: "Anonymous",
-            lineImportService: service, modelContext: context
-        )
-
-        let recipe = try #require(try context.fetch(FetchDescriptor<Recipe>()).first)
-        #expect(recipe.authorLineage == "Anonymous")
-    }
-
-    @Test func oneFailingChunkDoesNotBlockTheRestOfTheBatch() async throws {
-        let context = try makeInMemoryContext()
-        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
-        context.insert(cookbook)
-        try context.save()
-
-        let text = "Name: Bad Recipe\nbroken\n\nName: Good Recipe\nfine"
-        let service = FakeRecipeLineImportService()
-        service.stubbedErrorsByInput["Name: Bad Recipe\nbroken"] = RecipeLineImportError.parsingFailed
-        service.stubbedResultsByInput["Name: Good Recipe\nfine"] = ParsedRecipeLines(title: "Good Recipe", ingredients: [], steps: [])
-
-        let result = await RecipeFileImportCoordinator.importRecipes(
-            from: text, into: cookbook, ownerID: "alice", defaultAuthorLineage: nil,
-            lineImportService: service, modelContext: context
-        )
-
-        #expect(result.importedTitles == ["Good Recipe"])
-        #expect(result.failedChunks.count == 1)
-        #expect(result.failedChunks[0].hasPrefix("Name: Bad Recipe"))
+        #expect(cookbook.sections.count == 1)
         let recipes = try context.fetch(FetchDescriptor<Recipe>())
-        #expect(recipes.count == 1)
+        #expect(recipes.allSatisfy { $0.sectionID == cookbook.sections.first?.id })
+    }
+
+    @Test func commitPopulatesAuthorLineageFromTheDraft() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
+        context.insert(cookbook)
+        try context.save()
+
+        let draft = DraftRecipe(
+            title: "Mexican Dip", chapterName: nil, notes: "", authorLineage: "Cheryl Fox of Lithonia, GA", ingredients: [], steps: []
+        )
+        _ = RecipeFileImportCoordinator.commit([draft], into: cookbook, ownerID: "alice", modelContext: context)
+
+        let recipe = try #require(try context.fetch(FetchDescriptor<Recipe>()).first)
+        #expect(recipe.authorLineage == "Cheryl Fox of Lithonia, GA")
     }
 }

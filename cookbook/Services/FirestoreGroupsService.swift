@@ -110,12 +110,41 @@ final class FirestoreGroupsService: GroupsServicing {
     }
 
     func requestToJoin(groupID: String, requesterID: String, note: String?) async throws -> JoinRequest {
-        guard try await fetchGroup(id: groupID) != nil else {
+        guard let group = try await fetchGroup(id: groupID) else {
             throw GroupsServiceError.groupNotFound
         }
         let existingMemberships = try await fetchMemberships(forGroup: groupID)
         guard !GroupPolicy.isActiveMember(requesterID, in: existingMemberships) else {
             throw GroupsServiceError.alreadyMember
+        }
+
+        if group.autoApproveJoinRequests {
+            let membership = Membership(
+                id: Membership.compositeID(groupID: groupID, userID: requesterID),
+                groupID: groupID,
+                userID: requesterID,
+                role: .member,
+                status: .active,
+                source: .auto,
+                joinedAt: .now,
+                leftAt: nil
+            )
+            try db.collection("memberships").document(membership.id).setData(from: membership)
+            // No JoinRequest document is written for this path — there's
+            // nothing pending to record, and firestore.rules' joinRequests
+            // create rule requires state == 'pending' anyway. The caller
+            // still gets a JoinRequest value back so it doesn't need a
+            // separate return type for this case.
+            return JoinRequest(
+                id: membership.id,
+                groupID: groupID,
+                requesterID: requesterID,
+                note: note,
+                state: .approved,
+                decidedByUserID: requesterID,
+                createdAt: .now,
+                decidedAt: .now
+            )
         }
 
         let request = JoinRequest(
@@ -309,6 +338,7 @@ final class FirestoreGroupsService: GroupsServicing {
             "status": GroupStatus.active.rawValue,
             "allowsMemberInvites": details.allowsMemberInvites,
             "allowsMemberPublishing": details.allowsMemberPublishing,
+            "autoApproveJoinRequests": details.autoApproveJoinRequests,
         ]
     }
 

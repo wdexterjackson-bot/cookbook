@@ -16,6 +16,7 @@ import SwiftData
 struct AdministratorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingImport = false
+    @State private var isPresentingPublishCookbook = false
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,11 @@ struct AdministratorView: View {
                     isPresentingImport = true
                 } label: {
                     Label("Import Recipes from File", systemImage: "square.and.arrow.down.on.square")
+                }
+                Button {
+                    isPresentingPublishCookbook = true
+                } label: {
+                    Label("Publish a Cookbook to a Family Cookbook", systemImage: "square.and.arrow.up.on.square")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -40,6 +46,9 @@ struct AdministratorView: View {
         }
         .sheet(isPresented: $isPresentingImport) {
             ImportRecipesFileView()
+        }
+        .sheet(isPresented: $isPresentingPublishCookbook) {
+            PublishCookbookToFamilyCookbookView()
         }
     }
 }

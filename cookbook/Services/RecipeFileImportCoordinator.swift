@@ -9,20 +9,32 @@
 //  splits a file into per-recipe chunks and drives the existing call once
 //  per chunk. See Recipe_Import_Format.md for the file format this expects.
 //
+//  Deliberately two stages, not one: `parseRecipes` only ever reads —
+//  nothing touches modelContext — so the caller can show the user a
+//  review screen and let them approve or discard the whole batch before
+//  anything is written. `commit` is the only function that persists, and
+//  only runs once the user has approved.
+//
 
 import Foundation
 import SwiftData
 
-struct RecipeFileImportResult {
-    var importedTitles: [String] = []
+struct DraftRecipe: Identifiable {
+    let id = UUID()
+    var title: String
+    var chapterName: String?
+    var notes: String
+    var authorLineage: String?
+    var ingredients: [ParsedIngredientLine]
+    var steps: [String]
+}
+
+struct RecipeFileImportPreview {
+    var drafts: [DraftRecipe] = []
     /// A short snippet (first line) of whatever chunk failed to parse, so
-    /// the results screen can tell the user what to fix and re-import,
+    /// the review screen can tell the user what to fix and re-import,
     /// rather than the whole batch aborting on one bad block.
     var failedChunks: [String] = []
-    /// Set if the final SwiftData save itself threw — in that case nothing
-    /// in `importedTitles` actually persisted (the save is all-or-nothing),
-    /// so the results screen must not report those as successes.
-    var saveErrorMessage: String?
 }
 
 enum RecipeFileImportCoordinator {
@@ -47,54 +59,84 @@ enum RecipeFileImportCoordinator {
             .filter { !$0.isEmpty }
     }
 
-    static func importRecipes(
+    /// Stage 1 — parse only. Read-only: no Cookbook, no ModelContext,
+    /// nothing persisted. `defaultAuthorLineage` is resolved once for the
+    /// whole file by the caller (before parsing starts); a chunk's own
+    /// "By:" line still overrides it per-recipe.
+    static func parseRecipes(
         from text: String,
-        into cookbook: Cookbook,
-        ownerID: String,
         defaultAuthorLineage: String?,
-        lineImportService: RecipeLineImportServicing,
-        modelContext: ModelContext
-    ) async -> RecipeFileImportResult {
-        var result = RecipeFileImportResult()
+        lineImportService: RecipeLineImportServicing
+    ) async -> RecipeFileImportPreview {
+        var preview = RecipeFileImportPreview()
 
         for chunk in splitIntoRecipeChunks(text) {
             do {
                 let parsed = try await lineImportService.parseLines(from: chunk)
                 guard let title = parsed.title, !title.isEmpty else {
-                    result.failedChunks.append(String(chunk.prefix(60)))
+                    preview.failedChunks.append(String(chunk.prefix(60)))
                     continue
                 }
-
-                let recipe = Recipe(ownerID: ownerID, title: title, sourceType: .manual)
-                recipe.cookbookID = cookbook.id
-                recipe.sectionID = matchingChapter(named: parsed.chapterName, in: cookbook)?.id
-                recipe.notes = parsed.notes ?? ""
-                recipe.authorLineage = parsed.authorLineageText ?? defaultAuthorLineage
-                recipe.ingredientSections = buildIngredientSection(from: parsed.ingredients).map { [$0] } ?? []
-                recipe.stepSections = buildStepSection(from: parsed.steps).map { [$0] } ?? []
-                modelContext.insert(recipe)
-
-                result.importedTitles.append(title)
+                preview.drafts.append(DraftRecipe(
+                    title: title,
+                    chapterName: parsed.chapterName,
+                    notes: parsed.notes ?? "",
+                    authorLineage: parsed.authorLineageText ?? defaultAuthorLineage,
+                    ingredients: parsed.ingredients,
+                    steps: parsed.steps
+                ))
             } catch {
-                result.failedChunks.append(String(chunk.prefix(60)))
+                preview.failedChunks.append(String(chunk.prefix(60)))
             }
+        }
+
+        return preview
+    }
+
+    /// Stage 2 — only called once the user has reviewed and approved the
+    /// preview. Creates real Recipe (and, where needed, CookbookSection)
+    /// SwiftData objects and saves once. A chapter name with no
+    /// case-insensitive match on the target cookbook is created rather
+    /// than left unfiled — recipes sharing a new chapter name within the
+    /// same batch reuse the one section instead of creating duplicates.
+    static func commit(
+        _ drafts: [DraftRecipe],
+        into cookbook: Cookbook,
+        ownerID: String,
+        modelContext: ModelContext
+    ) -> Result<Int, Error> {
+        for draft in drafts {
+            let recipe = Recipe(ownerID: ownerID, title: draft.title, sourceType: .manual)
+            recipe.cookbookID = cookbook.id
+            recipe.sectionID = resolveChapter(named: draft.chapterName, in: cookbook)?.id
+            recipe.notes = draft.notes
+            recipe.authorLineage = draft.authorLineage
+            recipe.ingredientSections = buildIngredientSection(from: draft.ingredients).map { [$0] } ?? []
+            recipe.stepSections = buildStepSection(from: draft.steps).map { [$0] } ?? []
+            modelContext.insert(recipe)
         }
 
         do {
             try modelContext.save()
+            return .success(drafts.count)
         } catch {
-            result.saveErrorMessage = error.localizedDescription
-            result.importedTitles = []
+            return .failure(error)
         }
-        return result
     }
 
     /// Case-insensitive match against the target cookbook's existing
-    /// chapters — never creates a new one, same "leave it unfiled rather
-    /// than guess" rule as single-recipe import's chapter matching.
-    private static func matchingChapter(named chapterName: String?, in cookbook: Cookbook) -> CookbookSection? {
+    /// chapters; creates a new one (appended to `cookbook.sections`, same
+    /// pattern CookbookConfigurationView uses) when nothing matches.
+    private static func resolveChapter(named chapterName: String?, in cookbook: Cookbook) -> CookbookSection? {
         guard let chapterName else { return nil }
-        return cookbook.sections.first { $0.title.caseInsensitiveCompare(chapterName) == .orderedSame }
+        let trimmed = chapterName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let existing = cookbook.sections.first(where: { $0.title.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return existing
+        }
+        let newSection = CookbookSection(title: trimmed, sortOrder: cookbook.sections.count)
+        cookbook.sections.append(newSection)
+        return newSection
     }
 
     private static func buildIngredientSection(from parsedIngredients: [ParsedIngredientLine]) -> IngredientSection? {
@@ -102,7 +144,7 @@ enum RecipeFileImportCoordinator {
         let section = IngredientSection(heading: nil, sortOrder: 0)
         section.ingredients = parsedIngredients.enumerated().map { index, parsed in
             Ingredient(
-                displayText: composeDisplayText(name: parsed.name, quantity: parsed.quantity, unit: parsed.unit),
+                displayText: displayText(for: parsed),
                 name: parsed.name,
                 quantityValue: parsed.quantity,
                 unit: parsed.unit,
@@ -121,17 +163,19 @@ enum RecipeFileImportCoordinator {
         return section
     }
 
-    private static func composeDisplayText(name: String, quantity: Double?, unit: String?) -> String {
+    /// Also used by the review screen so the preview shows ingredients
+    /// formatted exactly as they'll be saved.
+    static func displayText(for ingredient: ParsedIngredientLine) -> String {
         var parts: [String] = []
-        if let quantity {
+        if let quantity = ingredient.quantity {
             parts.append(quantity.formatted(.number.precision(.fractionLength(0...2))))
         }
-        if let unit, !unit.isEmpty {
+        if let unit = ingredient.unit, !unit.isEmpty {
             parts.append(unit)
         }
-        if !name.isEmpty {
-            parts.append(name)
+        if !ingredient.name.isEmpty {
+            parts.append(ingredient.name)
         }
-        return parts.isEmpty ? name : parts.joined(separator: " ")
+        return parts.isEmpty ? ingredient.name : parts.joined(separator: " ")
     }
 }

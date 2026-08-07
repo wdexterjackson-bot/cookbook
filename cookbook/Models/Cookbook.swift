@@ -36,6 +36,22 @@ final class Cookbook {
     /// welcome-sheet trigger (4E) checks.
     var hasBeenConfigured: Bool
 
+    /// False until the user actually drags to reorder chapters in
+    /// CookbookConfigurationView. While false, RecipeListView sorts
+    /// chapters by recipe count (highest first) instead of
+    /// CookbookSection.sortOrder — once true, sortOrder is respected
+    /// exactly as the user arranged it, permanently.
+    ///
+    /// The inline `= false` here (not just in init()) is load-bearing:
+    /// SwiftData's automatic lightweight migration needs a literal
+    /// default on the property declaration itself to backfill this
+    /// value on every Cookbook row that existed before this field did —
+    /// without it, opening an existing on-disk store throws ("missing
+    /// attribute values on mandatory destination attribute") instead of
+    /// migrating, confirmed by actually hitting that crash against this
+    /// project's own real, already-populated Simulator store.
+    var chaptersManuallyReordered: Bool = false
+
     @Relationship(deleteRule: .cascade, inverse: nil)
     var sections: [CookbookSection]
 
@@ -56,6 +72,7 @@ final class Cookbook {
         self.createdAt = .now
         self.updatedAt = .now
         self.hasBeenConfigured = false
+        self.chaptersManuallyReordered = false
         self.sections = []
     }
 }

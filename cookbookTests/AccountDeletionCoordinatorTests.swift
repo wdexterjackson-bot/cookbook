@@ -30,7 +30,8 @@ struct AccountDeletionCoordinatorTests {
             structuredRegion: nil,
             visibility: .publicGroup,
             allowsMemberInvites: false,
-            allowsMemberPublishing: true
+            allowsMemberPublishing: true,
+            autoApproveJoinRequests: false
         )
     }
 

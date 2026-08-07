@@ -1,6 +1,6 @@
 # Recipe bulk-import file format
 
-Used by the Administrator screen's **Import Recipes from File** action (Profile → Administrator → Import Recipes from File) to load multiple recipes from a single plain-text (`.txt`) file into a personal cookbook you choose.
+Used by the Administrator screen's **Import Recipes from File** action (Profile → Administrator → Import Recipes from File) to load multiple recipes from a single plain-text (`.txt`) or PDF (`.pdf`) file into a personal cookbook you choose. For a PDF, the text is extracted automatically — everything below applies the same way once that's done. A PDF that's a scan of a printed page (no real, selectable text) can't be read this way.
 
 Each recipe is parsed by the same on-device AI used for single-recipe paste-import, so the ingredient and step lines don't need to follow a rigid format — write them the way you normally would. Only a few labeled lines are load-bearing.
 
@@ -12,7 +12,7 @@ Each recipe is parsed by the same on-device AI used for single-recipe paste-impo
 
 ## Optional labeled lines
 
-- **`Section:`** — which chapter of the target cookbook this recipe belongs to (e.g. `Section: Desserts`). Matched by name, case-insensitively, against the chapters already configured on the cookbook you're importing into. If it doesn't match an existing chapter, the recipe is still imported — just left unfiled. A new chapter is never created automatically.
+- **`Section:`** — which chapter of the target cookbook this recipe belongs to (e.g. `Section: Desserts`). Matched by name, case-insensitively, against the chapters already configured on the cookbook you're importing into. If it doesn't match an existing chapter, a new chapter with that name is created for you — you'll see it flagged as "(new chapter)" on the review screen before anything is saved. Multiple recipes in the same file that name the same new chapter all land in that one chapter, not a separate one each.
 - **`By:`** — who this recipe is credited to. Either just a name (`By: Jane Doe`) or a name with a location (`By: Jane Doe of Baltimore, MD`, or `By: Jane Doe of Toronto, Canada` outside the US). This is preserved exactly as written and becomes that recipe's permanent author credit — it's never changed again, even if you later import the same recipe again or edit it.
 
   If a recipe has no `By:` line, it's credited to whoever is doing the import instead (your own name and location, if you've set them in Settings — otherwise you'll be asked once, before the whole file starts importing, whether to add your name or import everything as Anonymous).
@@ -21,6 +21,8 @@ Each recipe is parsed by the same on-device AI used for single-recipe paste-impo
 ## Ingredients and steps
 
 Everything else in a recipe's block — the lines that aren't `Name:`, `Section:`, `By:`, or `Notes:` — is classified automatically as either an ingredient or an instruction step, in the order it appears. Quantities and units are split out from ingredient lines where possible (e.g. "2 cups flour" → quantity 2, unit "cup", ingredient "flour"); a line like "salt to taste" that doesn't have a clear quantity is kept as-is.
+
+A bare `Ingredients` or `Directions` line (no colon, just the word on its own line — common in recipe-box exports) is recognized and dropped rather than imported as a bogus ingredient or step. You don't need these lines, but they won't cause a problem if your source already has them.
 
 ## Example — two recipes in one file
 
@@ -58,4 +60,13 @@ In this example, the second recipe's "Feeds 6-8. Freezes well for up to a month.
 
 ## What happens if a recipe can't be parsed
 
-If one recipe block in the file can't be understood (for example, `Name:` is present but nothing else about it is clear), it's skipped and the rest of the file still imports normally. The results screen after import lists anything that was skipped so you can fix and re-import just those.
+If one recipe block in the file can't be understood (for example, `Name:` is present but nothing else about it is clear), it's skipped and the rest of the file still parses normally — it's listed on the review screen so you know what to fix and re-import.
+
+## Review before anything is saved
+
+Once the whole file is parsed, nothing has been saved yet. A review screen shows every recipe that was found — title, chapter (existing or new), author credit, ingredients, steps, and notes — so you can check it against the source file. From there:
+
+- **Approve & Save** writes everything to your cookbook in one step.
+- **Abort** discards the whole batch. Since nothing was saved during parsing, this is a true no-op — nothing changes.
+
+There's no way to approve part of a file and reject the rest — it's all or nothing per import. If something looks wrong, abort, fix the source file, and re-import.

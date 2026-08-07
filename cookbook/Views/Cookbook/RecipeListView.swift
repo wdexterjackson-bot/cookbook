@@ -17,6 +17,10 @@ struct RecipeListView: View {
     @State private var isPresentingAccount = false
     @State private var isPresentingCookbookSwitcher = false
     @State private var criteria = RecipeFilterCriteria()
+    /// Empty by default — every chapter starts collapsed. Keyed by title
+    /// rather than section id since "Unfiled" (a synthetic group with no
+    /// real CookbookSection) needs to participate the same way.
+    @State private var expandedChapterTitles: Set<String> = []
 
     private var activeCookbook: Cookbook? {
         allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
@@ -39,16 +43,47 @@ struct RecipeListView: View {
     /// in chapter order, with a trailing "Unfiled" group for anything with
     /// no (or a since-removed) section. A cookbook with zero configured
     /// chapters falls back to one untitled group — today's flat list.
+    ///
+    /// While just browsing (no search text, no filters), every configured
+    /// chapter shows even with zero recipes — chapters are chosen
+    /// deliberately at cookbook creation, so an empty one should still be
+    /// visible as a place to add to, not disappear until it has content.
+    /// An active search still hides chapters with no matches, since
+    /// showing every empty chapter there would bury the actual results.
+    ///
+    /// Chapter order: until the user has actually dragged to reorder
+    /// chapters in CookbookConfigurationView (Cookbook.chaptersManuallyReordered),
+    /// chapters default-sort by recipe count, highest first, recomputed
+    /// live as recipes are added — not the fixed catalog/creation order.
+    /// Once the user reorders once, that explicit order (CookbookSection.sortOrder)
+    /// is respected from then on and recipe counts no longer move things
+    /// around on them.
     private var groupedBySection: [(title: String?, recipes: [Recipe])] {
         guard let activeCookbook, !activeCookbook.sections.isEmpty else {
             return [(nil, filteredRecipes)]
         }
+        let isBrowsing = criteria.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !criteria.hasActiveFilters
 
         var groups: [(title: String?, recipes: [Recipe])] = []
-        let sortedSections = activeCookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
+        let sortedSections: [CookbookSection]
+        if activeCookbook.chaptersManuallyReordered {
+            sortedSections = activeCookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
+        } else {
+            var countBySectionID: [UUID: Int] = [:]
+            for recipe in ownedRecipes {
+                guard let sectionID = recipe.sectionID else { continue }
+                countBySectionID[sectionID, default: 0] += 1
+            }
+            sortedSections = activeCookbook.sections.sorted { lhs, rhs in
+                let lhsCount = countBySectionID[lhs.id] ?? 0
+                let rhsCount = countBySectionID[rhs.id] ?? 0
+                if lhsCount != rhsCount { return lhsCount > rhsCount }
+                return lhs.sortOrder < rhs.sortOrder
+            }
+        }
         for section in sortedSections {
             let recipesInSection = filteredRecipes.filter { $0.sectionID == section.id }
-            if !recipesInSection.isEmpty {
+            if !recipesInSection.isEmpty || isBrowsing {
                 groups.append((section.title, recipesInSection))
             }
         }
@@ -97,26 +132,40 @@ struct RecipeListView: View {
                                 .listRowInsets(EdgeInsets())
                             }
                             ForEach(Array(groupedBySection.enumerated()), id: \.offset) { _, group in
-                                Section {
-                                    ForEach(group.recipes) { recipe in
-                                        NavigationLink {
-                                            RecipeDetailView(recipe: recipe)
+                                if let title = group.title {
+                                    // A cookbook with configured chapters shows
+                                    // each as a collapsed heading by default —
+                                    // tap to expand and see its recipes,
+                                    // rather than one long scroll of every
+                                    // chapter's recipes at once.
+                                    Section {
+                                        DisclosureGroup(isExpanded: isExpandedBinding(for: title)) {
+                                            recipeRows(group.recipes)
                                         } label: {
-                                            RecipeRow(recipe: recipe)
-                                        }
-                                        .swipeActions {
-                                            Button("Delete", role: .destructive) {
-                                                deleteRecipe(recipe)
+                                            HStack {
+                                                Text(title)
+                                                Spacer()
+                                                Text("\(group.recipes.count)")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
                                             }
                                         }
                                     }
-                                } header: {
-                                    if let title = group.title {
-                                        Text(title)
+                                } else {
+                                    // No chapters configured — today's flat
+                                    // list, unchanged.
+                                    Section {
+                                        recipeRows(group.recipes)
                                     }
                                 }
                             }
                         }
+                        // Chapters are shown as separate List Sections (so
+                        // each gets its own DisclosureGroup), which by
+                        // default puts a noticeable gap between them —
+                        // cut down to a fraction of that so the chapter
+                        // list itself reads as compact, not spaced out.
+                        .listSectionSpacing(2)
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -260,9 +309,41 @@ struct RecipeListView: View {
         let store = SwiftDataRecipeStore(context: modelContext)
         try? store.delete(recipe)
     }
+
+    private func isExpandedBinding(for title: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedChapterTitles.contains(title) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedChapterTitles.insert(title)
+                } else {
+                    expandedChapterTitles.remove(title)
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func recipeRows(_ recipes: [Recipe]) -> some View {
+        ForEach(recipes) { recipe in
+            NavigationLink {
+                RecipeDetailView(recipe: recipe)
+            } label: {
+                RecipeRow(recipe: recipe)
+            }
+            .swipeActions {
+                Button("Delete", role: .destructive) {
+                    deleteRecipe(recipe)
+                }
+            }
+        }
+    }
 }
 
-private struct RecipeRow: View {
+/// Not private — reused by FavoriteRecipesView so the cross-cookbook
+/// favorites list shows recipes with the same thumbnail/metadata styling
+/// as every other recipe list in the app.
+struct RecipeRow: View {
     let recipe: Recipe
 
     var body: some View {

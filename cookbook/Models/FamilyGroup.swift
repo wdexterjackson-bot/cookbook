@@ -41,6 +41,12 @@ struct FamilyGroup: Codable, Identifiable, Equatable {
     /// unless a group explicitly opts in to letting any member invite.
     var allowsMemberInvites: Bool
     var allowsMemberPublishing: Bool
+    /// When true, requestToJoin grants membership immediately instead of
+    /// creating a JoinRequest an admin must approve — meant for a small
+    /// number of intentionally open cookbooks (e.g. a global seed
+    /// cookbook everyone's invited to), not the default for a family's
+    /// own private/public cookbook.
+    var autoApproveJoinRequests: Bool
 }
 
 extension FamilyGroup {

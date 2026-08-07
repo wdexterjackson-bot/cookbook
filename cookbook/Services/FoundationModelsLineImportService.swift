@@ -25,7 +25,7 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
     }
 
     func parseLines(from text: String) async throws -> ParsedRecipeLines {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.strippingBareSectionLabels(text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw RecipeLineImportError.emptyInput
         }
@@ -86,6 +86,20 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
         } catch {
             throw RecipeLineImportError.parsingFailed
         }
+    }
+
+    /// Some sources (e.g. recipe-box PDF exports) label their ingredient
+    /// and step lists with a bare header line — "Ingredients", "Directions"
+    /// — rather than the colon-suffixed labels this parser otherwise looks
+    /// for. Left in, a small on-device model can misread the header itself
+    /// as an ingredient or step; stripping known bare headers up front is
+    /// more reliable than trusting the model to recognize and discard them.
+    private static let bareSectionLabels: Set<String> = ["ingredients", "directions", "instructions", "steps"]
+
+    private static func strippingBareSectionLabels(_ text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .filter { !bareSectionLabels.contains($0.trimmingCharacters(in: .whitespaces).lowercased()) }
+            .joined(separator: "\n")
     }
 
     private static func nonBlank(_ value: String?) -> String? {

@@ -9,9 +9,11 @@
 //  spec's own rule.
 //
 //  Scope notes, stated plainly:
-//  - MFB (Memphis Family Barrentine) doesn't exist yet in this app (no
-//    seed content) — its section is simply omitted, the same as any
-//    other empty section, not faked.
+//  - MFB (Memphis Family Barrentine) doesn't have its own hardcoded
+//    section — instead, any public FamilyGroup with
+//    autoApproveJoinRequests set (MFB or otherwise) surfaces generically
+//    in "Featured cookbooks," which itself is omitted, same as any other
+//    empty section, until one exists.
 //  - "Recently Added" is scoped to the user's own local recipes for now,
 //    not merged with Firestore Publications from joined groups — a real
 //    cross-store merge is more than this pass's scope.
@@ -36,6 +38,9 @@ struct HomeView: View {
     @State private var adminPendingJoinRequests: [(request: JoinRequest, group: FamilyGroup)] = []
     @State private var pendingInvitations: [(invitation: Invitation, group: FamilyGroup)] = []
     @State private var joinedGroups: [(membership: Membership, group: FamilyGroup)] = []
+    @State private var featuredGroups: [FamilyGroup] = []
+    @State private var busyFeaturedGroupIDs: Set<String> = []
+    @State private var featuredGroupErrorMessage: String?
     @State private var isPresentingMessages = false
     @State private var isPresentingAccount = false
     @State private var isPresentingCart = false
@@ -73,6 +78,10 @@ struct HomeView: View {
 
                     if !ownedCookbooks.isEmpty || !joinedGroups.isEmpty {
                         yourCookbooksShelf
+                    }
+
+                    if !featuredGroups.isEmpty {
+                        featuredCookbooksShelf
                     }
 
                     if !ownedCartItems.isEmpty {
@@ -196,11 +205,18 @@ struct HomeView: View {
 
     @ViewBuilder
     private var continueCookingCard: some View {
-        if let session = cookingSessionState.current, session.ownerID == accountState.currentOwnerID {
+        // The recipe must actually resolve before the card is shown at
+        // all — CookingSessionState persists across launches, so a
+        // session can outlive the recipe it points to (deleted, or
+        // recreated with a new id via reimport). Building a NavigationLink
+        // whose destination closure can fail to produce a recipe used to
+        // push to a genuinely blank screen; now a stale session just
+        // falls through to "Jump Back In" instead.
+        if let session = cookingSessionState.current,
+           session.ownerID == accountState.currentOwnerID,
+           let sessionRecipe = ownedRecipes.first(where: { $0.id == session.recipeID }) {
             NavigationLink {
-                if let recipe = ownedRecipes.first(where: { $0.id == session.recipeID }) {
-                    CookingModeView(recipe: recipe)
-                }
+                CookingModeView(recipe: sessionRecipe)
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("CONTINUE COOKING")
@@ -221,7 +237,7 @@ struct HomeView: View {
                 }
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.potluckDeepTeal)
+                .background(continueCookingBackground(sessionRecipe))
                 .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
                 .potluckCardShadow()
                 .padding(.horizontal)
@@ -251,6 +267,27 @@ struct HomeView: View {
                 .padding(.horizontal)
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    /// The recipe's own photo as the card's full background when it has
+    /// one, darkened enough for the white text stacked on top of it to
+    /// stay legible — falls back to the flat teal the card always used.
+    @ViewBuilder
+    private func continueCookingBackground(_ recipe: Recipe) -> some View {
+        ZStack {
+            #if os(iOS)
+            if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Color.potluckDeepTeal
+            }
+            #else
+            Color.potluckDeepTeal
+            #endif
+            Color.black.opacity(0.45)
         }
     }
 
@@ -326,9 +363,10 @@ struct HomeView: View {
                         NavigationLink(value: cookbook.id) {
                             cookbookCover(
                                 title: cookbook.title,
-                                subtitle: "\(ownedRecipes.filter { $0.cookbookID == cookbook.id }.count) recipes",
-                                color: Color(hex: cookbook.coverColorHex)
-                            )
+                                subtitle: "\(ownedRecipes.filter { $0.cookbookID == cookbook.id }.count) recipes"
+                            ) {
+                                ownedCookbookCoverImage(cookbook)
+                            }
                         }
                         .buttonStyle(.plain)
                     }
@@ -338,9 +376,10 @@ struct HomeView: View {
                         } label: {
                             cookbookCover(
                                 title: entry.group.cookbookName,
-                                subtitle: "\(entry.group.name)",
-                                color: .potluckSage
-                            )
+                                subtitle: "\(entry.group.name)"
+                            ) {
+                                joinedGroupCoverImage(entry.group)
+                            }
                         }
                         .buttonStyle(.plain)
                     }
@@ -350,7 +389,71 @@ struct HomeView: View {
         }
     }
 
-    private func cookbookCover(title: String, subtitle: String, color: Color) -> some View {
+    // MARK: - Featured Cookbooks
+
+    /// Public cookbooks the user hasn't joined that let anyone in
+    /// instantly (FamilyGroup.autoApproveJoinRequests) — a small,
+    /// deliberately open set, not a general "browse all public
+    /// cookbooks" surface (that's PublicGroupSearchView). Tapping Join
+    /// grants membership right away since these opted into that.
+    private var featuredCookbooksShelf: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Featured cookbooks", badge: nil)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(featuredGroups) { group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Spacer()
+                            Text(group.cookbookName)
+                                .font(.potluckSemiboldBody(15))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                            Text(group.name)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.85))
+                            Button("Join") {
+                                Task { await joinFeatured(group) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.white)
+                            .foregroundStyle(Color.potluckSage)
+                            .controlSize(.small)
+                            .disabled(busyFeaturedGroupIDs.contains(group.id))
+                        }
+                        .padding()
+                        .frame(width: 160, height: 140, alignment: .leading)
+                        .background(Color.potluckSage)
+                        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+                        .potluckCardShadow()
+                    }
+                }
+                .padding(.horizontal)
+            }
+
+            if let featuredGroupErrorMessage {
+                Text(featuredGroupErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal)
+            }
+        }
+    }
+
+    private func joinFeatured(_ group: FamilyGroup) async {
+        guard let userID = accountState.currentUserID else { return }
+        busyFeaturedGroupIDs.insert(group.id)
+        featuredGroupErrorMessage = nil
+        defer { busyFeaturedGroupIDs.remove(group.id) }
+        do {
+            _ = try await groupsService.requestToJoin(groupID: group.id, requesterID: userID, note: nil)
+            await loadGroupData()
+        } catch {
+            featuredGroupErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func cookbookCover<Cover: View>(title: String, subtitle: String, @ViewBuilder cover: () -> Cover) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Spacer()
             Text(title)
@@ -363,9 +466,50 @@ struct HomeView: View {
         }
         .padding()
         .frame(width: 140, height: 120, alignment: .leading)
-        .background(color)
+        .background {
+            ZStack {
+                cover()
+                // A flat scrim, not a directional gradient — the title/
+                // subtitle text sits at the bottom of the whole card, but
+                // a cover image can be any photo, so a uniform darkening
+                // keeps white text legible regardless of what's in it.
+                Color.black.opacity(0.35)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
         .potluckCardShadow()
+    }
+
+    @ViewBuilder
+    private func ownedCookbookCoverImage(_ cookbook: Cookbook) -> some View {
+        #if os(iOS)
+        if let filename = cookbook.coverImageFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            Color(hex: cookbook.coverColorHex)
+        }
+        #else
+        Color(hex: cookbook.coverColorHex)
+        #endif
+    }
+
+    /// FamilyGroup.coverImageURL has no upload path anywhere in the app
+    /// yet, so this is always nil today — matching GroupCookbookView's
+    /// own header, which already handles it the same way, so the shelf
+    /// picks it up automatically whenever that changes.
+    @ViewBuilder
+    private func joinedGroupCoverImage(_ group: FamilyGroup) -> some View {
+        if let urlString = group.coverImageURL, let url = URL(string: urlString) {
+            AsyncImage(url: url) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Color.potluckSage
+            }
+        } else {
+            Color.potluckSage
+        }
     }
 
     // MARK: - Shopping Cart
@@ -421,13 +565,7 @@ struct HomeView: View {
                             RecipeDetailView(recipe: recipe)
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
-                                    .fill(Color.potluckSunflower.opacity(0.3))
-                                    .frame(width: 140, height: 100)
-                                    .overlay {
-                                        Image(systemName: "fork.knife")
-                                            .foregroundStyle(Color.potluckTomato)
-                                    }
+                                recentlyAddedThumbnail(recipe)
                                 Text(recipe.title)
                                     .font(.potluckSemiboldBody(14))
                                     .foregroundStyle(Color.potluckDeepTeal)
@@ -444,6 +582,37 @@ struct HomeView: View {
                 .padding(.horizontal)
             }
         }
+    }
+
+    /// The dish's own photo when it has one, at the same size/shape the
+    /// placeholder always used (140×100, PotluckMetrics.cardCornerRadius)
+    /// — falls back to that same placeholder otherwise, same pattern
+    /// RecipeRow's thumbnail already uses in RecipeListView.
+    @ViewBuilder
+    private func recentlyAddedThumbnail(_ recipe: Recipe) -> some View {
+        #if os(iOS)
+        if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 140, height: 100)
+                .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+        } else {
+            recentlyAddedPlaceholder
+        }
+        #else
+        recentlyAddedPlaceholder
+        #endif
+    }
+
+    private var recentlyAddedPlaceholder: some View {
+        RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
+            .fill(Color.potluckSunflower.opacity(0.3))
+            .frame(width: 140, height: 100)
+            .overlay {
+                Image(systemName: "fork.knife")
+                    .foregroundStyle(Color.potluckTomato)
+            }
     }
 
     // MARK: - Shared
@@ -469,6 +638,7 @@ struct HomeView: View {
             adminPendingJoinRequests = []
             pendingInvitations = []
             joinedGroups = []
+            featuredGroups = []
             return
         }
         do {
@@ -498,6 +668,10 @@ struct HomeView: View {
             } else {
                 pendingInvitations = []
             }
+
+            let joinedIDs = Set(groups.map { $0.1.id })
+            let publicGroups = try await groupsService.fetchPublicGroups(matching: PublicGroupSearchFilter(text: nil, locationText: nil))
+            featuredGroups = publicGroups.filter { $0.autoApproveJoinRequests && !joinedIDs.contains($0.id) }
         } catch {
             // Home degrades gracefully — sections requiring this data
             // just don't render rather than showing an error banner.
