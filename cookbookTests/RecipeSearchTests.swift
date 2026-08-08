@@ -40,6 +40,33 @@ struct RecipeSearchTests {
         #expect(results.map(\.title) == ["Skillet Cornbread"])
     }
 
+    @Test func searchTextMatchesAuthorLineage() {
+        let recipe = makeRecipe(title: "Sausage Balls")
+        recipe.authorLineage = "Catherine Barrentine of Memphis, TN"
+        let other = makeRecipe(title: "Peach Cobbler")
+        other.authorLineage = "Someone Else of Nashville, TN"
+
+        var criteria = RecipeFilterCriteria()
+        criteria.searchText = "Catherine Barrentine"
+
+        let results = RecipeSearch.apply(criteria, to: [recipe, other])
+
+        #expect(results.map(\.title) == ["Sausage Balls"])
+    }
+
+    @Test func searchTextMatchesInspirationCredit() {
+        let recipe = makeRecipe(title: "Ham and Cheese Twirls")
+        recipe.inspirationCredit = "Catherine Barrentine of Memphis, TN"
+        let other = makeRecipe(title: "Peach Cobbler")
+
+        var criteria = RecipeFilterCriteria()
+        criteria.searchText = "barrentine"
+
+        let results = RecipeSearch.apply(criteria, to: [recipe, other])
+
+        #expect(results.map(\.title) == ["Ham and Cheese Twirls"])
+    }
+
     @Test func searchTextMatchesIngredientDisplayText() {
         let recipe = makeRecipe(title: "Sunday Roast")
         let section = IngredientSection()

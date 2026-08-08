@@ -13,16 +13,16 @@ final class InMemoryEntitlementService: EntitlementServicing {
     }
 
     @discardableResult
-    func redeemFamilyUserPromoCredit(userID: String) async throws -> Bool {
+    func redeemTier1CreditForProUser(userID: String) async throws -> Bool {
         guard var entitlement = entitlementsByUserID[userID],
-              entitlement.familyUserPromoCreditAvailable,
-              !entitlement.hasFamilyUser
+              entitlement.tier1Credits > 0,
+              !entitlement.isProUser
         else {
             return false
         }
 
-        entitlement.familyUserPromoCreditAvailable = false
-        entitlement.hasFamilyUser = true
+        entitlement.tier1Credits -= 1
+        entitlement.isProUser = true
         entitlementsByUserID[userID] = entitlement
         return true
     }

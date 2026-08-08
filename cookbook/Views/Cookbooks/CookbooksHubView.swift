@@ -14,18 +14,30 @@
 
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct CookbooksHubView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
     @Environment(ActiveCookbookState.self) private var activeCookbookState
     @Query(sort: \Cookbook.sortOrder) private var allCookbooks: [Cookbook]
+    @Query private var allRecipes: [Recipe]
     @State private var joinedGroups: [(membership: Membership, group: FamilyGroup)] = []
     @State private var isLoading = false
     @State private var isPresentingNewPersonalCookbook = false
     @State private var isPresentingNewFamilyCookbook = false
     @State private var cookbookPendingEdit: Cookbook?
     @State private var cookbookPendingDeletion: Cookbook?
+    @State private var path = NavigationPath()
+
+    // MARK: - Backup / Restore
+    @State private var cookbookPendingBackup: Cookbook?
+    @State private var backupDocument: CookbookBackupDocument?
+    @State private var isPresentingBackupExporter = false
+    @State private var isPresentingRestoreImporter = false
+    @State private var backupErrorMessage: String?
+    @State private var restoreErrorMessage: String?
+    @State private var restoreSuccessMessage: String?
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
 
@@ -34,7 +46,7 @@ struct CookbooksHubView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 Section {
                     NavigationLink {
@@ -64,6 +76,10 @@ struct CookbooksHubView: View {
                                     cookbookPendingEdit = cookbook
                                 }
                                 .tint(.blue)
+                                Button("Back Up") {
+                                    beginBackup(cookbook)
+                                }
+                                .tint(.orange)
                             }
                     }
                 }
@@ -100,6 +116,11 @@ struct CookbooksHubView: View {
                             isPresentingNewFamilyCookbook = true
                         } label: {
                             Label("New Family Cookbook", systemImage: "person.3")
+                        }
+                        Button {
+                            isPresentingRestoreImporter = true
+                        } label: {
+                            Label("Restore from Backup", systemImage: "arrow.counterclockwise")
                         }
                     } label: {
                         Label("New Cookbook", systemImage: "plus")
@@ -144,6 +165,62 @@ struct CookbooksHubView: View {
                     cookbookPendingDeletion = nil
                 }
             }
+            .fileExporter(
+                isPresented: $isPresentingBackupExporter,
+                document: backupDocument,
+                contentType: .json,
+                defaultFilename: cookbookPendingBackup.map(Self.backupFilename(for:)) ?? "Cookbook Backup"
+            ) { result in
+                if case .failure(let error) = result {
+                    backupErrorMessage = error.localizedDescription
+                }
+                backupDocument = nil
+                cookbookPendingBackup = nil
+            }
+            .fileImporter(
+                isPresented: $isPresentingRestoreImporter,
+                allowedContentTypes: [.json]
+            ) { result in
+                switch result {
+                case .success(let url):
+                    restore(from: url)
+                case .failure(let error):
+                    restoreErrorMessage = error.localizedDescription
+                }
+            }
+            .alert(
+                "Couldn't Back Up Cookbook",
+                isPresented: Binding(
+                    get: { backupErrorMessage != nil },
+                    set: { if !$0 { backupErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(backupErrorMessage ?? "")
+            }
+            .alert(
+                "Couldn't Restore Backup",
+                isPresented: Binding(
+                    get: { restoreErrorMessage != nil },
+                    set: { if !$0 { restoreErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(restoreErrorMessage ?? "")
+            }
+            .alert(
+                "Cookbook Restored",
+                isPresented: Binding(
+                    get: { restoreSuccessMessage != nil },
+                    set: { if !$0 { restoreSuccessMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(restoreSuccessMessage ?? "")
+            }
         }
     }
 
@@ -187,6 +264,75 @@ struct CookbooksHubView: View {
         } catch {
             joinedGroups = []
         }
+    }
+
+    // MARK: - Backup / Restore
+
+    private func beginBackup(_ cookbook: Cookbook) {
+        let recipesInCookbook = allRecipes.filter {
+            $0.ownerID == accountState.currentOwnerID && $0.cookbookID == cookbook.id
+        }
+        do {
+            let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipesInCookbook)
+            cookbookPendingBackup = cookbook
+            backupDocument = CookbookBackupDocument(data: data)
+            isPresentingBackupExporter = true
+        } catch {
+            backupErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func restore(from url: URL) {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            let cookbook = try CookbookBackupService.restore(data, ownerID: accountState.currentOwnerID, modelContext: modelContext)
+            // Queried directly against modelContext (not the view's own
+            // @Query snapshot) so this reflects what restore() just saved
+            // without depending on SwiftUI's own refresh timing.
+            let cookbookID = cookbook.id
+            let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate { $0.cookbookID == cookbookID })
+            let restoredRecipeCount = (try? modelContext.fetchCount(descriptor)) ?? 0
+            let recipeWord = restoredRecipeCount == 1 ? "recipe" : "recipes"
+            restoreSuccessMessage = "Restored \"\(cookbook.title)\" with \(restoredRecipeCount) \(recipeWord)."
+            path.append(cookbook.id)
+        } catch {
+            restoreErrorMessage = error.localizedDescription
+        }
+    }
+
+    private static func backupFilename(for cookbook: Cookbook) -> String {
+        let invalidCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
+        let sanitized = cookbook.title.components(separatedBy: invalidCharacters).joined(separator: " ")
+        let trimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Cookbook Backup" : trimmed
+    }
+}
+
+/// Wraps a CookbookBackupService.exportData() result so it can be handed
+/// to SwiftUI's .fileExporter — export-only in practice (Restore goes
+/// through .fileImporter + CookbookBackupService.restore instead, since
+/// that side needs no document type, just the picked file's Data), but
+/// FileDocument requires read conformance too.
+private struct CookbookBackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+
+    var data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let fileData = configuration.file.regularFileContents else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        data = fileData
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }
 

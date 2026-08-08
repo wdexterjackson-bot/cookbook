@@ -47,6 +47,10 @@ struct HomeView: View {
     @State private var isPresentingClearCartConfirmation = false
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
+    private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
+    private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
+    @State private var gate = EntitlementGateCoordinator()
 
     private var ownedRecipes: [Recipe] {
         allRecipes.filter { $0.ownerID == accountState.currentOwnerID }
@@ -64,6 +68,10 @@ struct HomeView: View {
         adminPendingJoinRequests.count + pendingInvitations.count
     }
 
+    private var favoriteRecipes: [Recipe] {
+        ownedRecipes.filter(\.isFavorite)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -72,9 +80,11 @@ struct HomeView: View {
 
                     continueCookingCard
 
-                    if attentionCount > 0 {
-                        needsAttentionStrip
-                    }
+                    // Always visible now, not just when there's something
+                    // pending — a standing MFB invitation placeholder lives
+                    // here too (see messagesStrip), so this is never truly
+                    // empty, but the section stays even once it is.
+                    messagesStrip
 
                     if !ownedCookbooks.isEmpty || !joinedGroups.isEmpty {
                         yourCookbooksShelf
@@ -84,9 +94,9 @@ struct HomeView: View {
                         featuredCookbooksShelf
                     }
 
-                    if !ownedCartItems.isEmpty {
-                        shoppingCartCard
-                    }
+                    favoriteDishesStrip
+
+                    shoppingCartCard
 
                     if !ownedRecipes.isEmpty {
                         recentlyAddedStrip
@@ -164,6 +174,13 @@ struct HomeView: View {
                 await loadGroupData()
             }
         }
+        .entitlementGate(
+            gate,
+            userID: accountState.currentUserID ?? "",
+            entitlementService: entitlementService,
+            purchaseService: purchaseService,
+            claimWriter: claimWriter
+        )
     }
 
     // MARK: - Greeting
@@ -291,34 +308,47 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Needs Your Attention
+    // MARK: - Messages
 
-    private var needsAttentionStrip: some View {
+    /// Always visible (unlike the shelves above it) — a standing MFB
+    /// invitation placeholder lives here for every user, so there's
+    /// always at least one card even with zero real join requests/invites.
+    private var messagesStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Needs your attention", badge: attentionCount)
+            sectionHeader("Messages", badge: attentionCount)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(adminPendingJoinRequests, id: \.request.id) { entry in
-                        attentionCard(
-                            kind: "Join Request",
-                            title: "Someone wants to join \(entry.group.cookbookName)",
-                            primaryTitle: "Review"
-                        ) {
-                            isPresentingMessages = true
+            // Every new user gets an MFB invitation by default — the real
+            // join-flow isn't wired up yet, so this is a placeholder
+            // acknowledging it's coming rather than a real Invitation
+            // record. Full-width like Shopping Cart (not part of the
+            // horizontal strip below), since it's a standing fixture, not
+            // one of a scrollable set of equal-weight items.
+            mfbInvitationPlaceholderCard
+
+            if !adminPendingJoinRequests.isEmpty || !pendingInvitations.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(adminPendingJoinRequests, id: \.request.id) { entry in
+                            attentionCard(
+                                kind: "Join Request",
+                                title: "Someone wants to join \(entry.group.cookbookName)",
+                                primaryTitle: "Review"
+                            ) {
+                                isPresentingMessages = true
+                            }
+                        }
+                        ForEach(pendingInvitations, id: \.invitation.id) { entry in
+                            attentionCard(
+                                kind: "Invitation",
+                                title: "You've been invited to \(entry.group.cookbookName)",
+                                primaryTitle: "Review"
+                            ) {
+                                isPresentingMessages = true
+                            }
                         }
                     }
-                    ForEach(pendingInvitations, id: \.invitation.id) { entry in
-                        attentionCard(
-                            kind: "Invitation",
-                            title: "You've been invited to \(entry.group.cookbookName)",
-                            primaryTitle: "Review"
-                        ) {
-                            isPresentingMessages = true
-                        }
-                    }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
             }
         }
     }
@@ -344,6 +374,51 @@ struct HomeView: View {
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
         .potluckCardShadow()
+    }
+
+    /// Buttons are disabled (not omitted) and the card gets a dashed green
+    /// border — both read as "placeholder, not yet active" on their own —
+    /// since the real MFB join flow doesn't exist yet (no seeded MFB
+    /// group, no auto-invitation system).
+    private var mfbInvitationPlaceholderCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                messagesPillBadge("INVITATION")
+                messagesPillBadge("COMING SOON")
+            }
+            Text("Join the Memphis Family Barrentine shared recipe & cookbook for free with over 600 southern classics!")
+                .font(.potluckSemiboldBody(15))
+                .foregroundStyle(Color.potluckDeepTeal)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Join") {}
+                    .disabled(true)
+                Button("Decline", role: .destructive) {}
+                    .disabled(true)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
+                .strokeBorder(Color.potluckSage, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+        }
+        .potluckCardShadow()
+        .padding(.horizontal)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Invitation, coming soon. Join the Memphis Family Barrentine shared recipe and cookbook for free with over 600 southern classics. Join and Decline are not yet available.")
+    }
+
+    private func messagesPillBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(Color.potluckSage)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.potluckSage.opacity(0.15)))
     }
 
     // MARK: - Your Cookbooks
@@ -445,11 +520,15 @@ struct HomeView: View {
         busyFeaturedGroupIDs.insert(group.id)
         featuredGroupErrorMessage = nil
         defer { busyFeaturedGroupIDs.remove(group.id) }
-        do {
-            _ = try await groupsService.requestToJoin(groupID: group.id, requesterID: userID, note: nil)
-            await loadGroupData()
-        } catch {
-            featuredGroupErrorMessage = error.localizedDescription
+
+        let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+        await gate.attempt(.groupJoin, outcome: EntitlementGate.forGroupJoin(entitlement, group: group)) {
+            do {
+                _ = try await groupsService.requestToJoin(groupID: group.id, requesterID: userID, note: nil)
+                await loadGroupData()
+            } catch {
+                featuredGroupErrorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -469,11 +548,20 @@ struct HomeView: View {
         .background {
             ZStack {
                 cover()
-                // A flat scrim, not a directional gradient — the title/
-                // subtitle text sits at the bottom of the whole card, but
-                // a cover image can be any photo, so a uniform darkening
-                // keeps white text legible regardless of what's in it.
-                Color.black.opacity(0.35)
+                // A bottom-anchored gradient, not a flat scrim — the title/
+                // subtitle text sits at the bottom of the card, so only
+                // that band needs darkening for legibility. A flat overlay
+                // across the whole card made a user's own cover photo read
+                // as dim/tinted even though nothing was wrong with it.
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.0),
+                        .init(color: .clear, location: 0.45),
+                        .init(color: .black.opacity(0.33), location: 1.0),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
@@ -481,17 +569,30 @@ struct HomeView: View {
     }
 
     @ViewBuilder
+    /// Priority: a custom cover image always wins; otherwise a chosen
+    /// Cover Style; otherwise the plain color — matches CookbookConfigurationView's
+    /// own documented priority order.
     private func ownedCookbookCoverImage(_ cookbook: Cookbook) -> some View {
         #if os(iOS)
         if let filename = cookbook.coverImageFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
             Image(uiImage: uiImage)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
+        } else if let style = CookbookCoverStyleCatalog.style(named: cookbook.coverStyleImageName) {
+            Image(style.imageAssetName)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
         } else {
             Color(hex: cookbook.coverColorHex)
         }
         #else
-        Color(hex: cookbook.coverColorHex)
+        if let style = CookbookCoverStyleCatalog.style(named: cookbook.coverStyleImageName) {
+            Image(style.imageAssetName)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            Color(hex: cookbook.coverColorHex)
+        }
         #endif
     }
 
@@ -518,31 +619,35 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Shopping cart", badge: nil)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text(cartPreviewText)
-                    .font(.potluckBody(14))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+            if ownedCartItems.isEmpty {
+                emptyStateCard("Items you add to your shopping list will show here.")
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(cartPreviewText)
+                        .font(.potluckBody(14))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
 
-                HStack {
-                    Button("View cart") {
-                        isPresentingCart = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.potluckTomato)
+                    HStack {
+                        Button("View cart") {
+                            isPresentingCart = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.potluckTomato)
 
-                    Button("Clear all", role: .destructive) {
-                        isPresentingClearCartConfirmation = true
+                        Button("Clear all", role: .destructive) {
+                            isPresentingClearCartConfirmation = true
+                        }
+                        .font(.subheadline)
                     }
-                    .font(.subheadline)
                 }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+                .potluckCardShadow()
+                .padding(.horizontal)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
-            .potluckCardShadow()
-            .padding(.horizontal)
         }
     }
 
@@ -550,6 +655,54 @@ struct HomeView: View {
         let names = ownedCartItems.prefix(4).map(\.displayText)
         let suffix = ownedCartItems.count > 4 ? " + \(ownedCartItems.count - 4) more" : ""
         return names.joined(separator: ", ") + suffix
+    }
+
+    /// Shared by every section that's now always-visible instead of
+    /// collapsing away when it has nothing to show — Favorite Dishes and
+    /// Shopping Cart both use this for their empty state.
+    private func emptyStateCard(_ message: String) -> some View {
+        Text(message)
+            .font(.potluckBody(14))
+            .foregroundStyle(.secondary)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+            .potluckCardShadow()
+            .padding(.horizontal)
+    }
+
+    // MARK: - Favorite Dishes
+
+    private var favoriteDishesStrip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Favorite dishes", badge: nil)
+
+            if favoriteRecipes.isEmpty {
+                emptyStateCard("Your favorite recipes will show here.")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(favoriteRecipes.prefix(10)) { recipe in
+                            NavigationLink {
+                                RecipeDetailView(recipe: recipe)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    recentlyAddedThumbnail(recipe)
+                                    Text(recipe.title)
+                                        .font(.potluckSemiboldBody(14))
+                                        .foregroundStyle(Color.potluckDeepTeal)
+                                        .lineLimit(1)
+                                }
+                                .frame(width: 140, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
     }
 
     // MARK: - Recently Added
@@ -570,9 +723,10 @@ struct HomeView: View {
                                     .font(.potluckSemiboldBody(14))
                                     .foregroundStyle(Color.potluckDeepTeal)
                                     .lineLimit(1)
-                                Text("Yours")
+                                Text(creditLabel(for: recipe))
                                     .font(.caption)
                                     .foregroundStyle(Color.potluckSage)
+                                    .lineLimit(1)
                             }
                             .frame(width: 140, alignment: .leading)
                         }
@@ -582,6 +736,25 @@ struct HomeView: View {
                 .padding(.horizontal)
             }
         }
+    }
+
+    /// "Yours" only when nothing else is claiming credit — ownerID (who
+    /// can edit, always the local account for anything in ownedRecipes)
+    /// is deliberately not what this reflects. An inspirationCredit counts
+    /// as "other credit" even for a self-entered recipe; authorLineage
+    /// only overrides "Yours" when it's external (a Discover download or
+    /// a paste-import's own "By:" line) — a self-attributed authorLineage
+    /// is just the owner crediting themself, which is what "Yours" already
+    /// says. The two are mutually exclusive by construction (CreateEditRecipeView
+    /// only offers inspirationCredit when authorLineageIsExternal is false).
+    private func creditLabel(for recipe: Recipe) -> String {
+        if let inspirationCredit = recipe.inspirationCredit, !inspirationCredit.isEmpty {
+            return inspirationCredit
+        }
+        if recipe.authorLineageIsExternal, let authorLineage = recipe.authorLineage, !authorLineage.isEmpty {
+            return authorLineage
+        }
+        return "Yours"
     }
 
     /// The dish's own photo when it has one, at the same size/shape the

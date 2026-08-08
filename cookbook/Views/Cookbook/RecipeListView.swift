@@ -17,10 +17,20 @@ struct RecipeListView: View {
     @State private var isPresentingAccount = false
     @State private var isPresentingCookbookSwitcher = false
     @State private var criteria = RecipeFilterCriteria()
-    /// Empty by default — every chapter starts collapsed. Keyed by title
-    /// rather than section id since "Unfiled" (a synthetic group with no
-    /// real CookbookSection) needs to participate the same way.
-    @State private var expandedChapterTitles: Set<String> = []
+    /// Empty by default — every chapter starts collapsed. Keyed by a stable
+    /// identity (section id, or the group's title for "Other," the
+    /// synthetic group with no real CookbookSection) rather than by title
+    /// alone — renaming a chapter (see sectionPendingEdit) must not reset
+    /// its expanded/collapsed state.
+    @State private var expandedChapterKeys: Set<String> = []
+    /// Session-only override (not persisted) — forces chapters to sort by
+    /// recipe count even if the user has previously drag-reordered them.
+    /// Off just falls back to Cookbook.chaptersManuallyReordered's own
+    /// default behavior, unchanged.
+    @State private var sortChaptersByRecipeCount = false
+    @State private var sectionPendingEdit: CookbookSection?
+    @State private var editedSectionTitle = ""
+    @State private var sectionPendingDeletion: CookbookSection?
 
     private var activeCookbook: Cookbook? {
         allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
@@ -40,9 +50,13 @@ struct RecipeListView: View {
     }
 
     /// Groups filteredRecipes by the active cookbook's configured chapters,
-    /// in chapter order, with a trailing "Unfiled" group for anything with
-    /// no (or a since-removed) section. A cookbook with zero configured
-    /// chapters falls back to one untitled group — today's flat list.
+    /// in chapter order, with a trailing "Other" group for anything with no
+    /// (or a since-removed/since-deleted) section. A cookbook with zero
+    /// configured chapters falls back to one untitled group — today's flat
+    /// list. `section` is nil for that flat-list group and for "Other" —
+    /// both are synthetic, not a real CookbookSection — which is what the
+    /// chapter-header swipe actions (Edit/Delete) key off of to only ever
+    /// show on a real chapter.
     ///
     /// While just browsing (no search text, no filters), every configured
     /// chapter shows even with zero recipes — chapters are chosen
@@ -57,16 +71,17 @@ struct RecipeListView: View {
     /// live as recipes are added — not the fixed catalog/creation order.
     /// Once the user reorders once, that explicit order (CookbookSection.sortOrder)
     /// is respected from then on and recipe counts no longer move things
-    /// around on them.
-    private var groupedBySection: [(title: String?, recipes: [Recipe])] {
+    /// around on them — unless sortChaptersByRecipeCount (the Sort & Filter
+    /// menu's "# of Recipes" toggle) is on, which always wins.
+    private var groupedBySection: [(title: String?, section: CookbookSection?, recipes: [Recipe])] {
         guard let activeCookbook, !activeCookbook.sections.isEmpty else {
-            return [(nil, filteredRecipes)]
+            return [(nil, nil, filteredRecipes)]
         }
         let isBrowsing = criteria.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !criteria.hasActiveFilters
 
-        var groups: [(title: String?, recipes: [Recipe])] = []
+        var groups: [(title: String?, section: CookbookSection?, recipes: [Recipe])] = []
         let sortedSections: [CookbookSection]
-        if activeCookbook.chaptersManuallyReordered {
+        if !sortChaptersByRecipeCount && activeCookbook.chaptersManuallyReordered {
             sortedSections = activeCookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
         } else {
             var countBySectionID: [UUID: Int] = [:]
@@ -84,7 +99,7 @@ struct RecipeListView: View {
         for section in sortedSections {
             let recipesInSection = filteredRecipes.filter { $0.sectionID == section.id }
             if !recipesInSection.isEmpty || isBrowsing {
-                groups.append((section.title, recipesInSection))
+                groups.append((section.title, section, recipesInSection))
             }
         }
 
@@ -94,7 +109,7 @@ struct RecipeListView: View {
             return !knownSectionIDs.contains(sectionID)
         }
         if !unfiled.isEmpty {
-            groups.append(("Unfiled", unfiled))
+            groups.append(("Other", nil, unfiled))
         }
         return groups
     }
@@ -139,7 +154,7 @@ struct RecipeListView: View {
                                     // rather than one long scroll of every
                                     // chapter's recipes at once.
                                     Section {
-                                        DisclosureGroup(isExpanded: isExpandedBinding(for: title)) {
+                                        DisclosureGroup(isExpanded: isExpandedBinding(forKey: group.section?.id.uuidString ?? title)) {
                                             recipeRows(group.recipes)
                                         } label: {
                                             HStack {
@@ -148,6 +163,21 @@ struct RecipeListView: View {
                                                 Text("\(group.recipes.count)")
                                                     .font(.caption)
                                                     .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        .swipeActions {
+                                            // Only a real chapter (not the
+                                            // synthetic "Other" group) can be
+                                            // edited/deleted.
+                                            if let section = group.section {
+                                                Button("Delete", role: .destructive) {
+                                                    sectionPendingDeletion = section
+                                                }
+                                                Button("Edit") {
+                                                    editedSectionTitle = section.title
+                                                    sectionPendingEdit = section
+                                                }
+                                                .tint(.blue)
                                             }
                                         }
                                     }
@@ -201,6 +231,11 @@ struct RecipeListView: View {
                                 Text(option.label).tag(option)
                             }
                         }
+                        if let activeCookbook, !activeCookbook.sections.isEmpty {
+                            Toggle(isOn: $sortChaptersByRecipeCount) {
+                                Label("Sort Chapters by # of Recipes", systemImage: "number")
+                            }
+                        }
                         Button {
                             isPresentingFilters = true
                         } label: {
@@ -232,6 +267,33 @@ struct RecipeListView: View {
             .sheet(isPresented: $isPresentingAccount) {
                 AccountView()
             }
+            .alert(
+                "Rename Chapter",
+                isPresented: Binding(
+                    get: { sectionPendingEdit != nil },
+                    set: { if !$0 { sectionPendingEdit = nil } }
+                )
+            ) {
+                TextField("Chapter Name", text: $editedSectionTitle)
+                Button("Save", action: renameSection)
+                Button("Cancel", role: .cancel) { sectionPendingEdit = nil }
+            }
+            .confirmationDialog(
+                deleteSectionConfirmationMessage,
+                isPresented: Binding(
+                    get: { sectionPendingDeletion != nil },
+                    set: { if !$0 { sectionPendingDeletion = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete Chapter", role: .destructive) {
+                    if let section = sectionPendingDeletion {
+                        deleteSection(section)
+                    }
+                    sectionPendingDeletion = nil
+                }
+                Button("Cancel", role: .cancel) { sectionPendingDeletion = nil }
+            }
         }
     }
 
@@ -244,23 +306,40 @@ struct RecipeListView: View {
                     .foregroundStyle(Color.potluckDeepTeal)
                     .multilineTextAlignment(.center)
 
-                #if os(iOS)
-                if let filename = activeCookbook.coverImageFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(height: 140)
-                        .frame(maxWidth: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
-                        .potluckCardShadow()
-                        .padding(.horizontal)
-                }
-                #endif
+                cookbookHeaderCard(activeCookbook)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 8)
             .padding(.bottom, 4)
         }
+    }
+
+    /// A custom cover image wins if there is one; otherwise this card
+    /// falls back to the plain color, deliberately skipping a chosen
+    /// Cover Style here — there's no default image sized/cropped for
+    /// this specific placement yet (see CookbookConfigurationView's
+    /// "Cover Style" footer). Home's cookbook shelf is where a style
+    /// actually shows.
+    @ViewBuilder
+    private func cookbookHeaderCard(_ cookbook: Cookbook) -> some View {
+        Group {
+            #if os(iOS)
+            if let filename = cookbook.coverImageFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Color(hex: cookbook.coverColorHex)
+            }
+            #else
+            Color(hex: cookbook.coverColorHex)
+            #endif
+        }
+        .frame(height: 140)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+        .potluckCardShadow()
+        .padding(.horizontal)
     }
 
     private var activeFilterChips: some View {
@@ -310,14 +389,44 @@ struct RecipeListView: View {
         try? store.delete(recipe)
     }
 
-    private func isExpandedBinding(for title: String) -> Binding<Bool> {
+    private func renameSection() {
+        guard let section = sectionPendingEdit else { return }
+        let trimmed = editedSectionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        section.title = trimmed
+        activeCookbook?.updatedAt = .now
+        try? modelContext.save()
+        sectionPendingEdit = nil
+    }
+
+    private var deleteSectionConfirmationMessage: String {
+        guard let section = sectionPendingDeletion else { return "" }
+        let count = ownedRecipes.filter { $0.sectionID == section.id }.count
+        let recipeWord = count == 1 ? "recipe" : "recipes"
+        return "Delete \"\(section.title)\"? Its \(count) \(recipeWord) will move to Other — no recipes are deleted."
+    }
+
+    /// Never deletes a recipe — every recipe in this section is unfiled
+    /// (sectionID set to nil) so it surfaces in the "Other" group instead.
+    private func deleteSection(_ section: CookbookSection) {
+        for recipe in ownedRecipes where recipe.sectionID == section.id {
+            recipe.sectionID = nil
+            recipe.updatedAt = .now
+        }
+        activeCookbook?.sections.removeAll { $0.id == section.id }
+        modelContext.delete(section)
+        activeCookbook?.updatedAt = .now
+        try? modelContext.save()
+    }
+
+    private func isExpandedBinding(forKey key: String) -> Binding<Bool> {
         Binding(
-            get: { expandedChapterTitles.contains(title) },
+            get: { expandedChapterKeys.contains(key) },
             set: { isExpanded in
                 if isExpanded {
-                    expandedChapterTitles.insert(title)
+                    expandedChapterKeys.insert(key)
                 } else {
-                    expandedChapterTitles.remove(title)
+                    expandedChapterKeys.remove(key)
                 }
             }
         )

@@ -101,9 +101,21 @@ struct CreateEditRecipeView: View {
     @State private var ingredientRows: [DraftIngredientRow]
     @State private var stepRows: [DraftStepRow]
     @State private var selectedChapterID: UUID?
+    /// Only meaningful in `.create` mode — nil means "use the app's
+    /// currently active cookbook," same as before this picker existed.
+    /// A separate optional (rather than eagerly reading
+    /// `activeCookbookState` here) because `@Environment` isn't populated
+    /// yet inside `init` — see `effectiveCookbookID` below for the
+    /// fallback that actually resolves it.
+    @State private var selectedCookbookID: UUID?
     @State private var tags: [String]
     @State private var newTagText = ""
     @State private var validationMessage: String?
+
+    static let maxVideoURLs = 3
+    @State private var videoURLs: [String]
+    @State private var newVideoURLText = ""
+    @State private var videoURLErrorMessage: String?
 
     @State private var importText = ""
     @State private var isImporting = false
@@ -116,6 +128,14 @@ struct CreateEditRecipeView: View {
 
     @State private var isPresentingAuthorPrompt = false
     @State private var authorPromptWasHandled = false
+
+    // MARK: - Inspiration credit (Edit mode only — see canOfferInspirationCredit)
+    @State private var isAddingInspirationCredit = false
+    @State private var inspirationCreditName = ""
+    @State private var inspirationCreditCity = ""
+    @State private var inspirationCreditIsUS = true
+    @State private var inspirationCreditStateCode = ""
+    @State private var inspirationCreditCountry = ""
 
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var heroImageData: Data?
@@ -137,6 +157,7 @@ struct CreateEditRecipeView: View {
             _selectedChapterID = State(initialValue: nil)
             _tags = State(initialValue: [])
             _heroImageData = State(initialValue: nil)
+            _videoURLs = State(initialValue: [])
 
         case .edit(let recipe):
             _title = State(initialValue: recipe.title)
@@ -145,6 +166,7 @@ struct CreateEditRecipeView: View {
             _notes = State(initialValue: recipe.notes)
             _selectedChapterID = State(initialValue: recipe.sectionID)
             _tags = State(initialValue: recipe.tags)
+            _videoURLs = State(initialValue: recipe.videoURLs)
 
             let ingredientDrafts = Self.makeIngredientDrafts(from: recipe)
             _ingredientRows = State(initialValue: ingredientDrafts.isEmpty ? [DraftIngredientRow()] : ingredientDrafts)
@@ -165,6 +187,7 @@ struct CreateEditRecipeView: View {
             _notes = State(initialValue: "")
             _selectedChapterID = State(initialValue: nil)
             _tags = State(initialValue: [])
+            _videoURLs = State(initialValue: [])
 
             let ingredientDrafts = discovered.ingredients.map { DraftIngredientRow(name: $0.displayText) }
             _ingredientRows = State(initialValue: ingredientDrafts.isEmpty ? [DraftIngredientRow()] : ingredientDrafts)
@@ -210,7 +233,17 @@ struct CreateEditRecipeView: View {
                     TextField("Yield (e.g. Serves 6)", text: $yield)
                 }
 
-                if let chapters = activeCookbook?.sections, !chapters.isEmpty {
+                if case .create = mode, ownedCookbooks.count > 1 {
+                    Section("Cookbook") {
+                        Picker("Cookbook", selection: cookbookSelectionBinding) {
+                            ForEach(ownedCookbooks.sorted { $0.sortOrder < $1.sortOrder }) { cookbook in
+                                Text(cookbook.title).tag(UUID?.some(cookbook.id))
+                            }
+                        }
+                    }
+                }
+
+                if let chapters = effectiveCookbook?.sections, !chapters.isEmpty {
                     Section("Chapter") {
                         Picker("Chapter", selection: $selectedChapterID) {
                             Text("None").tag(UUID?.none)
@@ -227,6 +260,8 @@ struct CreateEditRecipeView: View {
                 }
                 #endif
 
+                videosSection
+
                 ingredientsSection
                 stepsSection
                 importSection
@@ -235,6 +270,8 @@ struct CreateEditRecipeView: View {
                 Section("Notes") {
                     TextField("Notes", text: $notes, axis: .vertical)
                 }
+
+                inspirationCreditSection
 
                 if let validationMessage {
                     Section {
@@ -246,6 +283,12 @@ struct CreateEditRecipeView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Color.potluckCream)
+            .onChange(of: selectedCookbookID) { _, _ in
+                // A chapter picked under the old cookbook won't exist in
+                // the new one — drop it rather than silently filing the
+                // recipe under a chapter that isn't actually shown.
+                selectedChapterID = nil
+            }
             .navigationTitle(navigationTitle)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -460,16 +503,21 @@ struct CreateEditRecipeView: View {
                         .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                 )
 
-                Button {
-                    Task { await performImport() }
-                } label: {
-                    if isImporting {
-                        ProgressView()
-                    } else {
-                        Label("Import", systemImage: "sparkles")
+                HStack {
+                    Spacer()
+                    Button {
+                        Task { await performImport() }
+                    } label: {
+                        if isImporting {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Label("Import", systemImage: "sparkles")
+                        }
                     }
+                    .buttonStyle(PushableButtonStyle())
+                    .disabled(importText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImporting)
                 }
-                .disabled(importText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImporting)
 
                 if let importErrorMessage {
                     Text(importErrorMessage)
@@ -583,6 +631,54 @@ struct CreateEditRecipeView: View {
         }
     }
 
+    // MARK: - Inspiration credit
+
+    @ViewBuilder
+    private var inspirationCreditSection: some View {
+        if let editingRecipe, let inspirationCredit = editingRecipe.inspirationCredit {
+            Section("Inspiration Credit") {
+                Text(inspirationCredit)
+                    .foregroundStyle(.secondary)
+            }
+        } else if canOfferInspirationCredit {
+            Section {
+                Toggle("Give Credit for Inspiration", isOn: $isAddingInspirationCredit.animation())
+                if isAddingInspirationCredit {
+                    TextField("Name", text: $inspirationCreditName)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.words)
+                        #endif
+                    LocationFieldsView(
+                        city: $inspirationCreditCity,
+                        isUS: $inspirationCreditIsUS,
+                        stateCode: $inspirationCreditStateCode,
+                        country: $inspirationCreditCountry
+                    )
+                }
+            } footer: {
+                Text("Credit someone else's recipe or idea as inspiration for this one — separate from your own name as the recipe's author. This can only be set once, so make sure it's right before saving.")
+            }
+        }
+    }
+
+    /// nil when "Give Credit for Inspiration" wasn't turned on, or was
+    /// turned on but left with no name — in either case finishSave leaves
+    /// Recipe.inspirationCredit untouched.
+    private var draftInspirationCredit: String? {
+        guard isAddingInspirationCredit else { return nil }
+        let trimmedName = inspirationCreditName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+        let trimmedCity = inspirationCreditCity.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCity.isEmpty else { return trimmedName }
+        let location = UserLocation(
+            city: trimmedCity,
+            isUS: inspirationCreditIsUS,
+            stateCode: inspirationCreditIsUS ? (inspirationCreditStateCode.isEmpty ? nil : inspirationCreditStateCode) : nil,
+            country: inspirationCreditIsUS ? nil : inspirationCreditCountry.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        return "\(trimmedName) of \(location.formatted)"
+    }
+
     private enum TagChipStyle {
         case selected
         case suggestion
@@ -653,9 +749,73 @@ struct CreateEditRecipeView: View {
     }
     #endif
 
+    private var videosSection: some View {
+        Section {
+            ForEach(videoURLs, id: \.self) { url in
+                Text(url)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .onDelete { offsets in
+                videoURLs.remove(atOffsets: offsets)
+            }
+
+            if videoURLs.count < Self.maxVideoURLs {
+                HStack {
+                    TextField("Paste a YouTube video link", text: $newVideoURLText)
+                        #if os(iOS)
+                        .keyboardType(.URL)
+                        #endif
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onSubmit(addVideoURL)
+                    Button("Add", action: addVideoURL)
+                        .disabled(newVideoURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            if let videoURLErrorMessage {
+                Text(videoURLErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("Videos")
+        } footer: {
+            Text("Up to \(Self.maxVideoURLs) YouTube links — playable from Cooking Mode.")
+        }
+    }
+
+    private func addVideoURL() {
+        let trimmed = newVideoURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard YouTubeURL.isValidYouTubeURL(trimmed) else {
+            videoURLErrorMessage = "That doesn't look like a YouTube link."
+            return
+        }
+        videoURLErrorMessage = nil
+        videoURLs.append(trimmed)
+        newVideoURLText = ""
+    }
+
     private var isEditing: Bool {
         if case .edit = mode { return true }
         return false
+    }
+
+    private var editingRecipe: Recipe? {
+        if case .edit(let recipe) = mode { return recipe }
+        return nil
+    }
+
+    /// The "Give Credit for Inspiration" option only makes sense once (the
+    /// recipe already exists, so this is edit-only) and only when nothing
+    /// already occupies that credit: a recipe whose authorLineage came
+    /// from an external source (Discover download, or a paste-import's
+    /// own "By:" line) already has its credit, and inspirationCredit
+    /// itself is immutable once set — see Recipe.swift's field comments.
+    private var canOfferInspirationCredit: Bool {
+        guard let editingRecipe else { return false }
+        return !editingRecipe.authorLineageIsExternal && editingRecipe.inspirationCredit == nil
     }
 
     private var navigationTitle: String {
@@ -666,16 +826,38 @@ struct CreateEditRecipeView: View {
         }
     }
 
-    private var activeCookbook: Cookbook? {
-        allCookbooks.first { $0.id == activeCookbookState.activeCookbookID }
+    private var ownedCookbooks: [Cookbook] {
+        allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
+    }
+
+    /// In `.create` mode this is whatever the "Cookbook" picker has
+    /// selected (defaulting to the app's active cookbook until the user
+    /// changes it); every other mode keeps the old behavior of always
+    /// following the active cookbook.
+    private var effectiveCookbookID: UUID? {
+        if case .create = mode {
+            return selectedCookbookID ?? activeCookbookState.activeCookbookID
+        }
+        return activeCookbookState.activeCookbookID
+    }
+
+    private var effectiveCookbook: Cookbook? {
+        ownedCookbooks.first { $0.id == effectiveCookbookID }
+    }
+
+    private var cookbookSelectionBinding: Binding<UUID?> {
+        Binding(
+            get: { effectiveCookbookID },
+            set: { selectedCookbookID = $0 }
+        )
     }
 
     /// Matches an AI-parsed chapter name (from an import's "Section:"
-    /// label) against the active cookbook's existing chapters — never
+    /// label) against the target cookbook's existing chapters — never
     /// creates a new one, per the "leave it blank rather than guess" rule
     /// for anything that can't be confidently resolved.
     private func matchingChapter(named chapterName: String) -> CookbookSection? {
-        activeCookbook?.sections.first {
+        effectiveCookbook?.sections.first {
             $0.title.caseInsensitiveCompare(chapterName) == .orderedSame
         }
     }
@@ -728,8 +910,13 @@ struct CreateEditRecipeView: View {
         switch mode {
         case .create:
             recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .manual)
-            recipe.cookbookID = activeCookbookState.activeCookbookID
+            recipe.cookbookID = effectiveCookbookID
             recipe.authorLineage = authorLineage
+            // True only when the paste-import's AI parsing actually pulled
+            // a "By:" line out of the pasted text — anything else here
+            // (self-entered display name, the author prompt, Anonymous) is
+            // the owner's own self-attribution, not an external source.
+            recipe.authorLineageIsExternal = importedAuthorLineage != nil
             modelContext.insert(recipe)
         case .edit(let existing):
             recipe = existing
@@ -740,10 +927,18 @@ struct CreateEditRecipeView: View {
             for section in recipe.stepSections {
                 modelContext.delete(section)
             }
+            // Immutable once set — only ever assigned when it's still nil,
+            // never overwritten on a later edit.
+            if recipe.inspirationCredit == nil, let draftInspirationCredit {
+                recipe.inspirationCredit = draftInspirationCredit
+            }
         case .importing(let discovered):
             recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .webImport)
             recipe.cookbookID = activeCookbookState.activeCookbookID
             recipe.authorLineage = authorLineage
+            // A Discover download is always an external source, regardless
+            // of exactly how authorLineage itself got resolved.
+            recipe.authorLineageIsExternal = true
             recipe.sourceURL = discovered.sourceURL
             recipe.sourceAuthorText = discovered.attributionText
             recipe.externalSource = discovered.source.rawValue
@@ -767,6 +962,7 @@ struct CreateEditRecipeView: View {
         recipe.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         recipe.sectionID = selectedChapterID
         recipe.tags = tags
+        recipe.videoURLs = videoURLs
         recipe.updatedAt = .now
 
         if let ingredientSection = Self.buildIngredientSection(from: ingredientRows) {

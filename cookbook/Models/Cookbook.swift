@@ -21,6 +21,12 @@ final class Cookbook {
     /// Hex string (no leading #) — round-trips simply, converted to a
     /// SwiftUI Color via Color(hex:) at display time.
     var coverColorHex: String
+    /// A bundled, pre-made design (CookbookCoverStyleCatalog) the user
+    /// picked instead of a plain color — nil means none chosen. Optional
+    /// with an inline nil default, same reasoning as chaptersManuallyReordered's
+    /// comment below: SwiftData migration needs the literal default on
+    /// the property itself.
+    var coverStyleImageName: String? = nil
     var coverImageFilename: String?
 
     /// Ordering across a user's multiple cookbooks.
@@ -67,6 +73,7 @@ final class Cookbook {
         self.ownerID = ownerID
         self.title = title
         self.coverColorHex = coverColorHex
+        self.coverStyleImageName = nil
         self.coverImageFilename = nil
         self.sortOrder = sortOrder
         self.createdAt = .now

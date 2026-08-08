@@ -41,7 +41,6 @@ struct SignInView: View {
     @State private var errorMessage: String?
     @State private var currentAppleNonce: String?
 
-    private let entitlementGranter: EntitlementGranting = FirestoreEntitlementGranter()
     private let lookupService: EmailProviderLookupServicing = FirebaseEmailProviderLookupService()
 
     /// Google's brand wordmark colors, per letter — "Sign in with Google"
@@ -179,7 +178,7 @@ struct SignInView: View {
             let result = isSignUp
                 ? try await accountState.signUp(email: email, password: password, displayName: fullName)
                 : try await accountState.signIn(email: email, password: password)
-            accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(result, modelContext: modelContext, entitlementGranter: entitlementGranter)
+            PostSignInCoordinator.handle(result, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: email, context: isSignUp ? .signUp : .signIn)
@@ -230,7 +229,7 @@ struct SignInView: View {
                     try? await accountState.updateDisplayName(name)
                 }
             }
-            accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
+            PostSignInCoordinator.handle(authResult, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
@@ -256,7 +255,7 @@ struct SignInView: View {
             if authResult.isNewAccount, let name = signInResult.user.profile?.name, !name.isEmpty {
                 try? await accountState.updateDisplayName(name)
             }
-            accountState.pendingFamilyUserPromoOffer = await PostSignInCoordinator.handle(authResult, modelContext: modelContext, entitlementGranter: entitlementGranter)
+            PostSignInCoordinator.handle(authResult, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)

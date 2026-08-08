@@ -17,7 +17,6 @@ struct AccountView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingSignIn = false
     @State private var isPresentingMembership = false
-    @State private var isPresentingAdministrator = false
     @State private var isPresentingDeleteConfirmation = false
     @State private var isDeletingAccount = false
     @State private var signOutErrorMessage: String?
@@ -32,6 +31,7 @@ struct AccountView: View {
     @State private var savedLocation: UserLocation?
     @State private var isSavingLocation = false
     @State private var saveLocationErrorMessage: String?
+    @State private var entitlement: Entitlement?
 
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
@@ -45,11 +45,15 @@ struct AccountView: View {
                 if accountState.isSignedIn {
                     Section("Account") {
                         LabeledContent("Signed in", value: accountState.currentUserEmail ?? accountState.currentUserID ?? "")
-                        TextField("Full Name", text: $fullNameDraft)
-                            #if os(iOS)
-                            .textInputAutocapitalization(.words)
-                            #endif
-                            .onSubmit { Task { await saveFullName() } }
+                        LabeledContent("Name") {
+                            TextField("Full Name", text: $fullNameDraft)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                                #if os(iOS)
+                                .textInputAutocapitalization(.words)
+                                #endif
+                                .onSubmit { Task { await saveFullName() } }
+                        }
                         if fullNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != (accountState.currentUserDisplayName ?? "") {
                             Button("Save Name") {
                                 Task { await saveFullName() }
@@ -62,6 +66,7 @@ struct AccountView: View {
                         Button("Sign Out", role: .destructive) {
                             signOut()
                         }
+                        .buttonStyle(.borderedProminent)
                     }
 
                     Section {
@@ -75,6 +80,8 @@ struct AccountView: View {
                             Button("Save Location") {
                                 Task { await saveLocation() }
                             }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.potluckTomato)
                             .disabled(isSavingLocation || locationCity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                         if let saveLocationErrorMessage {
@@ -87,17 +94,12 @@ struct AccountView: View {
                     }
 
                     Section("Membership") {
-                        Button("View Membership & Credits") {
+                        LabeledContent("Pro User", value: (entitlement?.isProUser ?? false) ? "Yes" : "No")
+                        LabeledContent("Pro User Credits", value: "\(entitlement?.tier1Credits ?? 0)")
+                        LabeledContent("Family Cookbook Credits", value: "\(entitlement?.tier2Credits ?? 0)")
+                        Button("Purchases") {
                             isPresentingMembership = true
                         }
-                    }
-
-                    Section {
-                        Button("Administrator") {
-                            isPresentingAdministrator = true
-                        }
-                    } footer: {
-                        Text("Data tools, including bulk recipe import from a file.")
                     }
 
                     Section {
@@ -160,29 +162,49 @@ struct AccountView: View {
                     Task { await deleteAccount() }
                 }
             }
-            .sheet(isPresented: $isPresentingAdministrator) {
-                AdministratorView()
-            }
-            .onChange(of: accountState.pendingFamilyUserPromoOffer) { _, isPending in
-                guard isPending else { return }
-                isPresentingMembership = true
-                accountState.pendingFamilyUserPromoOffer = false
-            }
             .task(id: accountState.currentUserID) {
                 fullNameDraft = accountState.currentUserDisplayName ?? ""
                 await loadLocation()
+                await loadEntitlement()
+            }
+            .onChange(of: isPresentingMembership) { wasPresenting, isPresenting in
+                // The paywall sheet is where credits actually get spent —
+                // refresh so this screen's own summary doesn't go stale.
+                if wasPresenting, !isPresenting {
+                    Task { await loadEntitlement() }
+                }
             }
         }
     }
 
-    private var locationHasUnsavedChanges: Bool {
-        let draft = UserLocation(
+    private func loadEntitlement() async {
+        guard let userID = accountState.currentUserID else { return }
+        entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+    }
+
+    /// The single source of truth for "what would saving right now write" —
+    /// used by both locationHasUnsavedChanges and saveLocation() so they
+    /// can never drift apart. They used to build this independently, and
+    /// did diverge: this version trims+nils out an empty stateCode/country,
+    /// but locationHasUnsavedChanges's old copy left stateCode as a raw
+    /// (untrimmed, non-nil'd) empty string. For a US location with no
+    /// state selected, that meant the just-saved value (stateCode: nil)
+    /// never compared equal to the freshly-rebuilt draft (stateCode: ""),
+    /// so "Save Location" never disappeared and reappeared on every
+    /// reopen — reading as "my location never actually saved" even though
+    /// it had.
+    private var currentDraftLocation: UserLocation {
+        let trimmedCountry = locationCountry.trimmingCharacters(in: .whitespacesAndNewlines)
+        return UserLocation(
             city: locationCity.trimmingCharacters(in: .whitespacesAndNewlines),
             isUS: locationIsUS,
-            stateCode: locationIsUS ? locationStateCode : nil,
-            country: locationIsUS ? nil : locationCountry.trimmingCharacters(in: .whitespacesAndNewlines)
+            stateCode: locationIsUS ? (locationStateCode.isEmpty ? nil : locationStateCode) : nil,
+            country: locationIsUS ? nil : (trimmedCountry.isEmpty ? nil : trimmedCountry)
         )
-        return draft != (savedLocation ?? UserLocation(city: "", isUS: true, stateCode: nil, country: nil))
+    }
+
+    private var locationHasUnsavedChanges: Bool {
+        currentDraftLocation != (savedLocation ?? UserLocation(city: "", isUS: true, stateCode: nil, country: nil))
     }
 
     private func loadLocation() async {
@@ -197,17 +219,11 @@ struct AccountView: View {
 
     private func saveLocation() async {
         guard let userID = accountState.currentUserID else { return }
-        let trimmedCity = locationCity.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedCity.isEmpty else { return }
+        let location = currentDraftLocation
+        guard !location.city.isEmpty else { return }
         isSavingLocation = true
         saveLocationErrorMessage = nil
         defer { isSavingLocation = false }
-        let location = UserLocation(
-            city: trimmedCity,
-            isUS: locationIsUS,
-            stateCode: locationIsUS ? (locationStateCode.isEmpty ? nil : locationStateCode) : nil,
-            country: locationIsUS ? nil : locationCountry.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
         do {
             try await userProfileService.setLocation(location, userID: userID)
             savedLocation = location

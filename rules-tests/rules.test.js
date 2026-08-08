@@ -57,31 +57,35 @@ function groupData(overrides = {}) {
     allowsMemberInvites: false,
     allowsMemberPublishing: true,
     autoApproveJoinRequests: false,
+    isMFB: false,
     ...overrides,
   };
 }
 
+// Shape granted by the one-time free-launch-credit create — both tiers
+// received together (see EntitlementGranting.swift / entitlements/create).
 function entitlementData(overrides = {}) {
   return {
     userID: 'alice',
-    creationCredits: 3,
-    hasFamilyUser: false,
-    familyUserPromoCreditAvailable: true,
-    grantedPromoCredits: true,
+    tier1Credits: 1,
+    tier2Credits: 2,
+    isProUser: false,
+    receivedTier1PromoCredit: true,
+    receivedTier2PromoCredits: true,
     createdAt: Timestamp.now(),
     ...overrides,
   };
 }
 
 describe('entitlements', () => {
-  it('allows the exact promo grant shape for your own uid', async () => {
+  it('allows the exact free-launch-credit grant shape for your own uid', async () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData()));
   });
 
   it('rejects granting yourself more than the promo amount', async () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 100 })));
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 100 })));
   });
 
   it('rejects granting credits to someone else', async () => {
@@ -89,62 +93,113 @@ describe('entitlements', () => {
     await assertFails(setDoc(doc(alice, 'entitlements/bob'), entitlementData({ userID: 'bob' })));
   });
 
-  it('allows spending exactly one credit', async () => {
+  it('allows spending exactly one tier-2 credit', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 2 })));
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
   });
 
-  it('rejects granting yourself extra credits via update', async () => {
+  it('rejects granting yourself extra tier-2 credits via update', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 10 })));
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 10 })));
   });
 
-  it('rejects granting yourself hasFamilyUser via update', async () => {
+  it('rejects granting yourself isProUser via a tier-2 spend update', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 2, hasFamilyUser: true })));
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 1, isProUser: true })));
   });
 
-  it('allows redeeming the free Family User promo credit', async () => {
+  it('allows spending a tier-1 credit to become Pro User', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
-      hasFamilyUser: true,
-      familyUserPromoCreditAvailable: false,
+      tier1Credits: 0,
+      isProUser: true,
     })));
   });
 
-  it('rejects redeeming the promo credit a second time', async () => {
-    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({
-      hasFamilyUser: true,
-      familyUserPromoCreditAvailable: false,
-    })));
-    const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
-      hasFamilyUser: true,
-      familyUserPromoCreditAvailable: false,
-    })));
-  });
-
-  it('rejects redeeming the promo credit while also touching creationCredits', async () => {
+  it('rejects becoming Pro User without spending a tier-1 credit', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
-      hasFamilyUser: true,
-      familyUserPromoCreditAvailable: false,
-      creationCredits: 2,
+      isProUser: true,
     })));
+  });
+
+  it('rejects spending a tier-1 credit while also touching tier2Credits', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      tier1Credits: 0,
+      isProUser: true,
+      tier2Credits: 1,
+    })));
+  });
+
+  it('rejects spending a tier-1 credit you no longer have', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier1Credits: 0 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      tier1Credits: -1,
+      isProUser: true,
+    })));
+  });
+
+  it('allows backfilling a missing tier-1 credit on a doc that already has tier-2', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), {
+      userID: 'alice', tier1Credits: 0, tier2Credits: 2, isProUser: false,
+      receivedTier1PromoCredit: false, receivedTier2PromoCredits: true, createdAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      tier1Credits: 1,
+      tier2Credits: 2,
+      receivedTier1PromoCredit: true,
+      receivedTier2PromoCredits: true,
+    })));
+  });
+
+  it('allows backfilling a genuinely legacy doc missing the new fields entirely', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), {
+      userID: 'alice', creationCredits: 3, hasFamilyUser: false,
+      familyUserPromoCreditAvailable: true, grantedPromoCredits: true, createdAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), {
+      userID: 'alice', creationCredits: 3, hasFamilyUser: false,
+      familyUserPromoCreditAvailable: true, grantedPromoCredits: true, createdAt: Timestamp.now(),
+      tier1Credits: 1, tier2Credits: 2,
+      receivedTier1PromoCredit: true, receivedTier2PromoCredits: true,
+    }, { merge: true }));
+  });
+
+  it('rejects a backfill that grants the wrong amount', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), {
+      userID: 'alice', tier1Credits: 0, tier2Credits: 0, isProUser: false,
+      receivedTier1PromoCredit: false, receivedTier2PromoCredits: false, createdAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      tier1Credits: 5,
+      tier2Credits: 2,
+    })));
+  });
+
+  it('rejects a no-op update pretending to be a backfill', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData()));
   });
 });
 
 describe('group creation', () => {
   it('succeeds when paired with a matching entitlement decrement and uniqueness-key claim in one batch', async () => {
-    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 1 })));
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
     const alice = testEnv.authenticatedContext('alice').firestore();
     const batch = writeBatch(alice);
-    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 0 }));
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
     batch.set(doc(alice, 'groups/group1'), groupData());
     batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
     batch.set(doc(alice, 'memberships/group1_alice'), {
@@ -155,10 +210,10 @@ describe('group creation', () => {
   });
 
   it('rejects creating a group without a matching uniqueness-key claim in the same batch', async () => {
-    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 1 })));
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
     const alice = testEnv.authenticatedContext('alice').firestore();
     const batch = writeBatch(alice);
-    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 0 }));
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
     batch.set(doc(alice, 'groups/group1'), groupData());
     // No groupUniquenessKeys write this time — even with a correct credit
     // decrement, the create rule's second getAfter() check should reject it.
@@ -167,12 +222,12 @@ describe('group creation', () => {
 
   it('rejects claiming a Cookbook Name + Family Name + Location combination that is already taken', async () => {
     await seed(async (db) => {
-      await setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 5 }));
+      await setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 5 }));
       await setDoc(doc(db, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group0', createdAt: Timestamp.now() });
     });
     const alice = testEnv.authenticatedContext('alice').firestore();
     const batch = writeBatch(alice);
-    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 4 }));
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 4 }));
     batch.set(doc(alice, 'groups/group1'), groupData());
     batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
     // The reservation doc already exists (from "group0"), so this write is
@@ -181,26 +236,36 @@ describe('group creation', () => {
   });
 
   it('rejects creating a group without spending a credit', async () => {
-    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 1 })));
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertFails(setDoc(doc(alice, 'groups/group1'), groupData()));
   });
 
   it('rejects creating a group with no credits available', async () => {
-    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 0 })));
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 0 })));
     const alice = testEnv.authenticatedContext('alice').firestore();
     const batch = writeBatch(alice);
-    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: -1 }));
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: -1 }));
     batch.set(doc(alice, 'groups/group1'), groupData());
     await assertFails(batch.commit());
   });
 
   it("rejects creating a group on someone else's behalf", async () => {
-    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ creationCredits: 1 })));
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
     const alice = testEnv.authenticatedContext('alice').firestore();
     const batch = writeBatch(alice);
-    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ creationCredits: 0 }));
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
     batch.set(doc(alice, 'groups/group1'), groupData({ createdByUserID: 'bob' }));
+    await assertFails(batch.commit());
+  });
+
+  it('rejects a client setting isMFB true on a new group', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
+    batch.set(doc(alice, 'groups/group1'), groupData({ isMFB: true }));
+    batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
     await assertFails(batch.commit());
   });
 });
@@ -254,8 +319,11 @@ describe('memberships', () => {
     await assertFails(getDoc(doc(mallory, 'memberships/group1_alice')));
   });
 
-  it('a user can self-create a member membership when the group auto-approves', async () => {
-    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true })));
+  it('a Pro User can self-create a member membership when the group auto-approves', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true }));
+      await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
+    });
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertSucceeds(setDoc(doc(bob, 'memberships/group1_bob'), {
       id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
@@ -263,8 +331,29 @@ describe('memberships', () => {
     }));
   });
 
+  it('a non-Pro user can self-create a member membership on the MFB cookbook even without credits', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true, isMFB: true })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'active', source: 'auto', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('a non-Pro user cannot self-create a membership on a non-MFB auto-approve group without a Pro credit', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'active', source: 'auto', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
   it('a user cannot self-create a membership via the auto path when the group does not auto-approve', async () => {
-    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: false })));
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: false }));
+      await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
+    });
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertFails(setDoc(doc(bob, 'memberships/group1_bob'), {
       id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
@@ -273,11 +362,23 @@ describe('memberships', () => {
   });
 
   it('a user cannot self-grant admin via the auto-approve path even when the group allows it', async () => {
-    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true })));
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true }));
+      await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
+    });
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertFails(setDoc(doc(bob, 'memberships/group1_bob'), {
       id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
       status: 'active', source: 'auto', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('the founding admin membership needs no Pro User status — they already paid a tier-2 credit', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ createdByUserID: 'alice' })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'memberships/group1_alice'), {
+      id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+      status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
     }));
   });
 });
@@ -325,13 +426,42 @@ describe('publications', () => {
 
 describe('join requests', () => {
   it('an active member cannot request to join the same group again', async () => {
-    await seed((db) => setDoc(doc(db, 'memberships/group1_bob'), {
-      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
-      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
-    }));
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
+    });
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertFails(setDoc(doc(bob, 'joinRequests/req1'), {
       id: 'req1', groupID: 'group1', requesterID: 'bob', note: null,
+      state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+    }));
+  });
+
+  it('a Pro User can file a join request', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 })));
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertSucceeds(setDoc(doc(carol, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+    }));
+  });
+
+  it('a non-Pro user cannot file a join request against a non-MFB group without a Pro credit', async () => {
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertFails(setDoc(doc(carol, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+    }));
+  });
+
+  it('a non-Pro user can file a join request against the MFB cookbook', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ isMFB: true })));
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertSucceeds(setDoc(doc(carol, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
       state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
     }));
   });

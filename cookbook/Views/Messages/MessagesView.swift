@@ -24,6 +24,10 @@ struct MessagesView: View {
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let messagingService: MessagingServicing = FirestoreMessagingService()
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
+    private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
+    private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
+    @State private var gate = EntitlementGateCoordinator()
 
     var body: some View {
         NavigationStack {
@@ -85,6 +89,13 @@ struct MessagesView: View {
                 await load()
             }
         }
+        .entitlementGate(
+            gate,
+            userID: accountState.currentUserID ?? "",
+            entitlementService: entitlementService,
+            purchaseService: purchaseService,
+            claimWriter: claimWriter
+        )
     }
 
     private var isEverythingEmpty: Bool {
@@ -132,10 +143,10 @@ struct MessagesView: View {
                 .foregroundStyle(.secondary)
             HStack {
                 Button("Accept") {
-                    Task { await respond(entry.invitation, accept: true) }
+                    Task { await respond(entry.invitation, group: entry.group, accept: true) }
                 }
                 Button("Decline", role: .destructive) {
-                    Task { await respond(entry.invitation, accept: false) }
+                    Task { await respond(entry.invitation, group: entry.group, accept: false) }
                 }
             }
             .disabled(busyIDs.contains(entry.invitation.id))
@@ -197,15 +208,29 @@ struct MessagesView: View {
         }
     }
 
-    private func respond(_ invitation: Invitation, accept: Bool) async {
+    private func respond(_ invitation: Invitation, group: FamilyGroup, accept: Bool) async {
         guard let userID = accountState.currentUserID else { return }
         busyIDs.insert(invitation.id)
         defer { busyIDs.remove(invitation.id) }
-        do {
-            try await groupsService.respondToInvitation(invitation.id, accept: accept, respondingUserID: userID)
-            await load()
-        } catch {
-            errorMessage = error.localizedDescription
+
+        guard accept else {
+            do {
+                try await groupsService.respondToInvitation(invitation.id, accept: false, respondingUserID: userID)
+                await load()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            return
+        }
+
+        let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+        await gate.attempt(.groupJoin, outcome: EntitlementGate.forGroupJoin(entitlement, group: group)) {
+            do {
+                try await groupsService.respondToInvitation(invitation.id, accept: true, respondingUserID: userID)
+                await load()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

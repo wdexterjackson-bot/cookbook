@@ -65,4 +65,42 @@ final class FirestorePublicationsService: PublicationsServicing {
     func fetchPublication(id: String) async throws -> Publication? {
         try await db.collection("publications").document(id).getDocument().data(as: Publication?.self)
     }
+
+    func hasLiked(_ publicationID: String, userID: String) async throws -> Bool {
+        let doc = try await db.collection("publications").document(publicationID)
+            .collection("likes").document(userID).getDocument()
+        return doc.exists
+    }
+
+    @discardableResult
+    func setLiked(_ publicationID: String, userID: String, liked: Bool) async throws -> Int {
+        let publicationRef = db.collection("publications").document(publicationID)
+        let likeRef = publicationRef.collection("likes").document(userID)
+
+        let result: Any = try await db.runTransaction { transaction, errorPointer -> Any? in
+            do {
+                let publicationSnapshot = try transaction.getDocument(publicationRef)
+                let currentCount = publicationSnapshot.data()?["likeCount"] as? Int ?? 0
+                let alreadyLiked = try transaction.getDocument(likeRef).exists
+
+                if liked, !alreadyLiked {
+                    let newCount = currentCount + 1
+                    transaction.setData(["userID": userID, "likedAt": FieldValue.serverTimestamp()], forDocument: likeRef)
+                    transaction.updateData(["likeCount": newCount], forDocument: publicationRef)
+                    return newCount
+                } else if !liked, alreadyLiked {
+                    let newCount = max(0, currentCount - 1)
+                    transaction.deleteDocument(likeRef)
+                    transaction.updateData(["likeCount": newCount], forDocument: publicationRef)
+                    return newCount
+                }
+                return currentCount
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+        }
+
+        return (result as? Int) ?? 0
+    }
 }

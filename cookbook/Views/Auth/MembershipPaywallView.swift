@@ -2,12 +2,13 @@
 //  MembershipPaywallView.swift
 //  cookbook
 //
-//  Milestone 2D — reachable from AccountView. Shows current entitlement
-//  status (Family User, remaining creation credits, an unredeemed promo
-//  credit if any) and lets the user buy/restore, or redeem their free
-//  promo credit in place of buying. A successful StoreKit purchase writes
-//  a purchaseClaims doc (PurchaseClaimSubmitting) rather than the
-//  entitlement itself — see PurchaseServicing.swift for why.
+//  Reachable from AccountView, and presented directly by EntitlementGate
+//  whenever a create/join action has no credit left to spend. Shows current
+//  entitlement status (Pro User, remaining tier-1/tier-2 credits) and lets
+//  the user buy/restore, or redeem a tier-1 credit toward Pro User in place
+//  of buying. A successful StoreKit purchase writes a purchaseClaims doc
+//  (PurchaseClaimSubmitting) rather than the entitlement itself — see
+//  PurchaseServicing.swift for why.
 //
 
 import SwiftUI
@@ -29,16 +30,17 @@ struct MembershipPaywallView: View {
         NavigationStack {
             Form {
                 Section("Your Membership") {
-                    LabeledContent("Family User", value: (entitlement?.hasFamilyUser ?? false) ? "Yes" : "No")
-                    LabeledContent("Family Creation Credits", value: "\(entitlement?.creationCredits ?? 0)")
+                    LabeledContent("Pro User", value: (entitlement?.isProUser ?? false) ? "Yes" : "No")
+                    LabeledContent("Pro User Credits", value: "\(entitlement?.tier1Credits ?? 0)")
+                    LabeledContent("Family Cookbook Credits", value: "\(entitlement?.tier2Credits ?? 0)")
                 }
 
-                if entitlement?.familyUserPromoCreditAvailable == true {
+                if (entitlement?.tier1Credits ?? 0) > 0, entitlement?.isProUser != true {
                     Section("Free Credit Available") {
-                        Text("You have a free Family User credit from signing up early. It never expires and isn't transferable to another account.")
+                        Text("You have a Pro User credit available — redeem it to join and connect with unlimited family/friends' cookbooks, instead of buying.")
                             .foregroundStyle(.secondary)
-                        Button("Redeem Free Credit") {
-                            Task { await redeemPromoCredit() }
+                        Button("Redeem Credit for Pro User") {
+                            Task { await redeemTier1Credit() }
                         }
                         .disabled(isBusy)
                     }
@@ -91,15 +93,15 @@ struct MembershipPaywallView: View {
         products = await productsFetch
     }
 
-    private func redeemPromoCredit() async {
+    private func redeemTier1Credit() async {
         isBusy = true
         errorMessage = nil
         statusMessage = nil
         defer { isBusy = false }
         do {
-            let redeemed = try await entitlementService.redeemFamilyUserPromoCredit(userID: userID)
+            let redeemed = try await entitlementService.redeemTier1CreditForProUser(userID: userID)
             if redeemed {
-                statusMessage = "You're now a Family User."
+                statusMessage = "You're now a Pro User."
             } else {
                 errorMessage = "That credit isn't available anymore."
             }
@@ -149,13 +151,13 @@ struct MembershipPaywallView: View {
 #Preview {
     let purchaseService = FakePurchaseService()
     purchaseService.stubbedProducts = [
-        PurchasableProduct(id: StoreProductID.familyUserLifetime, displayName: "Family User", description: "", displayPrice: "$0.99", kind: .nonConsumable),
-        PurchasableProduct(id: StoreProductID.groupCreationCredit, displayName: "Create a Family", description: "", displayPrice: "$1.99", kind: .consumable),
+        PurchasableProduct(id: StoreProductID.proUserLifetime, displayName: "Pro User", description: "", displayPrice: "$0.99", kind: .nonConsumable),
+        PurchasableProduct(id: StoreProductID.familyCookbookCredit, displayName: "Create a Family Cookbook", description: "", displayPrice: "$1.99", kind: .consumable),
     ]
     let entitlementService = InMemoryEntitlementService()
     entitlementService.entitlementsByUserID["preview-user"] = Entitlement(
-        userID: "preview-user", creationCredits: 3, hasFamilyUser: false,
-        familyUserPromoCreditAvailable: true, grantedPromoCredits: true, createdAt: .now
+        userID: "preview-user", tier1Credits: 1, tier2Credits: 2, isProUser: false,
+        receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now
     )
     return MembershipPaywallView(
         userID: "preview-user",

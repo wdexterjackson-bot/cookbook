@@ -78,7 +78,7 @@ struct AccountDeletionCoordinatorTests {
     @Test func leavesNonBlockingGroupMemberships() async throws {
         let context = try makeInMemoryContext()
         let groups = InMemoryGroupsService()
-        groups.creditsByUserID["alice"] = 1
+        groups.tier2CreditsByUserID["alice"] = 1
         let group = try await groups.createGroup(makeDetails(name: "Barrentines", cookbookName: "Reunion"), creatorUserID: "alice", idempotencyKey: "req-1")
         let joinRequest = try await groups.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await groups.decideJoinRequest(joinRequest.id, approve: true, decidedByUserID: "alice")
@@ -102,7 +102,7 @@ struct AccountDeletionCoordinatorTests {
         try context.save()
 
         let groups = InMemoryGroupsService()
-        groups.creditsByUserID["alice"] = 1
+        groups.tier2CreditsByUserID["alice"] = 1
         let group = try await groups.createGroup(makeDetails(name: "Barrentines", cookbookName: "Reunion"), creatorUserID: "alice", idempotencyKey: "req-1")
         let joinRequest = try await groups.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await groups.decideJoinRequest(joinRequest.id, approve: true, decidedByUserID: "alice")
@@ -129,7 +129,7 @@ struct AccountDeletionCoordinatorTests {
     @Test func deletesTheGroupWhenTheSoleAdminIsTheOnlyMember() async throws {
         let context = try makeInMemoryContext()
         let groups = InMemoryGroupsService()
-        groups.creditsByUserID["alice"] = 1
+        groups.tier2CreditsByUserID["alice"] = 1
         let group = try await groups.createGroup(makeDetails(name: "Solo", cookbookName: "Solo Cookbook"), creatorUserID: "alice", idempotencyKey: "req-1")
 
         try await AccountDeletionCoordinator.deleteAllData(
@@ -148,8 +148,8 @@ struct AccountDeletionCoordinatorTests {
         let context = try makeInMemoryContext()
         let entitlements = InMemoryEntitlementService()
         entitlements.entitlementsByUserID["alice"] = Entitlement(
-            userID: "alice", creationCredits: 3, hasFamilyUser: false,
-            familyUserPromoCreditAvailable: true, grantedPromoCredits: true, createdAt: .now
+            userID: "alice", tier1Credits: 1, tier2Credits: 2, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now
         )
 
         try await AccountDeletionCoordinator.deleteAllData(

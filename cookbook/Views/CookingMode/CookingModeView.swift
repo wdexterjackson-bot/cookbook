@@ -23,6 +23,7 @@ struct CookingModeView: View {
     @State private var keepsScreenAwake = true
     @State private var isPresentingIngredients = false
     @State private var isPresentingTimers = false
+    @State private var isPresentingVideos = false
     @State private var timerManager = CookingTimerManager()
 
     private var flattenedSteps: [(section: String?, step: Step)] {
@@ -66,6 +67,17 @@ struct CookingModeView: View {
                         Image(systemName: "timer")
                     }
                     .accessibilityLabel(timersButtonAccessibilityLabel)
+
+                    #if os(iOS)
+                    if !recipe.videoURLs.isEmpty {
+                        Button {
+                            isPresentingVideos = true
+                        } label: {
+                            Image(systemName: "play.rectangle")
+                        }
+                        .accessibilityLabel("Watch video")
+                    }
+                    #endif
                 }
             }
             .sheet(isPresented: $isPresentingIngredients) {
@@ -78,6 +90,11 @@ struct CookingModeView: View {
             .sheet(isPresented: $isPresentingTimers) {
                 CookingTimersView(manager: timerManager)
             }
+            #if os(iOS)
+            .sheet(isPresented: $isPresentingVideos) {
+                CookingModeVideoSheet(videoURLs: recipe.videoURLs)
+            }
+            #endif
         }
         #if os(iOS)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = keepsScreenAwake }
@@ -222,6 +239,77 @@ struct CookingModeView: View {
         }
     }
 }
+
+#if os(iOS)
+/// A video, plus which-of-up-to-3 picker when there's more than one.
+/// Playback only ever starts once the user has explicitly tapped "Watch
+/// Video" to get here — never inline/automatic in the main step flow.
+private struct CookingModeVideoSheet: View {
+    /// Two kitchen-scene designs to pick from, each bundled with an
+    /// idiom-specific image (iPhone/iPad/Apple TV — see
+    /// CookingModeBackground01/06.imageset) so Image(_:) automatically
+    /// resolves the right size/orientation for whatever device this is
+    /// actually running on, no manual UIDevice/idiom branching needed.
+    private static let backgroundImageNames = ["CookingModeBackground01", "CookingModeBackground06"]
+
+    let videoURLs: [String]
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedIndex = 0
+    /// Picked once per sheet presentation (a plain @State initial value
+    /// only re-evaluates when this view's identity is freshly created,
+    /// i.e. each time the sheet opens) — not re-rolled on every body
+    /// re-render, which would otherwise flicker between the two designs.
+    @State private var backgroundImageName = Self.backgroundImageNames.randomElement() ?? Self.backgroundImageNames[0]
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                if videoURLs.count > 1 {
+                    Picker("Video", selection: $selectedIndex) {
+                        ForEach(Array(videoURLs.indices), id: \.self) { index in
+                            Text("Video \(index + 1)").tag(index)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                }
+
+                if let videoID = YouTubeURL.videoID(from: videoURLs[selectedIndex]) {
+                    YouTubePlayerView(videoID: videoID)
+                        .id(videoID)
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .potluckCardShadow()
+                        .padding(.horizontal)
+                } else {
+                    ContentUnavailableView(
+                        "Couldn't Load Video",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("This link doesn't look like a valid YouTube video anymore.")
+                    )
+                }
+
+                Spacer()
+            }
+            .padding(.top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                Image(backgroundImageName)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .ignoresSafeArea()
+            }
+            .navigationTitle("Video")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+#endif
 
 #Preview {
     let recipe = Recipe(ownerID: "preview", title: "Skillet Cornbread")

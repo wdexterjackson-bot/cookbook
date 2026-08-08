@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "25-cobalt-citrus.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -9,27 +9,29 @@ rules_version = '2';
 //   specifically so rules can check "is this user a member of this group"
 //   with a single exists()/get() — rules can't run arbitrary queries.
 // - `groups/{groupID}` create is tied, via getAfter(), to the matching
-//   entitlements/{uid} document actually losing one creationCredits in the
+//   entitlements/{uid} document actually losing one tier2Credits in the
 //   SAME transaction. This is what actually enforces "group creation costs
-//   one credit" — the entitlements update rule alone (decrement-by-1) isn't
-//   sufficient on its own, since nothing would otherwise stop a client from
-//   creating a group without touching entitlements at all.
+//   one tier-2 credit" — the entitlements update rule alone (decrement-by-1)
+//   isn't sufficient on its own, since nothing would otherwise stop a client
+//   from creating a group without touching entitlements at all.
 // - A public group's profile (groups/{id}) is readable once a member is
 //   already able to reference its id, but a group's recipe content
 //   (publications) is members-only regardless of visibility — the PRD is
 //   explicit that "public" means discoverable-with-a-profile, not
 //   "cookbook visible to non-members" (GRP-002).
-// - Client-side entitlement increases are never allowed — a promo grant is
-//   validated to an exact one-time shape at create, and updates may only
-//   decrement. Purchase-driven increases (Milestone 2D) are expected to be
-//   written server-side via the Admin SDK, which bypasses these rules
-//   entirely — the client should never be trusted to grant itself credits.
-//   The one exception is redeeming the free familyUserPromoCreditAvailable
-//   flag granted at sign-up: since that credit already lives on the user's
-//   own document (nothing external to verify, unlike a StoreKit purchase),
-//   the client may flip it to hasFamilyUser directly, but only as an exact
-//   paired transition — never independently, and never alongside a
-//   creationCredits change.
+// - Client-side entitlement increases are never allowed except two exact,
+//   narrow shapes: the one-time launch-credit grant/backfill (validated to
+//   an exact shape, gated by the promo cutoff date) and redeeming a tier-1
+//   credit into isProUser (a paired transition — the credit already lives
+//   on the user's own document, nothing external to verify, unlike a
+//   StoreKit purchase). Everything else — actual purchases (Milestone 2D)
+//   — is granted server-side via the Admin SDK, which bypasses these rules
+//   entirely; the client is never trusted to grant itself credits any other
+//   way.
+// - `isMFB` (on groups/{id}) is the one hardcoded exception to the Pro User
+//   join gate (memberships/create, joinRequests/create — see isProOrMFB).
+//   It's never client-settable, by design — see FamilyGroup.isMFB's own
+//   doc comment in the Swift model for why.
 // - Rate limiting (SAFE-002) isn't enforceable from rules alone and isn't
 //   attempted here; it needs a backend, which is a known gap for now.
 //
@@ -61,38 +63,102 @@ service cloud.firestore {
         && get(membershipPath(groupID, request.auth.uid)).data.role == 'admin';
     }
 
+    // Tolerant of an entitlement doc written before a given credit tier
+    // existed (the field is entirely absent, not just false/0) — treated
+    // the same as "not yet received" / a zero balance, so the launch-time
+    // backfill transition below can top it up correctly.
+    function hasReceivedTier1(entitlementData) {
+      return ('receivedTier1PromoCredit' in entitlementData) && entitlementData.receivedTier1PromoCredit == true;
+    }
+    function hasReceivedTier2(entitlementData) {
+      return ('receivedTier2PromoCredits' in entitlementData) && entitlementData.receivedTier2PromoCredits == true;
+    }
+    function priorTier1Credits(entitlementData) {
+      return ('tier1Credits' in entitlementData) ? entitlementData.tier1Credits : 0;
+    }
+    function priorTier2Credits(entitlementData) {
+      return ('tier2Credits' in entitlementData) ? entitlementData.tier2Credits : 0;
+    }
+
+    // The Pro User paywall's join gate: MFB is the one cookbook exempt
+    // from requiring Pro User status. isMFB is never client-settable (see
+    // groups/create and groups/update below) — it's meant to be flipped
+    // true directly in the console on the one seeded MFB document.
+    function isProOrMFB(userID, groupID) {
+      return (exists(/databases/$(database)/documents/entitlements/$(userID))
+          && get(/databases/$(database)/documents/entitlements/$(userID)).data.isProUser == true)
+        || (exists(/databases/$(database)/documents/groups/$(groupID))
+          && get(/databases/$(database)/documents/groups/$(groupID)).data.isMFB == true);
+    }
+
     match /entitlements/{userID} {
       allow read: if isSignedIn() && request.auth.uid == userID;
 
-      // The one-time sign-up promo grant (2A) — exact shape, exact amount,
-      // only before the cutoff, only for one's own document.
+      // The one-time free-launch-credit grant (both tiers together, exact
+      // shape, only before the cutoff) — used the first time this account
+      // is ever granted credits (see EntitlementGranting.swift).
       allow create: if isSignedIn() && request.auth.uid == userID
         && request.resource.data.userID == userID
-        && request.resource.data.creationCredits == 3
-        && request.resource.data.hasFamilyUser == false
-        && request.resource.data.familyUserPromoCreditAvailable == true
-        && request.resource.data.grantedPromoCredits == true
+        && request.resource.data.tier1Credits == 1
+        && request.resource.data.tier2Credits == 2
+        && request.resource.data.isProUser == false
+        && request.resource.data.receivedTier1PromoCredit == true
+        && request.resource.data.receivedTier2PromoCredits == true
         && request.time < timestamp.date(2029, 1, 1);
 
-      // Exactly two client-writable transitions, nothing else:
+      // Exactly three client-writable transitions on an existing doc,
+      // nothing else:
       allow update: if isSignedIn() && request.auth.uid == userID
         && request.resource.data.userID == resource.data.userID
-        && request.resource.data.grantedPromoCredits == resource.data.grantedPromoCredits
         && (
-          // Spending a credit (group creation) — exact decrement of 1,
-          // never below zero, hasFamilyUser/promo-flag untouched.
-          (request.resource.data.creationCredits == resource.data.creationCredits - 1
-            && request.resource.data.creationCredits >= 0
-            && request.resource.data.hasFamilyUser == resource.data.hasFamilyUser
-            && request.resource.data.familyUserPromoCreditAvailable == resource.data.familyUserPromoCreditAvailable)
+          // Spending a tier-2 credit (group/Family Cookbook creation) —
+          // exact decrement of 1, never below zero, nothing else moves.
+          (request.resource.data.tier2Credits == resource.data.tier2Credits - 1
+            && request.resource.data.tier2Credits >= 0
+            && request.resource.data.tier1Credits == resource.data.tier1Credits
+            && request.resource.data.isProUser == resource.data.isProUser
+            && request.resource.data.receivedTier1PromoCredit == resource.data.receivedTier1PromoCredit
+            && request.resource.data.receivedTier2PromoCredits == resource.data.receivedTier2PromoCredits)
           ||
-          // Redeeming the free Family User promo credit — flips both
-          // fields together, exactly once, credits untouched.
-          (resource.data.familyUserPromoCreditAvailable == true
-            && request.resource.data.familyUserPromoCreditAvailable == false
-            && resource.data.hasFamilyUser == false
-            && request.resource.data.hasFamilyUser == true
-            && request.resource.data.creationCredits == resource.data.creationCredits)
+          // Spending a tier-1 credit to become a Pro User — flips both
+          // together, exactly once, nothing else moves.
+          (resource.data.isProUser == false
+            && request.resource.data.isProUser == true
+            && request.resource.data.tier1Credits == resource.data.tier1Credits - 1
+            && request.resource.data.tier1Credits >= 0
+            && request.resource.data.tier2Credits == resource.data.tier2Credits
+            && request.resource.data.receivedTier1PromoCredit == resource.data.receivedTier1PromoCredit
+            && request.resource.data.receivedTier2PromoCredits == resource.data.receivedTier2PromoCredits)
+          ||
+          // Backfilling a free launch credit this account hasn't received
+          // yet (an entitlement doc that predates one/both tiers, possibly
+          // missing the field entirely — see hasReceivedTier1/2 above).
+          // Each tier independently either flips its received-flag to true
+          // together with the exact matching credit bump, or stays
+          // untouched; at least one of the two must actually change;
+          // isProUser never moves here.
+          (request.time < timestamp.date(2029, 1, 1)
+            && request.resource.data.isProUser == resource.data.isProUser
+            && (
+              (!hasReceivedTier1(resource.data)
+                && request.resource.data.receivedTier1PromoCredit == true
+                && request.resource.data.tier1Credits == priorTier1Credits(resource.data) + 1)
+              ||
+              (hasReceivedTier1(resource.data)
+                && request.resource.data.receivedTier1PromoCredit == true
+                && request.resource.data.tier1Credits == priorTier1Credits(resource.data))
+            )
+            && (
+              (!hasReceivedTier2(resource.data)
+                && request.resource.data.receivedTier2PromoCredits == true
+                && request.resource.data.tier2Credits == priorTier2Credits(resource.data) + 2)
+              ||
+              (hasReceivedTier2(resource.data)
+                && request.resource.data.receivedTier2PromoCredits == true
+                && request.resource.data.tier2Credits == priorTier2Credits(resource.data))
+            )
+            && (!hasReceivedTier1(resource.data) || !hasReceivedTier2(resource.data))
+          )
         );
 
       allow delete: if false;
@@ -127,8 +193,10 @@ service cloud.firestore {
         && request.auth.uid == request.resource.data.createdByUserID
         && request.resource.data.status == 'active'
         && request.resource.data.visibility in ['public', 'private']
-        && get(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.creationCredits
-           - getAfter(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.creationCredits == 1
+        // Never client-settable — see isMFB's doc comment on FamilyGroup.
+        && request.resource.data.isMFB == false
+        && get(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.tier2Credits
+           - getAfter(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.tier2Credits == 1
         // Cookbook Name + Family/Group Name + Home Location uniqueness
         // (FC milestone): a group can only be created alongside a matching
         // groupUniquenessKeys reservation doc in the same transaction —
@@ -139,7 +207,8 @@ service cloud.firestore {
 
       allow update: if isAdmin(groupID)
         && request.resource.data.createdByUserID == resource.data.createdByUserID
-        && request.resource.data.id == resource.data.id;
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.isMFB == resource.data.isMFB;
 
       allow delete: if false;
     }
@@ -157,15 +226,20 @@ service cloud.firestore {
             && request.resource.data.role == 'admin'
             && getAfter(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.createdByUserID == request.auth.uid)
           ||
-          // An admin approving someone else's join request.
+          // An admin approving someone else's join request. The requester
+          // must already be Pro (or MFB) — normally already guaranteed by
+          // joinRequests/create below, this is defense-in-depth for an
+          // admin approving a request that's gone stale since it was filed.
           (isAdmin(request.resource.data.groupID)
             && request.resource.data.source == 'request'
             && request.resource.data.role == 'member'
-            && request.auth.uid != request.resource.data.userID)
+            && request.auth.uid != request.resource.data.userID
+            && isProOrMFB(request.resource.data.userID, request.resource.data.groupID))
           ||
           // The invitee accepting their own invitation.
           (request.auth.uid == request.resource.data.userID
-            && request.resource.data.source == 'invite')
+            && request.resource.data.source == 'invite'
+            && isProOrMFB(request.resource.data.userID, request.resource.data.groupID))
           ||
           // Auto-approve: the requester joins directly as a plain member
           // when the target group has opted into instant joining (e.g. a
@@ -175,7 +249,8 @@ service cloud.firestore {
           (request.auth.uid == request.resource.data.userID
             && request.resource.data.source == 'auto'
             && request.resource.data.role == 'member'
-            && get(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.autoApproveJoinRequests == true)
+            && get(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.autoApproveJoinRequests == true
+            && isProOrMFB(request.resource.data.userID, request.resource.data.groupID))
         );
 
       allow update: if isSignedIn()
@@ -203,7 +278,8 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.auth.uid == request.resource.data.requesterID
         && request.resource.data.state == 'pending'
-        && !isMember(request.resource.data.groupID);
+        && !isMember(request.resource.data.groupID)
+        && isProOrMFB(request.resource.data.requesterID, request.resource.data.groupID);
 
       allow update: if isAdmin(resource.data.groupID)
         && resource.data.state == 'pending'
@@ -270,9 +346,32 @@ service cloud.firestore {
           (isAdmin(resource.data.groupID)
             && request.resource.data.state == 'hidden'
             && request.resource.data.content == resource.data.content)
+          ||
+          // Any member liking/unliking — state and content are pinned
+          // equal so this can only ever touch likeCount, not sneak in a
+          // content or visibility change. The exact ±1 math is trusted to
+          // the client's own transaction (PublicationsServicing.setLiked)
+          // rather than re-verified here — a "like" count isn't
+          // money/credits, so this doesn't need the same getAfter()-paired
+          // rigor as entitlements/groups.
+          (isMember(resource.data.groupID)
+            && request.resource.data.state == resource.data.state
+            && request.resource.data.content == resource.data.content)
         );
 
       allow delete: if false;
+    }
+
+    // One doc per user who's liked a publication — existence is the
+    // signal (not a count), so PublicationsServicing.hasLiked/setLiked can
+    // tell "have I already liked this" without scanning anything, and the
+    // paired publications/{id}.likeCount update above stays idempotent
+    // per user (liking twice never double-counts).
+    match /publications/{publicationID}/likes/{userID} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userID;
+      allow update: if false;
+      allow delete: if isSignedIn() && request.auth.uid == userID;
     }
 
     match /messages/{messageID} {

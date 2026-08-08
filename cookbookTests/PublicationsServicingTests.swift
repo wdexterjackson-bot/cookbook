@@ -71,4 +71,54 @@ struct PublicationsServicingTests {
 
         #expect(publication.content.coverImageURL == "https://example.com/photo.jpg")
     }
+
+    @Test func newPublicationHasNoLikesYet() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+
+        #expect(publication.likeCount == nil)
+        #expect(try await service.hasLiked(publication.id, userID: "bob") == false)
+    }
+
+    @Test func likingIncrementsCountAndMarksTheUserAsHavingLiked() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+
+        let newCount = try await service.setLiked(publication.id, userID: "bob", liked: true)
+
+        #expect(newCount == 1)
+        #expect(try await service.hasLiked(publication.id, userID: "bob") == true)
+        #expect(service.publications.first?.likeCount == 1)
+    }
+
+    @Test func unlikingDecrementsCountBackDown() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        try await service.setLiked(publication.id, userID: "bob", liked: true)
+
+        let newCount = try await service.setLiked(publication.id, userID: "bob", liked: false)
+
+        #expect(newCount == 0)
+        #expect(try await service.hasLiked(publication.id, userID: "bob") == false)
+    }
+
+    @Test func likingTwiceDoesNotDoubleCount() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+
+        try await service.setLiked(publication.id, userID: "bob", liked: true)
+        let secondCount = try await service.setLiked(publication.id, userID: "bob", liked: true)
+
+        #expect(secondCount == 1)
+    }
+
+    @Test func likesFromDifferentUsersAccumulate() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+
+        try await service.setLiked(publication.id, userID: "bob", liked: true)
+        let countAfterCarol = try await service.setLiked(publication.id, userID: "carol", liked: true)
+
+        #expect(countAfterCarol == 2)
+    }
 }

@@ -105,6 +105,38 @@ final class Recipe {
     /// unrelated to the copy-chain lineage fields above. Nil only for
     /// recipes created before this field existed.
     var authorLineage: String?
+    /// True when authorLineage came from an external source at creation —
+    /// a Discover download (.importing mode) or a paste-import whose text
+    /// had its own "By:" line — false when it's just the local owner's own
+    /// self-attribution (typed manually, or picked in the author prompt).
+    /// This is what distinguishes "ownership" (who can edit — ownerID,
+    /// always the local account) from "lineage" (who gets credit —
+    /// authorLineage): the CreateEditRecipeView "Give Credit for
+    /// Inspiration" option is only offered when this is false, since a
+    /// recipe with genuinely external lineage already has its credit set
+    /// and isn't the owner's to reassign. Inline `= false` default for the
+    /// same SwiftData lightweight-migration reason as chaptersManuallyReordered
+    /// on Cookbook — existing rows need a literal default to backfill.
+    var authorLineageIsExternal: Bool = false
+    /// A second, independent credit — "inspired by my grandmother's
+    /// version," say — distinct from authorLineage (who entered/owns this
+    /// specific copy). Only settable once, from CreateEditRecipeView's
+    /// Edit mode, and only when authorLineageIsExternal is false (a
+    /// recipe already crediting an external source doesn't get a second,
+    /// separately-editable credit). Same "FName LName of City, ST" format
+    /// as authorLineage, immutable once set, nil until then. Inline `= nil`
+    /// default, same SwiftData lightweight-migration reasoning as
+    /// Cookbook.coverStyleImageName.
+    var inspirationCredit: String? = nil
+
+    /// YouTube URLs the recipe's editor attached (Cooking Mode plays
+    /// these) — capped at 3 by CreateEditRecipeView's UI, not enforced
+    /// here at the model level. Stores whatever URL the user actually
+    /// pasted (see YouTubeURL.swift for extracting a playable video ID
+    /// from it at playback time), not just the extracted video ID, so the
+    /// original link is never lost. Inline `= []` default, same SwiftData
+    /// lightweight-migration reasoning as the other new fields above.
+    var videoURLs: [String] = []
 
     init(
         ownerID: String,
@@ -160,5 +192,8 @@ final class Recipe {
         self.sourceOwnerSnapshot = nil
         self.sourceGroupSnapshot = nil
         self.authorLineage = nil
+        self.authorLineageIsExternal = false
+        self.inspirationCredit = nil
+        self.videoURLs = []
     }
 }

@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "08-cream-terrazzo.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

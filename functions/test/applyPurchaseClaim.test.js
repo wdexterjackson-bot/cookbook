@@ -35,10 +35,10 @@ function fakeVerifier(decoded) {
   return async () => decoded;
 }
 
-test('grants hasFamilyUser for the lifetime product', async () => {
+test('grants isProUser for the lifetime product', async () => {
   await db.collection('entitlements').doc('alice').set({
-    userID: 'alice', creationCredits: 3, hasFamilyUser: false,
-    familyUserPromoCreditAvailable: true, grantedPromoCredits: true, createdAt: Timestamp.now(),
+    userID: 'alice', tier1Credits: 1, tier2Credits: 2, isProUser: false,
+    receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: Timestamp.now(),
   });
 
   await applyPurchaseClaim({
@@ -49,14 +49,14 @@ test('grants hasFamilyUser for the lifetime product', async () => {
   });
 
   const entitlement = (await db.collection('entitlements').doc('alice').get()).data();
-  assert.equal(entitlement.hasFamilyUser, true);
-  assert.equal(entitlement.creationCredits, 3);
+  assert.equal(entitlement.isProUser, true);
+  assert.equal(entitlement.tier2Credits, 2);
 });
 
-test('increments creationCredits for the consumable product', async () => {
+test('increments tier2Credits for the consumable product', async () => {
   await db.collection('entitlements').doc('bob').set({
-    userID: 'bob', creationCredits: 1, hasFamilyUser: false,
-    familyUserPromoCreditAvailable: true, grantedPromoCredits: true, createdAt: Timestamp.now(),
+    userID: 'bob', tier1Credits: 1, tier2Credits: 1, isProUser: false,
+    receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: Timestamp.now(),
   });
 
   await applyPurchaseClaim({
@@ -67,7 +67,7 @@ test('increments creationCredits for the consumable product', async () => {
   });
 
   const entitlement = (await db.collection('entitlements').doc('bob').get()).data();
-  assert.equal(entitlement.creationCredits, 2);
+  assert.equal(entitlement.tier2Credits, 2);
 });
 
 test('creates an entitlement doc from scratch when none exists yet', async () => {
@@ -79,8 +79,8 @@ test('creates an entitlement doc from scratch when none exists yet', async () =>
   });
 
   const entitlement = (await db.collection('entitlements').doc('dave').get()).data();
-  assert.equal(entitlement.creationCredits, 1);
-  assert.equal(entitlement.hasFamilyUser, false);
+  assert.equal(entitlement.tier2Credits, 1);
+  assert.equal(entitlement.isProUser, false);
 });
 
 test('is idempotent for the same Apple transaction ID', async () => {
@@ -91,7 +91,7 @@ test('is idempotent for the same Apple transaction ID', async () => {
   await applyPurchaseClaim({ db, claimID: 'txn3', claimData, verifyTransaction });
 
   const entitlement = (await db.collection('entitlements').doc('carol').get()).data();
-  assert.equal(entitlement.creationCredits, 1);
+  assert.equal(entitlement.tier2Credits, 1);
 });
 
 test('rejects a claim whose decoded transaction does not match the submitted fields', async () => {

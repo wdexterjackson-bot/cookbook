@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "26-coral-grid.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

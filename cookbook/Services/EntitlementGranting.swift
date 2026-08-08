@@ -2,29 +2,36 @@
 //  EntitlementGranting.swift
 //  cookbook
 //
-//  The seam for the one Firestore write Milestone 2A needs: granting the
-//  promo group-creation credits on brand-new accounts. The full Entitlement
-//  data model + EntitlementServicing seam (purchases, restore, etc.) lands
-//  in Milestone 2D — this stays deliberately narrow until then.
+//  The seam for the one Firestore write the client is allowed to make to
+//  its own entitlement document without a Cloud Function: backfilling the
+//  free launch credits (1 tier-1 Pro-User credit, 2 tier-2 group-creation
+//  credits) it's entitled to but hasn't received yet. Called unconditionally
+//  on every app launch (see AuthGatedRootView) — already-received credits
+//  are never re-granted, even once spent down to zero.
 //
 
 import Foundation
 
 protocol EntitlementGranting {
-    /// Grants the sign-up promo (3 free group-creation credits) if `now` is
-    /// before the promo cutoff and this user hasn't already been granted
-    /// credits. Safe to call unconditionally on every account creation.
-    func grantPromoCreditsIfEligible(userID: String, now: Date) async throws
+    /// Grants whichever of the two free launch credits `userID` hasn't
+    /// received yet, but only while `LaunchCreditPromo.isEligible(on: now)`.
+    /// Safe to call on every launch/sign-in — a no-op once both have been
+    /// granted once.
+    func grantMissingLaunchCreditsIfEligible(userID: String, now: Date) async throws
 }
 
 extension EntitlementGranting {
-    func grantPromoCreditsIfEligible(userID: String) async throws {
-        try await grantPromoCreditsIfEligible(userID: userID, now: .now)
+    func grantMissingLaunchCreditsIfEligible(userID: String) async throws {
+        try await grantMissingLaunchCreditsIfEligible(userID: userID, now: .now)
     }
 }
 
-enum PromoCredit {
-    static let creditCount = 3
+enum LaunchCreditPromo {
+    /// Spent to become a Pro User (join/publish to unlimited group cookbooks).
+    static let tier1CreditCount = 1
+    /// Spent to create a group/Family Cookbook.
+    static let tier2CreditCount = 2
+
     static let cutoffDate: Date = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!

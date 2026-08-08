@@ -82,6 +82,12 @@ enum RecipeSearch {
         if recipe.summary.lowercased().contains(query) { return true }
         if recipe.story.lowercased().contains(query) { return true }
         if recipe.tags.contains(where: { $0.lowercased().contains(query) }) { return true }
+        // "FName LName of City, ST" — a search for just the name half still
+        // matches via .contains, e.g. "Catherine Barrentine" finds every
+        // recipe crediting her, whether as the recipe's own author lineage
+        // or as a separate inspiration credit.
+        if let authorLineage = recipe.authorLineage, authorLineage.lowercased().contains(query) { return true }
+        if let inspirationCredit = recipe.inspirationCredit, inspirationCredit.lowercased().contains(query) { return true }
 
         for section in recipe.ingredientSections {
             let matchingIngredient = section.ingredients.contains { $0.displayText.lowercased().contains(query) }

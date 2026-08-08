@@ -17,33 +17,27 @@ struct PostSignInCoordinatorTests {
         return ModelContext(container)
     }
 
-    @Test func newAccountMigratesRecipesAndGrantsPromoCredits() async throws {
+    @Test func signInMigratesGuestRecipesToTheSignedInAccount() throws {
         let context = try makeInMemoryContext()
         let recipe = Recipe(ownerID: LocalOwner.id, title: "Guest Recipe")
         context.insert(recipe)
         try context.save()
-        let granter = FakeEntitlementGranter()
         let result = AuthResult(userID: "new-uid", isNewAccount: true)
 
-        let shouldOfferPromo = await PostSignInCoordinator.handle(result, modelContext: context, entitlementGranter: granter)
+        PostSignInCoordinator.handle(result, modelContext: context)
 
         #expect(recipe.ownerID == "new-uid")
-        #expect(granter.grantedUserIDs == ["new-uid"])
-        #expect(shouldOfferPromo)
     }
 
-    @Test func existingSignInMigratesButDoesNotGrantCredits() async throws {
+    @Test func existingSignInAlsoMigratesAnyRemainingGuestRecipes() throws {
         let context = try makeInMemoryContext()
         let recipe = Recipe(ownerID: LocalOwner.id, title: "Guest Recipe")
         context.insert(recipe)
         try context.save()
-        let granter = FakeEntitlementGranter()
         let result = AuthResult(userID: "existing-uid", isNewAccount: false)
 
-        let shouldOfferPromo = await PostSignInCoordinator.handle(result, modelContext: context, entitlementGranter: granter)
+        PostSignInCoordinator.handle(result, modelContext: context)
 
         #expect(recipe.ownerID == "existing-uid")
-        #expect(granter.grantedUserIDs.isEmpty)
-        #expect(!shouldOfferPromo)
     }
 }

@@ -32,11 +32,11 @@ struct GroupsServicingTests {
 
     @Test func createGroupConsumesOneCreditAndMakesCreatorFounderAdmin() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 2
+        service.tier2CreditsByUserID["alice"] = 2
 
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
-        #expect(service.creditsByUserID["alice"] == 1)
+        #expect(service.tier2CreditsByUserID["alice"] == 1)
         let memberships = try await service.fetchMemberships(forGroup: group.id)
         #expect(memberships.count == 1)
         #expect(memberships.first?.role == .admin)
@@ -45,7 +45,7 @@ struct GroupsServicingTests {
 
     @Test func createGroupWithNoCreditsThrows() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 0
+        service.tier2CreditsByUserID["alice"] = 0
 
         await #expect(throws: GroupsServiceError.insufficientCredits) {
             try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
@@ -54,19 +54,19 @@ struct GroupsServicingTests {
 
     @Test func repeatedCreateGroupCallWithSameIdempotencyKeyDoesNotDoubleCharge() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
 
         let first = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let second = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         #expect(first.id == second.id)
-        #expect(service.creditsByUserID["alice"] == 0)
+        #expect(service.tier2CreditsByUserID["alice"] == 0)
         #expect(service.groups.count == 1)
     }
 
     @Test func adminCanApproveJoinRequest() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: "Cousin Bob")
@@ -78,7 +78,7 @@ struct GroupsServicingTests {
 
     @Test func requestToJoinGrantsMembershipImmediatelyWhenTheGroupAutoApproves() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(
             makeDetails(autoApproveJoinRequests: true), creatorUserID: "alice", idempotencyKey: "req-1"
         )
@@ -95,7 +95,7 @@ struct GroupsServicingTests {
 
     @Test func requestToJoinStillRequiresApprovalWhenTheGroupDoesNotAutoApprove() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
@@ -107,7 +107,7 @@ struct GroupsServicingTests {
 
     @Test func nonAdminCannotDecideJoinRequest() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
 
@@ -118,7 +118,7 @@ struct GroupsServicingTests {
 
     @Test func acceptingInvitationCreatesMembershipWithOfferedRole() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         let invitation = try await service.invite(groupID: group.id, inviterID: "alice", inviteeIdentifier: "carol@example.com", role: .member)
@@ -134,7 +134,7 @@ struct GroupsServicingTests {
     /// which stays blocked.
     @Test func lastAdminCannotLeaveGroupWhileOtherActiveMembersRemain() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
@@ -146,7 +146,7 @@ struct GroupsServicingTests {
 
     @Test func lastActiveMemberLeavingDeletesTheWholeGroup() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         try await service.leaveGroup(groupID: group.id, userID: "alice")
@@ -162,7 +162,7 @@ struct GroupsServicingTests {
     /// adminless" protection above.
     @Test func lastActiveMemberOfAnyRoleLeavingDeletesTheGroup() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
@@ -177,7 +177,7 @@ struct GroupsServicingTests {
 
     @Test func lastAdminCannotBeDemoted() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         await #expect(throws: GroupsServiceError.lastAdminCannotLeaveOrBeDemoted) {
@@ -187,7 +187,7 @@ struct GroupsServicingTests {
 
     @Test func secondAdminCanLeaveOncePromoted() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
@@ -201,7 +201,7 @@ struct GroupsServicingTests {
 
     @Test func createGroupRejectsADuplicateCookbookNameFamilyNameLocationCombination() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 2
+        service.tier2CreditsByUserID["alice"] = 2
         _ = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         await #expect(throws: GroupsServiceError.duplicateCookbookIdentity) {
@@ -211,7 +211,7 @@ struct GroupsServicingTests {
 
     @Test func createGroupAllowsDistinctCombinationsEvenWithASharedField() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 3
+        service.tier2CreditsByUserID["alice"] = 3
         _ = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
 
         // Same family name and location, different cookbook name — a
@@ -228,7 +228,7 @@ struct GroupsServicingTests {
 
     @Test func fetchJoinRequestsForGroupOnlyReturnsPending() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let bobRequest = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         _ = try await service.requestToJoin(groupID: group.id, requesterID: "carol", note: nil)
@@ -242,7 +242,7 @@ struct GroupsServicingTests {
 
     @Test func fetchJoinRequestsByRequesterIncludesDecidedOnes() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await service.decideJoinRequest(request.id, approve: false, decidedByUserID: "alice")
@@ -255,7 +255,7 @@ struct GroupsServicingTests {
 
     @Test func fetchInvitationsForInviteeOnlyReturnsPendingOnesForThatEmail() async throws {
         let service = InMemoryGroupsService()
-        service.creditsByUserID["alice"] = 1
+        service.tier2CreditsByUserID["alice"] = 1
         let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
         let carolInvite = try await service.invite(groupID: group.id, inviterID: "alice", inviteeIdentifier: "carol@example.com", role: .member)
         _ = try await service.invite(groupID: group.id, inviterID: "alice", inviteeIdentifier: "dave@example.com", role: .member)

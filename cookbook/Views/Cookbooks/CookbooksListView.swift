@@ -147,11 +147,25 @@ private struct CookbookRow: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else if let style = CookbookCoverStyleCatalog.style(named: cookbook.coverStyleImageName) {
+            Image(style.imageAssetName)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
         } else {
             placeholderCover
         }
         #else
-        placeholderCover
+        if let style = CookbookCoverStyleCatalog.style(named: cookbook.coverStyleImageName) {
+            Image(style.imageAssetName)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else {
+            placeholderCover
+        }
         #endif
     }
 

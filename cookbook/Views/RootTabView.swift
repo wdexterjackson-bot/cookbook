@@ -2,19 +2,22 @@
 //  RootTabView.swift
 //  cookbook
 //
-//  Home dashboard spec's 5-tab navigation: Home / Cookbooks / Create /
-//  Messages / Profile — replaces the earlier provisional layout. Create
-//  isn't a persistent destination (it's "a centered, visually-elevated
-//  tab button" per spec) — selecting it presents CreateHubView as a
-//  sheet and immediately reverts the tab selection, so it never "sticks"
-//  as an active tab the way a real destination would.
+//  5-tab navigation: Home / Cookbooks / Create / Search / More. The first
+//  three are the original dashboard spec's tabs, kept exactly as they
+//  were; Search and More replaced the old direct Messages/Profile tabs —
+//  Messages and Profile (plus Administrator, moved here from inside
+//  Profile) now live inside More's own hub instead, see MoreHubView. Create
+//  isn't a persistent destination (it's "a centered, visually-elevated tab
+//  button" per spec) — selecting it presents CreateHubView as a sheet and
+//  immediately reverts the tab selection, so it never "sticks" as an
+//  active tab the way a real destination would.
 //
 
 import SwiftUI
 import SwiftData
 
 private enum RootTab: Hashable {
-    case home, cookbooks, create, messages, profile
+    case home, cookbooks, create, search, more
 }
 
 struct RootTabView: View {
@@ -46,17 +49,17 @@ struct RootTabView: View {
                 }
                 .tag(RootTab.create)
 
-            MessagesView()
+            SearchHubView()
                 .tabItem {
-                    Label("Messages", systemImage: "tray")
+                    Label("Search", systemImage: "magnifyingglass")
                 }
-                .tag(RootTab.messages)
+                .tag(RootTab.search)
 
-            AccountView()
+            MoreHubView()
                 .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle")
+                    Label("More", systemImage: "ellipsis.circle")
                 }
-                .tag(RootTab.profile)
+                .tag(RootTab.more)
         }
         .tint(Color.potluckTomato)
         .onChange(of: selectedTab) { _, newTab in

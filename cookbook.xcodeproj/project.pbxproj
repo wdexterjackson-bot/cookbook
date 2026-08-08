@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0F48F44799A04891EC5DAA48 /* YouTubeiOSPlayerHelper in Frameworks */ = {isa = PBXBuildFile; productRef = 4A4EDD1AA752826F5EA217E2 /* YouTubeiOSPlayerHelper */; };
 		FBFB00000000000000000012 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = FBFB00000000000000000011 /* FirebaseCore */; };
 		FBFB00000000000000000014 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = FBFB00000000000000000013 /* FirebaseAuth */; };
 		FBFB00000000000000000016 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = FBFB00000000000000000015 /* FirebaseFirestore */; };
@@ -59,11 +60,15 @@
 		};
 		AA61DE0C3023768E00168E3B /* cookbookTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = cookbookTests;
 			sourceTree = "<group>";
 		};
 		AA61DE163023768E00168E3B /* cookbookUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = cookbookUITests;
 			sourceTree = "<group>";
 		};
@@ -80,6 +85,7 @@
 				FBFB00000000000000000018 /* GoogleSignIn in Frameworks */,
 				FBFB0000000000000000001A /* FirebaseFunctions in Frameworks */,
 				FBFB0000000000000000001B /* FirebaseStorage in Frameworks */,
+				0F48F44799A04891EC5DAA48 /* YouTubeiOSPlayerHelper in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,6 +152,7 @@
 				FBFB00000000000000000017 /* GoogleSignIn */,
 				FBFB00000000000000000019 /* FirebaseFunctions */,
 				FBFB0000000000000000001C /* FirebaseStorage */,
+				4A4EDD1AA752826F5EA217E2 /* YouTubeiOSPlayerHelper */,
 			);
 			productName = cookbook;
 			productReference = AA61DDF83023768D00168E3B /* cookbook.app */;
@@ -168,8 +175,6 @@
 				AA61DE0C3023768E00168E3B /* cookbookTests */,
 			);
 			name = cookbookTests;
-			packageProductDependencies = (
-			);
 			productName = cookbookTests;
 			productReference = AA61DE093023768E00168E3B /* cookbookTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -191,8 +196,6 @@
 				AA61DE163023768E00168E3B /* cookbookUITests */,
 			);
 			name = cookbookUITests;
-			packageProductDependencies = (
-			);
 			productName = cookbookUITests;
 			productReference = AA61DE133023768E00168E3B /* cookbookUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -232,6 +235,7 @@
 			packageReferences = (
 				FBFB00000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				FBFB00000000000000000002 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				59244C3F91F4A644096C4974 /* XCRemoteSwiftPackageReference "youtube-ios-player-helper" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA61DDF93023768D00168E3B /* Products */;
@@ -657,6 +661,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		59244C3F91F4A644096C4974 /* XCRemoteSwiftPackageReference "youtube-ios-player-helper" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/youtube/youtube-ios-player-helper";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.4;
+			};
+		};
 		FBFB00000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
@@ -676,6 +688,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		4A4EDD1AA752826F5EA217E2 /* YouTubeiOSPlayerHelper */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 59244C3F91F4A644096C4974 /* XCRemoteSwiftPackageReference "youtube-ios-player-helper" */;
+			productName = YouTubeiOSPlayerHelper;
+		};
 		FBFB00000000000000000011 /* FirebaseCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = FBFB00000000000000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;

@@ -11,11 +11,18 @@ final class InMemoryGroupsService: GroupsServicing {
     private(set) var joinRequests: [JoinRequest] = []
     private(set) var invitations: [Invitation] = []
 
-    /// Mirrors the `entitlements/{uid}.creationCredits` counter the real
+    /// Mirrors the `entitlements/{uid}.tier2Credits` counter the real
     /// adapter reads/writes via Firestore.
-    var creditsByUserID: [String: Int] = [:]
+    var tier2CreditsByUserID: [String: Int] = [:]
     private var processedIdempotencyKeys: [String: String] = [:] // key -> created group id
     private var claimedUniquenessKeys: Set<String> = []
+
+    /// Test/preview convenience — appends a group directly, bypassing
+    /// createGroup's credit-spend requirement. Used to seed a fake MFB
+    /// cookbook for join-gate tests.
+    func seedGroup(_ group: FamilyGroup) {
+        groups.append(group)
+    }
 
     func createGroup(_ details: NewGroupDetails, creatorUserID: String, idempotencyKey: String) async throws -> FamilyGroup {
         if let existingGroupID = processedIdempotencyKeys[idempotencyKey],
@@ -23,7 +30,7 @@ final class InMemoryGroupsService: GroupsServicing {
             return existingGroup
         }
 
-        let availableCredits = creditsByUserID[creatorUserID] ?? 0
+        let availableCredits = tier2CreditsByUserID[creatorUserID] ?? 0
         guard availableCredits > 0 else {
             throw GroupsServiceError.insufficientCredits
         }
@@ -49,7 +56,8 @@ final class InMemoryGroupsService: GroupsServicing {
             status: .active,
             allowsMemberInvites: details.allowsMemberInvites,
             allowsMemberPublishing: details.allowsMemberPublishing,
-            autoApproveJoinRequests: details.autoApproveJoinRequests
+            autoApproveJoinRequests: details.autoApproveJoinRequests,
+            isMFB: false
         )
         let founderMembership = Membership(
             id: Membership.compositeID(groupID: group.id, userID: creatorUserID),
@@ -62,7 +70,7 @@ final class InMemoryGroupsService: GroupsServicing {
             leftAt: nil
         )
 
-        creditsByUserID[creatorUserID] = availableCredits - 1
+        tier2CreditsByUserID[creatorUserID] = availableCredits - 1
         groups.append(group)
         upsertMembership(founderMembership)
         processedIdempotencyKeys[idempotencyKey] = group.id

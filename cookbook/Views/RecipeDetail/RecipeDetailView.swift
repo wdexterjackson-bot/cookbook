@@ -75,6 +75,10 @@ struct RecipeDetailView: View {
         #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                // Love (Favorite) only — Like doesn't apply to a personal
+                // recipe (nothing to aggregate a count across); the shared-
+                // cookbook counterpart lives in GroupCookbookView instead,
+                // next to each published recipe's real like count.
                 Button {
                     recipe.isFavorite.toggle()
                     recipe.updatedAt = .now
@@ -85,37 +89,34 @@ struct RecipeDetailView: View {
                 .accessibilityLabel(recipe.isFavorite ? "Remove from Favorites" : "Add to Favorites")
 
                 Button {
-                    let previousRating = recipe.personalRating
-                    recipe.personalRating = isLiked ? nil : 5
-                    recipe.updatedAt = .now
-                    saveOrRevert { recipe.personalRating = previousRating }
-                } label: {
-                    Image(systemName: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
-                }
-                .accessibilityLabel(isLiked ? "Unlike" : "Like")
-
-                Button("Edit") {
-                    isPresentingEdit = true
-                }
-
-                Button {
                     isPresentingCookingMode = true
                 } label: {
                     Label("Start Cooking", systemImage: "flame")
                 }
                 .accessibilityLabel("Start Cooking")
 
-                ShareLink(item: RecipeTextFormatter.plainText(for: recipe)) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .accessibilityLabel("Share Recipe")
+                // An explicit menu, not iOS's automatic toolbar overflow —
+                // deliberately not relying on that for Edit/Share/Publish.
+                Menu {
+                    Button {
+                        isPresentingEdit = true
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
 
-                Button {
-                    isPresentingPublish = true
+                    ShareLink(item: RecipeTextFormatter.plainText(for: recipe)) {
+                        Label("Share Recipe", systemImage: "square.and.arrow.up")
+                    }
+
+                    Button {
+                        isPresentingPublish = true
+                    } label: {
+                        Label("Publish to a Family Cookbook", systemImage: "person.3")
+                    }
                 } label: {
-                    Image(systemName: "person.3")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel("Publish to a Family Cookbook")
+                .accessibilityLabel("More options")
             }
         }
         .sheet(isPresented: $isPresentingEdit) {
@@ -219,13 +220,6 @@ struct RecipeDetailView: View {
                 .potluckCardShadow()
         }
         #endif
-    }
-
-    /// A quick, distinct signal from Favorite — a single tap sets a fixed
-    /// high rating rather than opening a full 1-5 star picker. Uses the
-    /// existing personalRating field rather than adding a new isLiked flag.
-    private var isLiked: Bool {
-        recipe.personalRating != nil
     }
 
     private var metadataRow: some View {

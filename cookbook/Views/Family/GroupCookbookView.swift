@@ -23,6 +23,12 @@ struct GroupCookbookView: View {
     @State private var errorMessage: String?
     @State private var busyPublicationIDs: Set<String> = []
     @State private var isPresentingLeaveConfirmation = false
+    /// Which publications the current user has liked — loaded once
+    /// alongside the publications themselves, then kept in sync locally as
+    /// the user taps Like (PublicationsServicing.setLiked is the source of
+    /// truth; this is just this screen's own read of it).
+    @State private var likedPublicationIDs: Set<String> = []
+    @State private var busyLikePublicationIDs: Set<String> = []
 
     private let publicationsService: PublicationsServicing = FirestorePublicationsService()
     private let photoUploadService: RecipePhotoUploadServicing = FirebaseRecipePhotoUploadService()
@@ -143,6 +149,8 @@ struct GroupCookbookView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                likeRow(publication)
+
                 if publication.ownerUserID == accountState.currentUserID {
                     Button("Unpublish", role: .destructive) {
                         Task { await unpublish(publication) }
@@ -153,6 +161,44 @@ struct GroupCookbookView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Shared-cookbook-only counterpart to RecipeDetailView's Love button —
+    /// a personal recipe has no group of other members to aggregate a
+    /// count across, so Like only exists here, never on a personal recipe.
+    @ViewBuilder
+    private func likeRow(_ publication: Publication) -> some View {
+        let isLiked = likedPublicationIDs.contains(publication.id)
+        Button {
+            Task { await toggleLike(publication) }
+        } label: {
+            Label("\(publication.likeCount ?? 0)", systemImage: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                .font(.caption)
+                .foregroundStyle(isLiked ? Color.potluckTomato : .secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(busyLikePublicationIDs.contains(publication.id))
+        .accessibilityLabel(isLiked ? "Unlike" : "Like")
+        .accessibilityValue("\(publication.likeCount ?? 0) likes")
+    }
+
+    private func toggleLike(_ publication: Publication) async {
+        guard let userID = accountState.currentUserID else { return }
+        guard let index = publications.firstIndex(where: { $0.id == publication.id }) else { return }
+        let wasLiked = likedPublicationIDs.contains(publication.id)
+        busyLikePublicationIDs.insert(publication.id)
+        defer { busyLikePublicationIDs.remove(publication.id) }
+        do {
+            let newCount = try await publicationsService.setLiked(publication.id, userID: userID, liked: !wasLiked)
+            publications[index].likeCount = newCount
+            if wasLiked {
+                likedPublicationIDs.remove(publication.id)
+            } else {
+                likedPublicationIDs.insert(publication.id)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func unpublish(_ publication: Publication) async {
@@ -177,6 +223,13 @@ struct GroupCookbookView: View {
         defer { isLoading = false }
         do {
             publications = try await publicationsService.fetchPublications(forGroup: group.id)
+            if let userID = accountState.currentUserID {
+                var liked: Set<String> = []
+                for publication in publications where try await publicationsService.hasLiked(publication.id, userID: userID) {
+                    liked.insert(publication.id)
+                }
+                likedPublicationIDs = liked
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

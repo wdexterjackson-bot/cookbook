@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "15-coral-monstera.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

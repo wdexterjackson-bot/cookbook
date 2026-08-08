@@ -18,10 +18,16 @@
 import Foundation
 
 enum StoreProductID {
-    static let familyUserLifetime = "VibeApp.cookbook.familyUser.lifetime"
-    static let groupCreationCredit = "VibeApp.cookbook.groupCreationCredit"
+    /// One-time purchase that redeems as a tier-1 credit spent immediately
+    /// toward Pro User — the underlying StoreKit product ID string is kept
+    /// as-is (renaming would mean a new App Store Connect product) even
+    /// though the Swift-side name and its Pro User branding are new.
+    static let proUserLifetime = "VibeApp.cookbook.familyUser.lifetime"
+    /// One-time purchase that redeems as one tier-2 (Family Cookbook
+    /// creation) credit. Same "product ID string unchanged" reasoning.
+    static let familyCookbookCredit = "VibeApp.cookbook.groupCreationCredit"
 
-    static let all = [familyUserLifetime, groupCreationCredit]
+    static let all = [proUserLifetime, familyCookbookCredit]
 }
 
 enum PurchaseKind: Equatable {

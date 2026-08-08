@@ -14,21 +14,21 @@ final class FirestoreEntitlementService: EntitlementServicing {
     }
 
     @discardableResult
-    func redeemFamilyUserPromoCredit(userID: String) async throws -> Bool {
+    func redeemTier1CreditForProUser(userID: String) async throws -> Bool {
         let ref = db.collection("entitlements").document(userID)
 
         let result: Any = try await db.runTransaction { transaction, errorPointer -> Any? in
             do {
                 let snapshot = try transaction.getDocument(ref)
-                let promoAvailable = snapshot.data()?["familyUserPromoCreditAvailable"] as? Bool ?? false
-                let alreadyFamilyUser = snapshot.data()?["hasFamilyUser"] as? Bool ?? false
-                guard promoAvailable, !alreadyFamilyUser else {
+                let tier1Credits = snapshot.data()?["tier1Credits"] as? Int ?? 0
+                let alreadyPro = snapshot.data()?["isProUser"] as? Bool ?? false
+                guard tier1Credits > 0, !alreadyPro else {
                     return false
                 }
 
                 transaction.setData([
-                    "familyUserPromoCreditAvailable": false,
-                    "hasFamilyUser": true,
+                    "tier1Credits": tier1Credits - 1,
+                    "isProUser": true,
                 ], forDocument: ref, merge: true)
                 return true
             } catch {

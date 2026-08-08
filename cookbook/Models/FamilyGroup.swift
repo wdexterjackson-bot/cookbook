@@ -47,6 +47,15 @@ struct FamilyGroup: Codable, Identifiable, Equatable {
     /// cookbook everyone's invited to), not the default for a family's
     /// own private/public cookbook.
     var autoApproveJoinRequests: Bool
+    /// The one hardcoded exception to the Pro User paywall (join gate) —
+    /// true only for the single seeded MFB (Memphis Family Barrentine)
+    /// cookbook. Deliberately NOT settable from the normal create-a-Family-
+    /// Cookbook flow (every client-created group hardcodes this false);
+    /// there is no in-app path that ever flips it true, by design — it's
+    /// meant to be set once, directly in Firestore, on that one document.
+    /// Optional so existing group documents predating this field decode
+    /// safely as "not MFB" instead of failing to decode at all.
+    var isMFB: Bool?
 }
 
 extension FamilyGroup {

@@ -6,8 +6,10 @@
 // logic is testable without a real Apple-signed JWS.
 
 // Must match StoreProductID in cookbook/Services/PurchaseServicing.swift.
-const FAMILY_USER_LIFETIME_PRODUCT_ID = 'VibeApp.cookbook.familyUser.lifetime';
-const GROUP_CREATION_CREDIT_PRODUCT_ID = 'VibeApp.cookbook.groupCreationCredit';
+// The underlying product ID strings predate the Pro User/tier rename —
+// kept as-is since renaming would mean a new App Store Connect product.
+const PRO_USER_LIFETIME_PRODUCT_ID = 'VibeApp.cookbook.familyUser.lifetime';
+const FAMILY_COOKBOOK_CREDIT_PRODUCT_ID = 'VibeApp.cookbook.groupCreationCredit';
 
 async function applyPurchaseClaim({ db, claimID, claimData, verifyTransaction }) {
   const decoded = await verifyTransaction(claimData.jwsRepresentation);
@@ -31,18 +33,19 @@ async function applyPurchaseClaim({ db, claimID, claimData, verifyTransaction })
     const entitlementSnap = await transaction.get(entitlementRef);
     const current = entitlementSnap.exists ? entitlementSnap.data() : {
       userID: claimData.userID,
-      creationCredits: 0,
-      hasFamilyUser: false,
-      familyUserPromoCreditAvailable: false,
-      grantedPromoCredits: false,
+      tier1Credits: 0,
+      tier2Credits: 0,
+      isProUser: false,
+      receivedTier1PromoCredit: false,
+      receivedTier2PromoCredits: false,
       createdAt: new Date(),
     };
 
     let updates;
-    if (decoded.productId === FAMILY_USER_LIFETIME_PRODUCT_ID) {
-      updates = { hasFamilyUser: true };
-    } else if (decoded.productId === GROUP_CREATION_CREDIT_PRODUCT_ID) {
-      updates = { creationCredits: (current.creationCredits || 0) + 1 };
+    if (decoded.productId === PRO_USER_LIFETIME_PRODUCT_ID) {
+      updates = { isProUser: true };
+    } else if (decoded.productId === FAMILY_COOKBOOK_CREDIT_PRODUCT_ID) {
+      updates = { tier2Credits: (current.tier2Credits || 0) + 1 };
     } else {
       throw new Error(`Unknown productID on claim ${claimID}: ${decoded.productId}`);
     }
@@ -60,6 +63,6 @@ async function applyPurchaseClaim({ db, claimID, claimData, verifyTransaction })
 
 module.exports = {
   applyPurchaseClaim,
-  FAMILY_USER_LIFETIME_PRODUCT_ID,
-  GROUP_CREATION_CREDIT_PRODUCT_ID,
+  PRO_USER_LIFETIME_PRODUCT_ID,
+  FAMILY_COOKBOOK_CREDIT_PRODUCT_ID,
 };

@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "36-black-gold-garden.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

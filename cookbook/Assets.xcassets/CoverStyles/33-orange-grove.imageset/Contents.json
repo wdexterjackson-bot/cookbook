@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "33-orange-grove.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

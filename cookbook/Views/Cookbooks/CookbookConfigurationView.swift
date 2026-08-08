@@ -37,6 +37,10 @@ struct CookbookConfigurationView: View {
 
     @State private var title: String
     @State private var coverColorHex: String
+    /// Priority for the cover actually shown is coverImageFilename >
+    /// coverStyleImageName > coverColorHex — a custom photo always wins,
+    /// a chosen style beats plain color, color is the universal fallback.
+    @State private var coverStyleImageName: String?
     @State private var coverImageData: Data?
     @State private var removesExistingCoverImage = false
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -57,6 +61,7 @@ struct CookbookConfigurationView: View {
         case .create:
             _title = State(initialValue: "My Cookbook")
             _coverColorHex = State(initialValue: Cookbook.defaultColorHex)
+            _coverStyleImageName = State(initialValue: nil)
             _coverImageData = State(initialValue: nil)
             _chapterTitles = State(initialValue: [])
             _chaptersManuallyReordered = State(initialValue: false)
@@ -64,6 +69,7 @@ struct CookbookConfigurationView: View {
         case .edit(let cookbook):
             _title = State(initialValue: cookbook.title)
             _coverColorHex = State(initialValue: cookbook.coverColorHex)
+            _coverStyleImageName = State(initialValue: cookbook.coverStyleImageName)
             if let filename = cookbook.coverImageFilename {
                 _coverImageData = State(initialValue: PhotoStore.data(for: filename))
             } else {
@@ -91,6 +97,14 @@ struct CookbookConfigurationView: View {
                         set: { coverColorHex = $0.hexString }
                     ))
                     #endif
+                }
+
+                Section {
+                    coverStyleGrid
+                } header: {
+                    Text("Cover Style")
+                } footer: {
+                    Text("A ready-made design instead of a plain color. A custom cover image (below) always takes priority over a style if you add one.")
                 }
 
                 #if os(iOS)
@@ -177,6 +191,55 @@ struct CookbookConfigurationView: View {
         }
     }
 
+    private var coverStyleGrid: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                Button {
+                    coverStyleImageName = nil
+                } label: {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4]))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 72, height: 72)
+                        .overlay {
+                            Text("None")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .overlay {
+                            if coverStyleImageName == nil {
+                                RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary, lineWidth: 2)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("No cover style")
+                .accessibilityAddTraits(coverStyleImageName == nil ? [.isSelected] : [])
+
+                ForEach(CookbookCoverStyleCatalog.allStyles) { style in
+                    Button {
+                        coverStyleImageName = style.imageAssetName
+                    } label: {
+                        Image(style.imageAssetName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 72, height: 72)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay {
+                                if coverStyleImageName == style.imageAssetName {
+                                    RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary, lineWidth: 3)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(style.displayName)
+                    .accessibilityAddTraits(coverStyleImageName == style.imageAssetName ? [.isSelected] : [])
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
     #if os(iOS)
     @ViewBuilder
     private var coverImagePicker: some View {
@@ -259,6 +322,7 @@ struct CookbookConfigurationView: View {
 
         cookbook.hasBeenConfigured = true
         cookbook.chaptersManuallyReordered = chaptersManuallyReordered
+        cookbook.coverStyleImageName = coverStyleImageName
         cookbook.updatedAt = .now
 
         #if os(iOS)
@@ -282,7 +346,7 @@ struct CookbookConfigurationView: View {
         // Recipe.sectionID is a plain scalar UUID copy, not a live
         // relationship, so a fresh id on every edit was silently unfiling
         // every recipe in the cookbook (RecipeListView.groupedBySection
-        // buckets any sectionID it doesn't recognize into "Unfiled"), even
+        // buckets any sectionID it doesn't recognize into "Other"), even
         // when the edit didn't touch chapters at all.
         var existingSectionsByTitle: [String: CookbookSection] = [:]
         for section in cookbook.sections {

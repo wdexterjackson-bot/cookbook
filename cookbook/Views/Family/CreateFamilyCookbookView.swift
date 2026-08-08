@@ -17,6 +17,11 @@ struct CreateFamilyCookbookView: View {
     @Environment(AccountState.self) private var accountState
     @Environment(\.dismiss) private var dismiss
 
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
+    private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
+    private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
+    @State private var gate = EntitlementGateCoordinator()
+
     @State private var cookbookName = ""
     @State private var familyName = ""
     @State private var locationText = ""
@@ -80,18 +85,33 @@ struct CreateFamilyCookbookView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        Task { await create() }
+                        Task { await attemptCreate() }
                     }
                     .disabled(!canSubmit || isBusy)
                 }
             }
         }
+        .entitlementGate(
+            gate,
+            userID: accountState.currentUserID ?? "",
+            entitlementService: entitlementService,
+            purchaseService: purchaseService,
+            claimWriter: claimWriter
+        )
     }
 
     private var canSubmit: Bool {
         !cookbookName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !familyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !locationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func attemptCreate() async {
+        guard let userID = accountState.currentUserID else { return }
+        let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+        await gate.attempt(.groupCreation, outcome: EntitlementGate.forGroupCreation(entitlement)) {
+            await create()
+        }
     }
 
     private func create() async {

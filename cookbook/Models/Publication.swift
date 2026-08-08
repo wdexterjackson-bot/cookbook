@@ -88,4 +88,13 @@ struct Publication: Codable, Identifiable, Equatable {
     var publishedAt: Date
     var updatedAt: Date
     var content: PublicationContentSnapshot
+    /// Nil for publications created before like-counting existed — treat
+    /// as 0 (see the `?? 0` at GroupCookbookView's display site). Inline
+    /// `= nil` so existing Publication(...) call sites don't need updating
+    /// and old Firestore docs lacking the field still decode. Maintained
+    /// by PublicationsServicing.setLiked, paired (same transaction) with a
+    /// publications/{id}/likes/{userID} doc marking who's liked it — that
+    /// subcollection is what makes "did I already like this" and the
+    /// increment/decrement idempotent per user.
+    var likeCount: Int? = nil
 }

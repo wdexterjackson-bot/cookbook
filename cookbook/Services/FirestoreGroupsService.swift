@@ -33,8 +33,8 @@ final class FirestoreGroupsService: GroupsServicing {
                 }
 
                 let entitlementSnapshot = try transaction.getDocument(entitlementRef)
-                let creationCredits = entitlementSnapshot.data()?["creationCredits"] as? Int ?? 0
-                guard creationCredits > 0 else {
+                let tier2Credits = entitlementSnapshot.data()?["tier2Credits"] as? Int ?? 0
+                guard tier2Credits > 0 else {
                     errorPointer?.pointee = GroupsServiceError.insufficientCredits as NSError
                     return nil
                 }
@@ -52,7 +52,7 @@ final class FirestoreGroupsService: GroupsServicing {
 
                 let now = Date()
                 transaction.setData([
-                    "creationCredits": creationCredits - 1,
+                    "tier2Credits": tier2Credits - 1,
                 ], forDocument: entitlementRef, merge: true)
 
                 transaction.setData(Self.groupData(details, id: groupRef.documentID, uniquenessKey: uniquenessKey, creatorUserID: creatorUserID, createdAt: now), forDocument: groupRef)
@@ -339,6 +339,9 @@ final class FirestoreGroupsService: GroupsServicing {
             "allowsMemberInvites": details.allowsMemberInvites,
             "allowsMemberPublishing": details.allowsMemberPublishing,
             "autoApproveJoinRequests": details.autoApproveJoinRequests,
+            // Never settable from the normal create flow — see
+            // FamilyGroup.isMFB's doc comment.
+            "isMFB": false,
         ]
     }
 
