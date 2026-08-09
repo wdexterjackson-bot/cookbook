@@ -21,6 +21,14 @@
 
 import Foundation
 
+enum EntitlementServiceError: Error, Equatable {
+    /// The account has a tier-1 credit on paper, but it's past
+    /// `Entitlement.tier1ExpiresAt` — thrown by a client-side pre-check so
+    /// this surfaces as a clean, catchable error instead of an opaque
+    /// Firestore permission-denied from the rules-side enforcement.
+    case creditExpired
+}
+
 protocol EntitlementServicing {
     func fetchEntitlement(userID: String) async throws -> Entitlement?
     func isProUser(userID: String) async throws -> Bool

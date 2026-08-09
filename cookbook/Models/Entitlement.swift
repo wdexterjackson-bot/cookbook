@@ -24,6 +24,14 @@ struct Entitlement: Decodable, Equatable {
     var receivedTier1PromoCredit: Bool
     var receivedTier2PromoCredits: Bool
     var createdAt: Date
+    /// Set once, at grant time, only for the free launch-promo credits
+    /// (see LaunchCreditPromo) — nil for a paid purchase (those never
+    /// expire, confirmed decision) and nil for docs that predate this
+    /// field. A non-nil, past date here means an unspent credit is no
+    /// longer usable, checked both client-side (for a clean error) and in
+    /// firestore.rules (the actual enforcement).
+    var tier1ExpiresAt: Date?
+    var tier2ExpiresAt: Date?
 
     init(
         userID: String,
@@ -32,7 +40,9 @@ struct Entitlement: Decodable, Equatable {
         isProUser: Bool,
         receivedTier1PromoCredit: Bool,
         receivedTier2PromoCredits: Bool,
-        createdAt: Date
+        createdAt: Date,
+        tier1ExpiresAt: Date? = nil,
+        tier2ExpiresAt: Date? = nil
     ) {
         self.userID = userID
         self.tier1Credits = tier1Credits
@@ -41,6 +51,8 @@ struct Entitlement: Decodable, Equatable {
         self.receivedTier1PromoCredit = receivedTier1PromoCredit
         self.receivedTier2PromoCredits = receivedTier2PromoCredits
         self.createdAt = createdAt
+        self.tier1ExpiresAt = tier1ExpiresAt
+        self.tier2ExpiresAt = tier2ExpiresAt
     }
 
     /// Tolerant of documents written under the single-tier scheme this
@@ -77,11 +89,15 @@ struct Entitlement: Decodable, Equatable {
             tier2Credits = try container.decodeIfPresent(Int.self, forKey: .legacyCreationCredits) ?? 0
             receivedTier2PromoCredits = try container.decodeIfPresent(Bool.self, forKey: .legacyGrantedPromoCredits) ?? false
         }
+
+        tier1ExpiresAt = try container.decodeIfPresent(Date.self, forKey: .tier1ExpiresAt)
+        tier2ExpiresAt = try container.decodeIfPresent(Date.self, forKey: .tier2ExpiresAt)
     }
 
     private enum CodingKeys: String, CodingKey {
         case userID, tier1Credits, tier2Credits, isProUser
         case receivedTier1PromoCredit, receivedTier2PromoCredits, createdAt
+        case tier1ExpiresAt, tier2ExpiresAt
         case legacyCreationCredits = "creationCredits"
         case legacyHasFamilyUser = "hasFamilyUser"
         case legacyFamilyUserPromoCreditAvailable = "familyUserPromoCreditAvailable"

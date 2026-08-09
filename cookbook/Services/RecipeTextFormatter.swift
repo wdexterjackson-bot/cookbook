@@ -40,7 +40,7 @@ enum RecipeTextFormatter {
         }
 
         lines.append("")
-        lines.append("Shared from the Family & Friends Cookbook app.")
+        lines.append("Shared from Our Community Cookbook.")
 
         return lines.joined(separator: "\n")
     }

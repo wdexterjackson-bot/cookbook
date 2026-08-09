@@ -45,6 +45,7 @@ struct HomeView: View {
     @State private var isPresentingAccount = false
     @State private var isPresentingCart = false
     @State private var isPresentingClearCartConfirmation = false
+    @State private var cartErrorMessage: String?
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
@@ -111,7 +112,7 @@ struct HomeView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("Family Recipe Book")
+                    Text("Our Community Cookbook")
                         .font(.potluckHeadline(18))
                         .foregroundStyle(Color.potluckDeepTeal)
                 }
@@ -163,9 +164,21 @@ struct HomeView: View {
                 titleVisibility: .visible
             ) {
                 Button("Clear All", role: .destructive) {
-                    CartItemStore.clearAll(ownerID: accountState.currentOwnerID, in: modelContext)
+                    do {
+                        try CartItemStore.clearAll(ownerID: accountState.currentOwnerID, in: modelContext)
+                    } catch {
+                        cartErrorMessage = error.localizedDescription
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
+            }
+            .alert("Couldn't Clear Cart", isPresented: Binding(
+                get: { cartErrorMessage != nil },
+                set: { if !$0 { cartErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(cartErrorMessage ?? "")
             }
             .task(id: accountState.currentUserID) {
                 await loadGroupData()
@@ -298,6 +311,7 @@ struct HomeView: View {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .accessibilityHidden(true)
             } else {
                 Color.potluckDeepTeal
             }
@@ -578,10 +592,12 @@ struct HomeView: View {
             Image(uiImage: uiImage)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
+                .accessibilityHidden(true)
         } else if let style = CookbookCoverStyleCatalog.style(named: cookbook.coverStyleImageName) {
             Image(style.imageAssetName)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
+                .accessibilityHidden(true)
         } else {
             Color(hex: cookbook.coverColorHex)
         }
@@ -770,6 +786,7 @@ struct HomeView: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 140, height: 100)
                 .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+                .accessibilityHidden(true)
         } else {
             recentlyAddedPlaceholder
         }

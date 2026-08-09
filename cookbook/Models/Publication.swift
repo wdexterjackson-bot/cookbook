@@ -97,4 +97,15 @@ struct Publication: Codable, Identifiable, Equatable {
     /// subcollection is what makes "did I already like this" and the
     /// increment/decrement idempotent per user.
     var likeCount: Int? = nil
+    /// Same nil-tolerant/denormalized pattern as likeCount, for a 1-5 star
+    /// rating system rather than a binary like — average is computed on
+    /// read (ratingSum / ratingCount) rather than stored, so it can never
+    /// drift from the underlying counts. Maintained by
+    /// PublicationsServicing.setRating/clearRating, paired (same
+    /// transaction) with a publications/{id}/ratings/{userID} doc holding
+    /// that user's own 1-5 value — unlike likes, a rating can be *changed*
+    /// (not just toggled), so that subcollection allows update, not just
+    /// create/delete.
+    var ratingSum: Int? = nil
+    var ratingCount: Int? = nil
 }

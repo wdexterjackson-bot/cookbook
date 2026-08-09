@@ -245,6 +245,8 @@ struct CookbookBackupServiceTests {
             "sortOrder",           // restored cookbook uses the same default as any newly created one
             "updatedAt",           // stamped fresh at restore
             "sections",            // -> chapters
+            "isCloudSynced",       // device/cloud-linkage state, not backup content — a restored cookbook always lands as .local
+            "lastSyncedAt",        // device/cloud-linkage state, same reasoning — a restored cookbook has never been synced from this device
         ]
 
         let uncovered = cookbookProperties.subtracting(payloadProperties).subtracting(deliberatelyExcludedOrRenamed)

@@ -28,7 +28,17 @@ struct AuthGatedRootView: View {
                 // once, so safe to run unconditionally here.
                 .task(id: accountState.currentUserID) {
                     guard let userID = accountState.currentUserID else { return }
-                    try? await entitlementGranter.grantMissingLaunchCreditsIfEligible(userID: userID)
+                    // Deliberately not `try?` — a real failure here (e.g. a
+                    // rules regression) should be visible somewhere rather
+                    // than silently indistinguishable from "nothing to
+                    // grant," which is exactly what made a 2026-08-09
+                    // production bug (undeployed Firestore rules blocking
+                    // every grant) take this long to diagnose.
+                    do {
+                        try await entitlementGranter.grantMissingLaunchCreditsIfEligible(userID: userID)
+                    } catch {
+                        print("grantMissingLaunchCreditsIfEligible failed for userID=\(userID): \(error)")
+                    }
                 }
         } else {
             SignInView(isDismissable: false)

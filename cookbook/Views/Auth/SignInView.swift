@@ -66,7 +66,7 @@ struct SignInView: View {
             Form {
                 if !isDismissable {
                     Section {
-                        Text("Sign in or create an account to use The Official Family & Friends Cookbook.")
+                        Text("Sign in or create an account to use Our Community Cookbook.")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -178,7 +178,7 @@ struct SignInView: View {
             let result = isSignUp
                 ? try await accountState.signUp(email: email, password: password, displayName: fullName)
                 : try await accountState.signIn(email: email, password: password)
-            PostSignInCoordinator.handle(result, modelContext: modelContext)
+            try PostSignInCoordinator.handle(result, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: email, context: isSignUp ? .signUp : .signIn)
@@ -229,7 +229,7 @@ struct SignInView: View {
                     try? await accountState.updateDisplayName(name)
                 }
             }
-            PostSignInCoordinator.handle(authResult, modelContext: modelContext)
+            try PostSignInCoordinator.handle(authResult, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
@@ -255,7 +255,7 @@ struct SignInView: View {
             if authResult.isNewAccount, let name = signInResult.user.profile?.name, !name.isEmpty {
                 try? await accountState.updateDisplayName(name)
             }
-            PostSignInCoordinator.handle(authResult, modelContext: modelContext)
+            try PostSignInCoordinator.handle(authResult, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)

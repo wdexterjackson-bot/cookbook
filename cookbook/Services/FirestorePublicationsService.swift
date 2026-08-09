@@ -66,6 +66,27 @@ final class FirestorePublicationsService: PublicationsServicing {
         try await db.collection("publications").document(id).getDocument().data(as: Publication?.self)
     }
 
+    func fetchPublications(forOwner ownerUserID: String, groupID: String) async throws -> [Publication] {
+        let snapshot = try await db.collection("publications")
+            .whereField("groupID", isEqualTo: groupID)
+            .whereField("ownerUserID", isEqualTo: ownerUserID)
+            .getDocuments()
+        return try snapshot.documents.map { try $0.data(as: Publication.self) }
+    }
+
+    func tombstoneOwnerAttribution(_ publicationID: String, actingUserID: String) async throws {
+        let ref = db.collection("publications").document(publicationID)
+        guard var publication = try await ref.getDocument().data(as: Publication?.self) else {
+            throw PublicationsServiceError.publicationNotFound
+        }
+        guard publication.ownerUserID == actingUserID else {
+            throw PublicationsServiceError.notAuthorized
+        }
+        publication.content.authorLineage = "Original contributor deleted"
+        publication.updatedAt = .now
+        try ref.setData(from: publication)
+    }
+
     func hasLiked(_ publicationID: String, userID: String) async throws -> Bool {
         let doc = try await db.collection("publications").document(publicationID)
             .collection("likes").document(userID).getDocument()
@@ -102,5 +123,69 @@ final class FirestorePublicationsService: PublicationsServicing {
         }
 
         return (result as? Int) ?? 0
+    }
+
+    func myRating(_ publicationID: String, userID: String) async throws -> Int? {
+        let doc = try await db.collection("publications").document(publicationID)
+            .collection("ratings").document(userID).getDocument()
+        return doc.data()?["rating"] as? Int
+    }
+
+    @discardableResult
+    func setRating(_ publicationID: String, userID: String, rating: Int) async throws -> (sum: Int, count: Int) {
+        try await updateRating(publicationID, userID: userID, newRating: rating)
+    }
+
+    @discardableResult
+    func clearRating(_ publicationID: String, userID: String) async throws -> (sum: Int, count: Int) {
+        try await updateRating(publicationID, userID: userID, newRating: nil)
+    }
+
+    /// Shared by setRating/clearRating — reads the rater's prior value (if
+    /// any) so the aggregate can be adjusted by the exact delta rather than
+    /// re-derived, same read-modify-write shape as setLiked.
+    private func updateRating(_ publicationID: String, userID: String, newRating: Int?) async throws -> (sum: Int, count: Int) {
+        let publicationRef = db.collection("publications").document(publicationID)
+        let ratingRef = publicationRef.collection("ratings").document(userID)
+
+        let result: Any = try await db.runTransaction { transaction, errorPointer -> Any? in
+            do {
+                let publicationSnapshot = try transaction.getDocument(publicationRef)
+                let currentSum = publicationSnapshot.data()?["ratingSum"] as? Int ?? 0
+                let currentCount = publicationSnapshot.data()?["ratingCount"] as? Int ?? 0
+                let oldRating = try transaction.getDocument(ratingRef).data()?["rating"] as? Int
+
+                var newSum = currentSum
+                var newCount = currentCount
+
+                switch (oldRating, newRating) {
+                case (nil, let new?):
+                    newSum += new
+                    newCount += 1
+                    transaction.setData(["userID": userID, "rating": new, "ratedAt": FieldValue.serverTimestamp()], forDocument: ratingRef)
+                case (let old?, let new?):
+                    newSum += (new - old)
+                    transaction.setData(["userID": userID, "rating": new, "ratedAt": FieldValue.serverTimestamp()], forDocument: ratingRef)
+                case (let old?, nil):
+                    newSum -= old
+                    newCount = max(0, newCount - 1)
+                    transaction.deleteDocument(ratingRef)
+                case (nil, nil):
+                    break
+                }
+                newSum = max(0, newSum)
+
+                transaction.updateData(["ratingSum": newSum, "ratingCount": newCount], forDocument: publicationRef)
+                return ["sum": newSum, "count": newCount]
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+        }
+
+        guard let pair = result as? [String: Int], let sum = pair["sum"], let count = pair["count"] else {
+            return (0, 0)
+        }
+        return (sum, count)
     }
 }

@@ -1,0 +1,356 @@
+//
+//  PersonalCookbookSyncCoordinator.swift
+//  cookbook
+//
+//  Bridges local SwiftData (Cookbook/Recipe) with the Firestore-only
+//  PersonalCookbookSyncServicing seam and PersonalCookbookPhotoUploadServicing
+//  — same separation RecipePublishingCoordinator uses for the analogous
+//  Family Cookbook publish flow (photo upload + a plain-DTO Firestore
+//  write, orchestrated by a coordinator that's the only place touching
+//  both). Ingredient/step reconstruction on the pull side mirrors
+//  CookbookBackupService's private Recipe.restoring(from:) exactly, with
+//  one deliberate difference: ids are preserved, not randomized — see
+//  this feature's plan (.claude/plans/mellow-spinning-flame.md) for why
+//  sync needs stable ids and backup/restore doesn't.
+//
+
+import Foundation
+import SwiftData
+
+enum PersonalCookbookSyncCoordinator {
+    // MARK: - Push
+
+    /// Builds the DTOs from local models (uploading any photos first) and
+    /// pushes them — the "quick sync" action behind CookbookConfigurationView's
+    /// Sync to Cloud toggle and CookbooksHubView's Back Up action for an
+    /// already-synced cookbook.
+    static func push(
+        _ cookbook: Cookbook,
+        recipes: [Recipe],
+        ownerUserID: String,
+        syncService: PersonalCookbookSyncServicing,
+        photoUploadService: PersonalCookbookPhotoUploadServicing
+    ) async throws {
+        var coverImageURL: String?
+        if let filename = cookbook.coverImageFilename, let data = PhotoStore.data(for: filename) {
+            // Best-effort, matching RecipePublishingCoordinator's own
+            // reasoning: a cover-photo upload hiccup shouldn't block
+            // syncing the cookbook's actual content.
+            coverImageURL = try? await photoUploadService.upload(
+                imageData: data, ownerUserID: ownerUserID, fileKey: "cover_\(cookbook.id.uuidString)"
+            ).absoluteString
+        }
+
+        let chapterDocs = cookbook.sections.map { section in
+            PersonalCookbookChapterDoc(id: section.id, title: section.title, sortOrder: section.sortOrder)
+        }
+        let cookbookDoc = PersonalCookbookDoc(
+            id: cookbook.id,
+            ownerUserID: ownerUserID,
+            title: cookbook.title,
+            coverColorHex: cookbook.coverColorHex,
+            coverStyleImageName: cookbook.coverStyleImageName,
+            coverImageURL: coverImageURL,
+            sortOrder: cookbook.sortOrder,
+            hasBeenConfigured: cookbook.hasBeenConfigured,
+            chaptersManuallyReordered: cookbook.chaptersManuallyReordered,
+            createdAt: cookbook.createdAt,
+            updatedAt: .now,
+            chapters: chapterDocs
+        )
+
+        var recipeDocs: [PersonalCookbookRecipeDoc] = []
+        for recipe in recipes {
+            let doc = try await makeRecipeDoc(from: recipe, cookbookID: cookbook.id, ownerUserID: ownerUserID, photoUploadService: photoUploadService)
+            recipeDocs.append(doc)
+        }
+
+        try await syncService.push(cookbookDoc, recipes: recipeDocs)
+        cookbook.lastSyncedAt = Date()
+    }
+
+    private static func makeRecipeDoc(
+        from recipe: Recipe,
+        cookbookID: UUID,
+        ownerUserID: String,
+        photoUploadService: PersonalCookbookPhotoUploadServicing
+    ) async throws -> PersonalCookbookRecipeDoc {
+        var heroPhotoURL: String?
+        if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename) {
+            heroPhotoURL = try? await photoUploadService.upload(
+                imageData: data, ownerUserID: ownerUserID, fileKey: recipe.id.uuidString
+            ).absoluteString
+        }
+        var galleryURLs: [String] = []
+        for (index, filename) in recipe.galleryPhotoFilenames.enumerated() {
+            guard let data = PhotoStore.data(for: filename) else { continue }
+            if let url = try? await photoUploadService.upload(
+                imageData: data, ownerUserID: ownerUserID, fileKey: "\(recipe.id.uuidString)_gallery\(index)"
+            ) {
+                galleryURLs.append(url.absoluteString)
+            }
+        }
+
+        return PersonalCookbookRecipeDoc(
+            id: recipe.id,
+            ownerUserID: ownerUserID,
+            cookbookID: cookbookID,
+            sectionID: recipe.sectionID,
+            title: recipe.title,
+            summary: recipe.summary,
+            story: recipe.story,
+            heroPhotoURL: heroPhotoURL,
+            galleryPhotoURLs: galleryURLs,
+            yield: recipe.yield,
+            prepTimeMinutes: recipe.prepTimeMinutes,
+            cookTimeMinutes: recipe.cookTimeMinutes,
+            totalTimeMinutes: recipe.totalTimeMinutes,
+            ingredientSections: recipe.ingredientSections
+                .sorted { $0.sortOrder < $1.sortOrder }
+                .map(IngredientSectionBackup.init(section:)),
+            stepSections: recipe.stepSections
+                .sorted { $0.sortOrder < $1.sortOrder }
+                .map(StepSectionBackup.init(section:)),
+            notes: recipe.notes,
+            sourceType: recipe.sourceType,
+            sourceURL: recipe.sourceURL,
+            sourceAuthorText: recipe.sourceAuthorText,
+            externalSource: recipe.externalSource,
+            externalSourceID: recipe.externalSourceID,
+            calories: recipe.calories,
+            proteinGrams: recipe.proteinGrams,
+            fatGrams: recipe.fatGrams,
+            carbsGrams: recipe.carbsGrams,
+            sugarGrams: recipe.sugarGrams,
+            fiberGrams: recipe.fiberGrams,
+            sodiumMilligrams: recipe.sodiumMilligrams,
+            cuisine: recipe.cuisine,
+            course: recipe.course,
+            dietaryLabels: recipe.dietaryLabels,
+            allergens: recipe.allergens,
+            tags: recipe.tags,
+            equipment: recipe.equipment,
+            isFavorite: recipe.isFavorite,
+            personalRating: recipe.personalRating,
+            privateNotes: recipe.privateNotes,
+            isArchived: recipe.isArchived,
+            createdAt: recipe.createdAt,
+            updatedAt: recipe.updatedAt,
+            language: recipe.language,
+            rootOriginRecipeID: recipe.rootOriginRecipeID,
+            immediateSourceRecipeID: recipe.immediateSourceRecipeID,
+            sourceOwnerSnapshot: recipe.sourceOwnerSnapshot,
+            sourceGroupSnapshot: recipe.sourceGroupSnapshot,
+            authorLineage: recipe.authorLineage,
+            authorLineageIsExternal: recipe.authorLineageIsExternal,
+            inspirationCredit: recipe.inspirationCredit,
+            videoURLs: recipe.videoURLs,
+            prepSummary: recipe.prepSummary
+        )
+    }
+
+    // MARK: - Pull
+
+    /// Pulls a cloud-synced cookbook down and reconstructs it locally,
+    /// preserving ids. If a local Cookbook with this id already exists
+    /// (a re-pull after editing on another device), its content is
+    /// overwritten in place rather than creating a duplicate — callers
+    /// should confirm with the user before calling this when that's the
+    /// case, since it discards any un-pushed local edits.
+    @discardableResult
+    static func pull(
+        cookbookID: UUID,
+        ownerUserID: String,
+        modelContext: ModelContext,
+        syncService: PersonalCookbookSyncServicing
+    ) async throws -> Cookbook {
+        let (cookbookDoc, recipeDocs) = try await syncService.pull(cookbookID: cookbookID, ownerUserID: ownerUserID)
+
+        let cookbook = try existingOrNewCookbook(id: cookbookDoc.id, ownerUserID: ownerUserID, title: cookbookDoc.title, coverColorHex: cookbookDoc.coverColorHex, modelContext: modelContext)
+        cookbook.title = cookbookDoc.title
+        cookbook.coverColorHex = cookbookDoc.coverColorHex
+        cookbook.coverStyleImageName = cookbookDoc.coverStyleImageName
+        cookbook.sortOrder = cookbookDoc.sortOrder
+        cookbook.hasBeenConfigured = cookbookDoc.hasBeenConfigured
+        cookbook.chaptersManuallyReordered = cookbookDoc.chaptersManuallyReordered
+        cookbook.createdAt = cookbookDoc.createdAt
+        cookbook.updatedAt = cookbookDoc.updatedAt
+        cookbook.isCloudSynced = true
+        cookbook.lastSyncedAt = Date()
+
+        if let coverImageURLString = cookbookDoc.coverImageURL, let url = URL(string: coverImageURLString),
+           let (data, _) = try? await URLSession.shared.data(from: url) {
+            if let existingFilename = cookbook.coverImageFilename {
+                PhotoStore.delete(existingFilename)
+            }
+            cookbook.coverImageFilename = try? PhotoStore.save(data)
+        }
+
+        try reconcileChapters(cookbookDoc.chapters, on: cookbook, modelContext: modelContext)
+        try await reconcileRecipes(recipeDocs, cookbook: cookbook, ownerUserID: ownerUserID, modelContext: modelContext)
+
+        try modelContext.save()
+        return cookbook
+    }
+
+    private static func existingOrNewCookbook(id: UUID, ownerUserID: String, title: String, coverColorHex: String, modelContext: ModelContext) throws -> Cookbook {
+        let descriptor = FetchDescriptor<Cookbook>(predicate: #Predicate { $0.id == id })
+        if let existing = try modelContext.fetch(descriptor).first {
+            return existing
+        }
+        let cookbook = Cookbook(ownerID: ownerUserID, title: title, coverColorHex: coverColorHex)
+        cookbook.id = id
+        modelContext.insert(cookbook)
+        return cookbook
+    }
+
+    private static func reconcileChapters(_ chapterDocs: [PersonalCookbookChapterDoc], on cookbook: Cookbook, modelContext: ModelContext) throws {
+        var existingSectionsByID: [UUID: CookbookSection] = [:]
+        for section in cookbook.sections {
+            existingSectionsByID[section.id] = section
+        }
+        var sections: [CookbookSection] = []
+        for chapterDoc in chapterDocs {
+            let section = existingSectionsByID[chapterDoc.id] ?? {
+                let newSection = CookbookSection(title: chapterDoc.title, sortOrder: chapterDoc.sortOrder)
+                newSection.id = chapterDoc.id
+                return newSection
+            }()
+            section.title = chapterDoc.title
+            section.sortOrder = chapterDoc.sortOrder
+            sections.append(section)
+        }
+        let keptChapterIDs = Set(chapterDocs.map(\.id))
+        for section in cookbook.sections where !keptChapterIDs.contains(section.id) {
+            modelContext.delete(section)
+        }
+        cookbook.sections = sections
+    }
+
+    private static func reconcileRecipes(_ recipeDocs: [PersonalCookbookRecipeDoc], cookbook: Cookbook, ownerUserID: String, modelContext: ModelContext) async throws {
+        let cookbookID = cookbook.id
+        let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.cookbookID == cookbookID })
+        let existingRecipes = try modelContext.fetch(descriptor)
+        var existingRecipesByID: [UUID: Recipe] = [:]
+        for recipe in existingRecipes {
+            existingRecipesByID[recipe.id] = recipe
+        }
+
+        for recipeDoc in recipeDocs {
+            let recipe: Recipe
+            if let existing = existingRecipesByID[recipeDoc.id] {
+                recipe = existing
+            } else {
+                recipe = Recipe(ownerID: ownerUserID, title: recipeDoc.title)
+                recipe.id = recipeDoc.id
+                modelContext.insert(recipe)
+            }
+            try await apply(recipeDoc, to: recipe, cookbookID: cookbookID)
+        }
+
+        let keptRecipeIDs = Set(recipeDocs.map(\.id))
+        for recipe in existingRecipes where !keptRecipeIDs.contains(recipe.id) {
+            if let filename = recipe.heroPhotoFilename {
+                PhotoStore.delete(filename)
+            }
+            for filename in recipe.galleryPhotoFilenames {
+                PhotoStore.delete(filename)
+            }
+            modelContext.delete(recipe)
+        }
+    }
+
+    private static func apply(_ doc: PersonalCookbookRecipeDoc, to recipe: Recipe, cookbookID: UUID) async throws {
+        recipe.cookbookID = cookbookID
+        recipe.sectionID = doc.sectionID
+        recipe.title = doc.title
+        recipe.summary = doc.summary
+        recipe.story = doc.story
+
+        if let heroURLString = doc.heroPhotoURL, let url = URL(string: heroURLString),
+           let (data, _) = try? await URLSession.shared.data(from: url) {
+            if let existingFilename = recipe.heroPhotoFilename {
+                PhotoStore.delete(existingFilename)
+            }
+            recipe.heroPhotoFilename = try? PhotoStore.save(data)
+        }
+        var galleryFilenames: [String] = []
+        for urlString in doc.galleryPhotoURLs {
+            guard let url = URL(string: urlString), let (data, _) = try? await URLSession.shared.data(from: url) else { continue }
+            if let filename = try? PhotoStore.save(data) {
+                galleryFilenames.append(filename)
+            }
+        }
+        recipe.galleryPhotoFilenames = galleryFilenames
+
+        recipe.yield = doc.yield
+        recipe.prepTimeMinutes = doc.prepTimeMinutes
+        recipe.cookTimeMinutes = doc.cookTimeMinutes
+        recipe.totalTimeMinutes = doc.totalTimeMinutes
+
+        recipe.ingredientSections = doc.ingredientSections.map { sectionPayload in
+            let section = IngredientSection(heading: sectionPayload.heading, sortOrder: sectionPayload.sortOrder)
+            section.ingredients = sectionPayload.ingredients.map { ingredientPayload in
+                Ingredient(
+                    displayText: ingredientPayload.displayText,
+                    name: ingredientPayload.name,
+                    quantityValue: ingredientPayload.quantityValue,
+                    unit: ingredientPayload.unit,
+                    preparationNote: ingredientPayload.preparationNote,
+                    isOptional: ingredientPayload.isOptional,
+                    sortOrder: ingredientPayload.sortOrder
+                )
+            }
+            return section
+        }
+        recipe.stepSections = doc.stepSections.map { sectionPayload in
+            let section = StepSection(heading: sectionPayload.heading, sortOrder: sectionPayload.sortOrder)
+            section.steps = sectionPayload.steps.map { stepPayload in
+                Step(text: stepPayload.text, sortOrder: stepPayload.sortOrder)
+            }
+            return section
+        }
+
+        recipe.notes = doc.notes
+        recipe.sourceType = doc.sourceType
+        recipe.sourceURL = doc.sourceURL
+        recipe.sourceAuthorText = doc.sourceAuthorText
+        recipe.externalSource = doc.externalSource
+        recipe.externalSourceID = doc.externalSourceID
+
+        recipe.calories = doc.calories
+        recipe.proteinGrams = doc.proteinGrams
+        recipe.fatGrams = doc.fatGrams
+        recipe.carbsGrams = doc.carbsGrams
+        recipe.sugarGrams = doc.sugarGrams
+        recipe.fiberGrams = doc.fiberGrams
+        recipe.sodiumMilligrams = doc.sodiumMilligrams
+
+        recipe.cuisine = doc.cuisine
+        recipe.course = doc.course
+        recipe.dietaryLabels = doc.dietaryLabels
+        recipe.allergens = doc.allergens
+        recipe.tags = doc.tags
+        recipe.equipment = doc.equipment
+
+        recipe.isFavorite = doc.isFavorite
+        recipe.personalRating = doc.personalRating
+        recipe.privateNotes = doc.privateNotes
+        recipe.isArchived = doc.isArchived
+
+        recipe.createdAt = doc.createdAt
+        recipe.updatedAt = doc.updatedAt
+        recipe.language = doc.language
+
+        recipe.rootOriginRecipeID = doc.rootOriginRecipeID
+        recipe.immediateSourceRecipeID = doc.immediateSourceRecipeID
+        recipe.sourceOwnerSnapshot = doc.sourceOwnerSnapshot
+        recipe.sourceGroupSnapshot = doc.sourceGroupSnapshot
+
+        recipe.authorLineage = doc.authorLineage
+        recipe.authorLineageIsExternal = doc.authorLineageIsExternal
+        recipe.inspirationCredit = doc.inspirationCredit
+        recipe.videoURLs = doc.videoURLs
+        recipe.prepSummary = doc.prepSummary
+    }
+}

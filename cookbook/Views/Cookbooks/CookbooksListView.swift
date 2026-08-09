@@ -34,7 +34,11 @@ struct CookbooksListView: View {
                         activeCookbookState.setActive(cookbook.id)
                         dismiss()
                     } label: {
-                        CookbookRow(cookbook: cookbook, isActive: cookbook.id == activeCookbookState.activeCookbookID)
+                        CookbookRow(
+                            cookbook: cookbook,
+                            isActive: cookbook.id == activeCookbookState.activeCookbookID,
+                            recipeCount: CookbookDeletionCoordinator.recipeCount(for: cookbook, in: modelContext)
+                        )
                     }
                     .buttonStyle(.plain)
                     .swipeActions {
@@ -117,6 +121,7 @@ struct CookbooksListView: View {
 private struct CookbookRow: View {
     let cookbook: Cookbook
     let isActive: Bool
+    let recipeCount: Int
 
     var body: some View {
         HStack(spacing: 12) {
@@ -129,6 +134,9 @@ private struct CookbookRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Text("\(recipeCount)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             if isActive {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(Color(hex: cookbook.coverColorHex))
@@ -147,11 +155,13 @@ private struct CookbookRow: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityHidden(true)
         } else if let style = CookbookCoverStyleCatalog.style(named: cookbook.coverStyleImageName) {
             Image(style.imageAssetName)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         } else {
             placeholderCover

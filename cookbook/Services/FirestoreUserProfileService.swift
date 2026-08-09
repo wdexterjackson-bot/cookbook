@@ -14,7 +14,16 @@ final class FirestoreUserProfileService: UserProfileServicing {
     }
 
     func setLocation(_ location: UserLocation, userID: String) async throws {
-        try db.collection("userProfiles").document(userID).setData(from: location, merge: true)
+        // setData(from:merge:) (the Codable convenience) has no async
+        // overload — it's fire-and-forget with a completion closure that's
+        // easy to forget to pass, so a genuine write failure (rules
+        // rejection, etc.) was silently swallowed while the caller still
+        // marked the save as successful. Encoding to a dictionary first and
+        // calling the plain setData(_:merge:) gets the real async throws
+        // overload instead, same pattern FirestoreMessagingService already
+        // uses for its own writes.
+        let encoded = try Firestore.Encoder().encode(location)
+        try await db.collection("userProfiles").document(userID).setData(encoded, merge: true)
     }
 
     func deleteProfile(userID: String) async throws {

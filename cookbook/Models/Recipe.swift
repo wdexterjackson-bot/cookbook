@@ -138,6 +138,19 @@ final class Recipe {
     /// lightweight-migration reasoning as the other new fields above.
     var videoURLs: [String] = []
 
+    /// Cooking Mode's prep-review page: a short AI-generated summary of
+    /// what to do before starting to cook (equipment needed, whether to
+    /// preheat the oven, etc.) — generated once, on-device, the first time
+    /// Cooking Mode opens for this recipe, then cached here so it's
+    /// instant on repeat visits (RecipePrepSummaryServicing). Nil until
+    /// generated, or if generation was never available/attempted.
+    /// Local-only cache today — not yet synced across devices (see
+    /// StorageMode.swift and the Personal Cookbook Cloud Sync plan); once
+    /// that lands, a cloud-synced cookbook's recipes carry this along too.
+    /// Inline `= nil` default, same SwiftData lightweight-migration
+    /// reasoning as inspirationCredit above.
+    var prepSummary: String? = nil
+
     init(
         ownerID: String,
         title: String,
@@ -195,5 +208,6 @@ final class Recipe {
         self.authorLineageIsExternal = false
         self.inspirationCredit = nil
         self.videoURLs = []
+        self.prepSummary = nil
     }
 }

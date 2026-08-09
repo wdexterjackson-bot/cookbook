@@ -21,7 +21,7 @@ before(() => {
 });
 
 beforeEach(async () => {
-  for (const collectionName of ['groups', 'memberships', 'publications', 'groupUniquenessKeys']) {
+  for (const collectionName of ['groups', 'memberships', 'publications', 'groupUniquenessKeys', 'deleteGroupPermanentlyAttempts']) {
     const snapshot = await db.collection(collectionName).get();
     await Promise.all(snapshot.docs.map((docSnap) => docSnap.ref.delete()));
   }
@@ -95,6 +95,29 @@ test('rejects a caller who is not an active member of the group', async () => {
   assert.equal((await db.collection('groups').doc(groupID).get()).exists, true);
 });
 
+test('rejects an active member who is not the last active member', async () => {
+  const groupID = 'group-4';
+  await seedGroup({
+    groupID,
+    uniquenessKey: 'other-key-3',
+    memberships: [
+      { id: 'm1', groupID, userID: 'alice', status: 'active' },
+      { id: 'm2', groupID, userID: 'bob', status: 'active' },
+    ],
+  });
+  const bucket = fakeBucket({});
+
+  // alice is a genuine active member, but bob is too — alice is not the
+  // *last* one, so this must be rejected. Before this check existed, any
+  // active member could delete the whole shared cookbook out from under
+  // everyone else.
+  await assert.rejects(() => deleteGroupPermanently({ db, bucket, groupID, callerUserID: 'alice' }));
+
+  assert.equal((await db.collection('groups').doc(groupID).get()).exists, true);
+  assert.equal((await db.collection('memberships').doc('m1').get()).exists, true);
+  assert.equal((await db.collection('memberships').doc('m2').get()).exists, true);
+});
+
 test('rejects a caller whose own membership has already left', async () => {
   const groupID = 'group-3';
   await seedGroup({
@@ -119,4 +142,61 @@ test('rejects a missing groupID', async () => {
   const bucket = fakeBucket({});
 
   await assert.rejects(() => deleteGroupPermanently({ db, bucket, groupID: '  ', callerUserID: 'alice' }));
+});
+
+test('rate-limits repeated deletion attempts by the same caller', async () => {
+  const bucket = fakeBucket({});
+
+  // 5 real, successful deletions (each its own group, same caller) —
+  // exhausts the limit; the 6th must be rejected even though it targets
+  // yet another group this caller genuinely owns and could otherwise
+  // delete. Without this, a compromised/malicious client could script
+  // unlimited deleteGroupPermanently calls with no throttling at all.
+  for (let i = 0; i < 5; i++) {
+    const groupID = `rl-group-${i}`;
+    await seedGroup({
+      groupID,
+      uniquenessKey: `rl-key-${i}`,
+      memberships: [{ id: `rl-m-${i}`, groupID, userID: 'alice', status: 'active' }],
+    });
+    const result = await deleteGroupPermanently({ db, bucket, groupID, callerUserID: 'alice' });
+    assert.deepEqual(result, { deleted: true });
+  }
+
+  const sixthGroupID = 'rl-group-5';
+  await seedGroup({
+    groupID: sixthGroupID,
+    uniquenessKey: 'rl-key-5',
+    memberships: [{ id: 'rl-m-5', groupID: sixthGroupID, userID: 'alice', status: 'active' }],
+  });
+
+  await assert.rejects(() => deleteGroupPermanently({ db, bucket, groupID: sixthGroupID, callerUserID: 'alice' }));
+
+  // The 6th group is genuinely untouched — rejected before any deletion work.
+  assert.equal((await db.collection('groups').doc(sixthGroupID).get()).exists, true);
+});
+
+test('rate limit is tracked per caller, not globally', async () => {
+  const bucket = fakeBucket({});
+
+  for (let i = 0; i < 5; i++) {
+    const groupID = `rl2-group-${i}`;
+    await seedGroup({
+      groupID,
+      uniquenessKey: `rl2-key-${i}`,
+      memberships: [{ id: `rl2-m-${i}`, groupID, userID: 'alice', status: 'active' }],
+    });
+    await deleteGroupPermanently({ db, bucket, groupID, callerUserID: 'alice' });
+  }
+
+  // alice just exhausted her limit, but bob has his own independent budget.
+  const bobGroupID = 'rl2-bob-group';
+  await seedGroup({
+    groupID: bobGroupID,
+    uniquenessKey: 'rl2-bob-key',
+    memberships: [{ id: 'rl2-bob-m', groupID: bobGroupID, userID: 'bob', status: 'active' }],
+  });
+
+  const result = await deleteGroupPermanently({ db, bucket, groupID: bobGroupID, callerUserID: 'bob' });
+  assert.deepEqual(result, { deleted: true });
 });

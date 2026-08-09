@@ -6,6 +6,24 @@
 import SwiftUI
 import SwiftData
 
+/// `id` is a stable key (a section's own UUID, or a fixed sentinel for the
+/// synthetic "Other"/flat-list groups) — this used to be a plain tuple
+/// rendered via `ForEach(..., id: \.offset)`, which crashed when deleting a
+/// chapter: removing one group shifts every later group's array position,
+/// so SwiftUI's offset-keyed diffing reused a view identity (and its
+/// DisclosureGroup expand/collapse state, and its `.swipeActions` closures
+/// capturing a specific CookbookSection) for what was now a *different*
+/// chapter at that position — undefined behavior, observed as a real crash
+/// deleting an empty chapter (2026-08-08). A real Identifiable type keyed
+/// by section id sidesteps this: each group's identity now follows its
+/// actual chapter, not its position in the array.
+private struct RecipeSectionGroup: Identifiable {
+    var id: String
+    var title: String?
+    var section: CookbookSection?
+    var recipes: [Recipe]
+}
+
 struct RecipeListView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
@@ -73,13 +91,13 @@ struct RecipeListView: View {
     /// is respected from then on and recipe counts no longer move things
     /// around on them — unless sortChaptersByRecipeCount (the Sort & Filter
     /// menu's "# of Recipes" toggle) is on, which always wins.
-    private var groupedBySection: [(title: String?, section: CookbookSection?, recipes: [Recipe])] {
+    private var groupedBySection: [RecipeSectionGroup] {
         guard let activeCookbook, !activeCookbook.sections.isEmpty else {
-            return [(nil, nil, filteredRecipes)]
+            return [RecipeSectionGroup(id: "flat", title: nil, section: nil, recipes: filteredRecipes)]
         }
         let isBrowsing = criteria.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !criteria.hasActiveFilters
 
-        var groups: [(title: String?, section: CookbookSection?, recipes: [Recipe])] = []
+        var groups: [RecipeSectionGroup] = []
         let sortedSections: [CookbookSection]
         if !sortChaptersByRecipeCount && activeCookbook.chaptersManuallyReordered {
             sortedSections = activeCookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
@@ -99,7 +117,7 @@ struct RecipeListView: View {
         for section in sortedSections {
             let recipesInSection = filteredRecipes.filter { $0.sectionID == section.id }
             if !recipesInSection.isEmpty || isBrowsing {
-                groups.append((section.title, section, recipesInSection))
+                groups.append(RecipeSectionGroup(id: section.id.uuidString, title: section.title, section: section, recipes: recipesInSection))
             }
         }
 
@@ -109,7 +127,7 @@ struct RecipeListView: View {
             return !knownSectionIDs.contains(sectionID)
         }
         if !unfiled.isEmpty {
-            groups.append(("Other", nil, unfiled))
+            groups.append(RecipeSectionGroup(id: "other", title: "Other", section: nil, recipes: unfiled))
         }
         return groups
     }
@@ -146,39 +164,46 @@ struct RecipeListView: View {
                                 }
                                 .listRowInsets(EdgeInsets())
                             }
-                            ForEach(Array(groupedBySection.enumerated()), id: \.offset) { _, group in
+                            ForEach(groupedBySection) { group in
                                 if let title = group.title {
                                     // A cookbook with configured chapters shows
                                     // each as a collapsed heading by default —
                                     // tap to expand and see its recipes,
                                     // rather than one long scroll of every
                                     // chapter's recipes at once.
+                                    //
+                                    // Deliberately NOT SwiftUI's DisclosureGroup
+                                    // here — a DisclosureGroup placed directly
+                                    // in a List, with .swipeActions attached to
+                                    // it, leaks those swipe actions onto its
+                                    // expanded child rows too (observed
+                                    // 2026-08-09: swiping a recipe row showed
+                                    // the chapter's own Edit/Delete alongside
+                                    // the recipe's own Delete). A plain header
+                                    // row plus a conditionally-shown ForEach,
+                                    // both direct children of the Section, has
+                                    // no such ambiguity — the header's
+                                    // .swipeActions can only ever apply to the
+                                    // header's own row.
                                     Section {
-                                        DisclosureGroup(isExpanded: isExpandedBinding(forKey: group.section?.id.uuidString ?? title)) {
+                                        chapterHeaderRow(group: group, title: title)
+                                            .swipeActions {
+                                                // Only a real chapter (not the
+                                                // synthetic "Other" group) can
+                                                // be edited/deleted.
+                                                if let section = group.section {
+                                                    Button("Delete", role: .destructive) {
+                                                        sectionPendingDeletion = section
+                                                    }
+                                                    Button("Edit") {
+                                                        editedSectionTitle = section.title
+                                                        sectionPendingEdit = section
+                                                    }
+                                                    .tint(.blue)
+                                                }
+                                            }
+                                        if expandedChapterKeys.contains(group.section?.id.uuidString ?? title) {
                                             recipeRows(group.recipes)
-                                        } label: {
-                                            HStack {
-                                                Text(title)
-                                                Spacer()
-                                                Text("\(group.recipes.count)")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                        }
-                                        .swipeActions {
-                                            // Only a real chapter (not the
-                                            // synthetic "Other" group) can be
-                                            // edited/deleted.
-                                            if let section = group.section {
-                                                Button("Delete", role: .destructive) {
-                                                    sectionPendingDeletion = section
-                                                }
-                                                Button("Edit") {
-                                                    editedSectionTitle = section.title
-                                                    sectionPendingEdit = section
-                                                }
-                                                .tint(.blue)
-                                            }
                                         }
                                     }
                                 } else {
@@ -278,13 +303,12 @@ struct RecipeListView: View {
                 Button("Save", action: renameSection)
                 Button("Cancel", role: .cancel) { sectionPendingEdit = nil }
             }
-            .confirmationDialog(
-                deleteSectionConfirmationMessage,
+            .alert(
+                "Delete Chapter?",
                 isPresented: Binding(
                     get: { sectionPendingDeletion != nil },
                     set: { if !$0 { sectionPendingDeletion = nil } }
-                ),
-                titleVisibility: .visible
+                )
             ) {
                 Button("Delete Chapter", role: .destructive) {
                     if let section = sectionPendingDeletion {
@@ -293,6 +317,8 @@ struct RecipeListView: View {
                     sectionPendingDeletion = nil
                 }
                 Button("Cancel", role: .cancel) { sectionPendingDeletion = nil }
+            } message: {
+                Text(deleteSectionConfirmationMessage)
             }
         }
     }
@@ -328,6 +354,7 @@ struct RecipeListView: View {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .accessibilityHidden(true)
             } else {
                 Color(hex: cookbook.coverColorHex)
             }
@@ -419,17 +446,35 @@ struct RecipeListView: View {
         try? modelContext.save()
     }
 
-    private func isExpandedBinding(forKey key: String) -> Binding<Bool> {
-        Binding(
-            get: { expandedChapterKeys.contains(key) },
-            set: { isExpanded in
+    /// Manual stand-in for DisclosureGroup's header row — see the comment
+    /// at this view's call site for why DisclosureGroup itself isn't used
+    /// inside this List.
+    private func chapterHeaderRow(group: RecipeSectionGroup, title: String) -> some View {
+        let key = group.section?.id.uuidString ?? title
+        let isExpanded = expandedChapterKeys.contains(key)
+        return Button {
+            withAnimation {
                 if isExpanded {
-                    expandedChapterKeys.insert(key)
-                } else {
                     expandedChapterKeys.remove(key)
+                } else {
+                    expandedChapterKeys.insert(key)
                 }
             }
-        )
+        } label: {
+            HStack {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Text(title)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("\(group.recipes.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -491,6 +536,7 @@ struct RecipeRow: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 56, height: 56)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                .accessibilityHidden(true)
         } else {
             placeholderThumbnail
         }

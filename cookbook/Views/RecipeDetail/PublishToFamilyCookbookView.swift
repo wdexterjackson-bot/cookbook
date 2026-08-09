@@ -114,12 +114,14 @@ struct PublishToFamilyCookbookView: View {
         defer { busyGroupIDs.remove(group.id) }
 
         do {
-            try await RecipePublishingCoordinator.publish(
+            let photoUploadSucceeded = try await RecipePublishingCoordinator.publish(
                 recipe, to: group, ownerUserID: userID,
                 publicationsService: publicationsService, photoUploadService: photoUploadService
             )
             publishedGroupIDs.insert(group.id)
-            statusMessage = "Published to \(group.cookbookName)."
+            statusMessage = photoUploadSucceeded
+                ? "Published to \(group.cookbookName)."
+                : "Published to \(group.cookbookName), but the photo couldn't be uploaded."
         } catch {
             errorMessage = error.localizedDescription
         }

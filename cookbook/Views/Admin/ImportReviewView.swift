@@ -17,11 +17,11 @@ struct ImportReviewView: View {
     let preview: RecipeFileImportPreview
     let cookbook: Cookbook
     let ownerID: String
+    let importSession: RecipeImportSession
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
-    @State private var isCommitting = false
     @State private var saveOutcome: SaveOutcome?
 
     private enum SaveOutcome {
@@ -53,7 +53,7 @@ struct ImportReviewView: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Approve & Save") { commit() }
-                            .disabled(preview.drafts.isEmpty || isCommitting)
+                            .disabled(preview.drafts.isEmpty || importSession.phase != .idle)
                     }
                 }
             }
@@ -96,7 +96,7 @@ struct ImportReviewView: View {
                 }
             }
 
-            if isCommitting {
+            if importSession.phase == .saving {
                 Section {
                     HStack {
                         ProgressView()
@@ -191,14 +191,24 @@ struct ImportReviewView: View {
     }
 
     private func commit() {
-        isCommitting = true
-        let result = RecipeFileImportCoordinator.commit(preview.drafts, into: cookbook, ownerID: ownerID, modelContext: modelContext)
-        isCommitting = false
-        switch result {
-        case .success(let count):
-            saveOutcome = .saved(count: count)
-        case .failure(let error):
-            saveOutcome = .failed(message: error.localizedDescription)
+        Task {
+            importSession.phase = .saving
+            // RecipeFileImportCoordinator.commit is synchronous, in-memory
+            // SwiftData work with no per-item I/O — genuinely backgrounding
+            // it isn't needed (and SwiftData's ModelContext shouldn't be
+            // touched off its owning actor anyway). Without a real
+            // suspension point, though, .saving and the eventual outcome
+            // would both land in the same run-loop turn and the "Saving…"
+            // row would never actually render — Task.yield() forces one.
+            await Task.yield()
+            let result = RecipeFileImportCoordinator.commit(preview.drafts, into: cookbook, ownerID: ownerID, modelContext: modelContext)
+            importSession.phase = .idle
+            switch result {
+            case .success(let count):
+                saveOutcome = .saved(count: count)
+            case .failure(let error):
+                saveOutcome = .failed(message: error.localizedDescription)
+            }
         }
     }
 }
@@ -220,7 +230,8 @@ struct ImportReviewView: View {
             failedChunks: ["Name: Unreadable Recipe"]
         ),
         cookbook: cookbook,
-        ownerID: "preview"
+        ownerID: "preview",
+        importSession: RecipeImportSession()
     )
     .modelContainer(for: Recipe.self, inMemory: true)
 }

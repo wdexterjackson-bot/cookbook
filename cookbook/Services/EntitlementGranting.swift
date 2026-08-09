@@ -14,9 +14,10 @@ import Foundation
 
 protocol EntitlementGranting {
     /// Grants whichever of the two free launch credits `userID` hasn't
-    /// received yet, but only while `LaunchCreditPromo.isEligible(on: now)`.
-    /// Safe to call on every launch/sign-in — a no-op once both have been
-    /// granted once.
+    /// received yet and is still within its own expiration window (each
+    /// tier is independent — see LaunchCreditPromo). Safe to call on every
+    /// launch/sign-in — a no-op once both have been granted, or once both
+    /// windows have passed.
     func grantMissingLaunchCreditsIfEligible(userID: String, now: Date) async throws
 }
 
@@ -32,17 +33,35 @@ enum LaunchCreditPromo {
     /// Spent to create a group/Family Cookbook.
     static let tier2CreditCount = 2
 
-    static let cutoffDate: Date = {
+    /// Pro User (tier1) free credits are grantable to new accounts, and
+    /// usable once granted, only until this date — the same value serves
+    /// both purposes deliberately (confirmed decision: an unspent credit
+    /// itself expires, not just the grant window for new signups; granting
+    /// a credit that would already be expired makes no sense).
+    static let tier1ExpirationDate = makeUTCDate(year: 2027, month: 1, day: 1)
+    /// Family Cookbook (tier2) free credits — same reasoning, later date.
+    static let tier2ExpirationDate = makeUTCDate(year: 2029, month: 1, day: 1)
+
+    static func isTier1Eligible(on date: Date) -> Bool {
+        date < tier1ExpirationDate
+    }
+    static func isTier2Eligible(on date: Date) -> Bool {
+        date < tier2ExpirationDate
+    }
+    /// Coarse "is the promo active at all" check, true as long as at least
+    /// one tier could still be granted — for callers that don't model the
+    /// two tiers independently (e.g. FakeEntitlementGranter).
+    static func isAnyTierEligible(on date: Date) -> Bool {
+        date < tier2ExpirationDate
+    }
+
+    private static func makeUTCDate(year: Int, month: Int, day: Int) -> Date {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         var components = DateComponents()
-        components.year = 2029
-        components.month = 1
-        components.day = 1
+        components.year = year
+        components.month = month
+        components.day = day
         return calendar.date(from: components)!
-    }()
-
-    static func isEligible(on date: Date) -> Bool {
-        date < cutoffDate
     }
 }

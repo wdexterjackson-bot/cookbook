@@ -15,26 +15,39 @@
 import Foundation
 
 enum RecipePublishingCoordinator {
+    /// Returns `true` whenever there was nothing to upload in the first
+    /// place — only `false` distinguishes a genuine upload failure, so
+    /// callers can tell the difference and let the user know the text
+    /// published but the photo didn't, instead of the failure being
+    /// invisible (as it was before this returned anything).
+    @discardableResult
     static func publish(
         _ recipe: Recipe,
         to group: FamilyGroup,
         ownerUserID: String,
         publicationsService: PublicationsServicing,
         photoUploadService: RecipePhotoUploadServicing
-    ) async throws {
+    ) async throws -> Bool {
         var coverImageURL: String?
+        var photoUploadSucceeded = true
         if let filename = recipe.heroPhotoFilename, let imageData = PhotoStore.data(for: filename) {
             // Best-effort: a photo upload hiccup shouldn't block publishing
-            // the recipe's text content.
-            coverImageURL = try? await photoUploadService.upload(
-                imageData: imageData,
-                groupID: group.id,
-                ownerUserID: ownerUserID,
-                sourceRecipeID: recipe.id.uuidString
-            ).absoluteString
+            // the recipe's text content — but it's still worth reporting
+            // back to the caller rather than silently pretending it worked.
+            do {
+                coverImageURL = try await photoUploadService.upload(
+                    imageData: imageData,
+                    groupID: group.id,
+                    ownerUserID: ownerUserID,
+                    sourceRecipeID: recipe.id.uuidString
+                ).absoluteString
+            } catch {
+                photoUploadSucceeded = false
+            }
         }
 
         let content = PublicationContentSnapshot.make(from: recipe, coverImageURL: coverImageURL)
         _ = try await publicationsService.publish(content, sourceRecipeID: recipe.id.uuidString, to: group.id, ownerUserID: ownerUserID)
+        return photoUploadSucceeded
     }
 }

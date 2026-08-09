@@ -21,6 +21,7 @@ struct AddToCartButton: View {
 
     @Environment(\.modelContext) private var modelContext
     @Query private var matchingItems: [CartItem]
+    @State private var errorMessage: String?
 
     init(
         ownerID: String,
@@ -45,15 +46,19 @@ struct AddToCartButton: View {
 
     var body: some View {
         Button {
-            CartItemStore.addFromRecipe(
-                ownerID: ownerID,
-                displayText: displayText,
-                quantityValue: quantityValue,
-                unit: unit,
-                sourceRecipeID: sourceRecipeID,
-                sourceRecipeTitleSnapshot: sourceRecipeTitleSnapshot,
-                in: modelContext
-            )
+            do {
+                try CartItemStore.addFromRecipe(
+                    ownerID: ownerID,
+                    displayText: displayText,
+                    quantityValue: quantityValue,
+                    unit: unit,
+                    sourceRecipeID: sourceRecipeID,
+                    sourceRecipeTitleSnapshot: sourceRecipeTitleSnapshot,
+                    in: modelContext
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         } label: {
             Image(systemName: isInCart ? "checkmark.circle.fill" : "cart.badge.plus")
                 .foregroundStyle(isInCart ? Color.potluckSage : Color.potluckTomato)
@@ -61,6 +66,14 @@ struct AddToCartButton: View {
         .buttonStyle(.plain)
         .disabled(isInCart)
         .accessibilityLabel(isInCart ? "\(displayText), already added to cart" : "Add \(displayText) to cart")
+        .alert("Couldn't Add to Cart", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 }
 

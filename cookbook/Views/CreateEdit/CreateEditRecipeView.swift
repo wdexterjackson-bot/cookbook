@@ -55,19 +55,50 @@ private struct PushableButtonStyle: ButtonStyle {
 private struct DraftIngredientRow: Identifiable {
     let id = UUID()
     var name: String = ""
-    var quantityText: String = ""
+    var quantity: WheelQuantity = .zero
     var unit: String = ""
     var isOptional: Bool = false
 
     var isBlank: Bool {
-        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && quantityText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && quantity == .zero
     }
 }
 
 private struct DraftStepRow: Identifiable {
     let id = UUID()
     var text: String = ""
+}
+
+/// A wheel picker is far too tall to inline into a compact ingredient
+/// row, so tapping the row's Amount button presents this instead — one
+/// shared sheet for whichever row is currently being edited, rather than
+/// building a picker per row.
+private struct AmountWheelPickerSheet: View {
+    @Binding var quantity: WheelQuantity
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Text(quantity.displayText.isEmpty ? "No Amount" : quantity.displayText)
+                    .font(.title2.weight(.semibold))
+                    .padding(.top)
+                QuantityWheelPicker(quantity: $quantity)
+            }
+            .navigationTitle("Amount")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: onDone)
+                }
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.height(320)])
+        #endif
+    }
 }
 
 struct CreateEditRecipeView: View {
@@ -143,6 +174,9 @@ struct CreateEditRecipeView: View {
 
     @FocusState private var focusedIngredientRowID: UUID?
     @FocusState private var focusedStepRowID: UUID?
+    /// Which row's amount is being edited in the wheel-picker sheet — one
+    /// shared sheet rather than one per row.
+    @State private var amountEditorRowID: UUID?
 
     init(mode: Mode) {
         self.mode = mode
@@ -206,7 +240,7 @@ struct CreateEditRecipeView: View {
         }.map { ingredient in
             DraftIngredientRow(
                 name: ingredient.name,
-                quantityText: ingredient.quantityValue.map(Self.formatQuantity) ?? "",
+                quantity: .nearest(to: ingredient.quantityValue),
                 unit: ingredient.unit ?? "",
                 isOptional: ingredient.isOptional
             )
@@ -218,10 +252,6 @@ struct CreateEditRecipeView: View {
         return sortedSections.flatMap { section in
             section.steps.sorted { $0.sortOrder < $1.sortOrder }
         }.map { DraftStepRow(text: $0.text) }
-    }
-
-    private static func formatQuantity(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0...2)))
     }
 
     var body: some View {
@@ -352,6 +382,16 @@ struct CreateEditRecipeView: View {
                 focusedIngredientRowID = row.id
             }
         }
+        .sheet(isPresented: Binding(
+            get: { amountEditorRowID != nil },
+            set: { if !$0 { amountEditorRowID = nil } }
+        )) {
+            if let index = amountEditorRowID.flatMap({ id in ingredientRows.firstIndex { $0.id == id } }) {
+                AmountWheelPickerSheet(quantity: $ingredientRows[index].quantity) {
+                    amountEditorRowID = nil
+                }
+            }
+        }
     }
 
     private func ingredientRow(_ row: Binding<DraftIngredientRow>) -> some View {
@@ -364,13 +404,16 @@ struct CreateEditRecipeView: View {
                 .focused($focusedIngredientRowID, equals: row.wrappedValue.id)
                 .accessibilityLabel("Ingredient name")
 
-            TextField("Amount", text: row.quantityText)
-                #if os(iOS)
-                .keyboardType(.decimalPad)
-                #endif
-                .frame(width: 64)
-                .multilineTextAlignment(.trailing)
-                .accessibilityLabel("Amount")
+            Button {
+                amountEditorRowID = row.wrappedValue.id
+            } label: {
+                Text(row.wrappedValue.quantity.displayText.isEmpty ? "Amount" : row.wrappedValue.quantity.displayText)
+                    .foregroundStyle(row.wrappedValue.quantity.displayText.isEmpty ? .secondary : .primary)
+                    .frame(width: 64, alignment: .trailing)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Amount")
+            .accessibilityValue(row.wrappedValue.quantity.displayText.isEmpty ? "None" : row.wrappedValue.quantity.displayText)
 
             HStack(spacing: 2) {
                 TextField("unit", text: row.unit)
@@ -583,7 +626,7 @@ struct CreateEditRecipeView: View {
             for parsed in result.ingredients {
                 ingredientRows.append(DraftIngredientRow(
                     name: parsed.name,
-                    quantityText: parsed.quantity.map(Self.formatQuantity) ?? "",
+                    quantity: .nearest(to: parsed.quantity),
                     unit: parsed.unit ?? ""
                 ))
             }
@@ -1010,14 +1053,13 @@ struct CreateEditRecipeView: View {
         let section = IngredientSection(heading: nil, sortOrder: 0)
         section.ingredients = nonBlankRows.enumerated().map { index, row in
             let trimmedName = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedQuantityText = row.quantityText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let quantityText = row.quantity.displayText
             let trimmedUnit = row.unit.trimmingCharacters(in: .whitespacesAndNewlines)
-            let parsedQuantity = Double(trimmedQuantityText)
 
             return Ingredient(
-                displayText: Self.composeDisplayText(name: trimmedName, quantityText: trimmedQuantityText, unit: trimmedUnit),
-                name: trimmedName.isEmpty ? trimmedQuantityText : trimmedName,
-                quantityValue: parsedQuantity,
+                displayText: Self.composeDisplayText(name: trimmedName, quantityText: quantityText, unit: trimmedUnit),
+                name: trimmedName.isEmpty ? quantityText : trimmedName,
+                quantityValue: row.quantity.quantityValue,
                 unit: trimmedUnit.isEmpty ? nil : trimmedUnit,
                 preparationNote: nil,
                 isOptional: row.isOptional,

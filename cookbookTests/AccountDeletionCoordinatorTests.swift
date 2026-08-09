@@ -163,6 +163,47 @@ struct AccountDeletionCoordinatorTests {
         #expect(entitlements.entitlementsByUserID["alice"] == nil)
     }
 
+    /// PRD §6.6: a deleted account's identity is pseudonymized, but a
+    /// publication they left behind in a group that survives them should
+    /// stick around with a non-identifying tombstone rather than silently
+    /// still crediting a since-deleted account by name forever.
+    @Test func tombstonesPublicationsInGroupsThatSurviveTheDeletedOwner() async throws {
+        let context = try makeInMemoryContext()
+        let groups = InMemoryGroupsService()
+        groups.tier2CreditsByUserID["alice"] = 1
+        let group = try await groups.createGroup(makeDetails(name: "Barrentines", cookbookName: "Reunion"), creatorUserID: "alice", idempotencyKey: "req-1")
+        let joinRequest = try await groups.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await groups.decideJoinRequest(joinRequest.id, approve: true, decidedByUserID: "alice")
+
+        let publications = InMemoryPublicationsService()
+        let content = PublicationContentSnapshot(
+            title: "Bob's Cornbread",
+            summary: "",
+            yield: "",
+            totalTimeMinutes: nil,
+            ingredientSections: [],
+            stepSections: [],
+            notes: "",
+            tags: [],
+            authorLineage: "Bob Barrentine of Memphis, TN"
+        )
+        let published = try await publications.publish(content, sourceRecipeID: "r1", to: group.id, ownerUserID: "bob")
+
+        try await AccountDeletionCoordinator.deleteAllData(
+            for: "bob",
+            modelContext: context,
+            groupsService: groups,
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: InMemoryUserProfileService(),
+            publicationsService: publications
+        )
+
+        let survivingPublication = try #require(await publications.fetchPublication(id: published.id))
+        #expect(survivingPublication.content.authorLineage == "Original contributor deleted")
+        #expect(survivingPublication.ownerUserID == "bob")
+        #expect(survivingPublication.state == .published)
+    }
+
     @Test func bestEffortDeletesTheProfileDocument() async throws {
         let context = try makeInMemoryContext()
         let userProfiles = InMemoryUserProfileService()

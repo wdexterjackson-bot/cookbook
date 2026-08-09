@@ -47,23 +47,24 @@ final class AdministratorImportUITests: XCTestCase {
         XCTAssertTrue(submitButton.isEnabled)
         submitButton.tap()
 
-        let profileTab = app.tabBars.buttons["Profile"]
-        XCTAssertTrue(profileTab.waitForExistence(timeout: 20))
-        profileTab.tap()
-        dismissSavePasswordPromptIfPresent(app)
+        let moreTab = app.tabBars.buttons["More"]
+        XCTAssertTrue(moreTab.waitForExistence(timeout: 20))
+        XCTAssertTrue(tapWhenHittable(moreTab, in: app))
 
-        let administratorButton = app.buttons["Administrator"]
+        // Administrator is a direct card on the More hub (see
+        // MoreHubView) — its accessibility label is combined with its
+        // subtitle ("Administrator. Bulk recipe import"), so match on a
+        // prefix rather than the exact title.
+        let administratorButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Administrator'")).firstMatch
         XCTAssertTrue(administratorButton.waitForExistence(timeout: 10))
-        dismissSavePasswordPromptIfPresent(app)
-        wait(for: [expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: administratorButton)], timeout: 5)
-        administratorButton.tap()
+        XCTAssertTrue(tapWhenHittable(administratorButton, in: app))
 
         let importRow = app.buttons["Import Recipes from File"]
         XCTAssertTrue(importRow.waitForExistence(timeout: 10))
         importRow.tap()
 
         let chooseFileButton = app.buttons["Choose File"]
-        let unavailableText = app.staticTexts["AI recipe import isn't available on this device — this needs Apple Intelligence turned on, which isn't supported in every region or on every device."]
+        let unavailableText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "isn't available on this device")).firstMatch
 
         print("DEBUG_STATE_START")
         if chooseFileButton.waitForExistence(timeout: 8) {
@@ -82,16 +83,47 @@ final class AdministratorImportUITests: XCTestCase {
     @MainActor
     private func dismissSavePasswordPromptIfPresent(_ app: XCUIApplication) {
         let notNow = app.buttons["Not Now"]
-        if notNow.waitForExistence(timeout: 2) {
+        if notNow.waitForExistence(timeout: 1) {
             notNow.tap()
         }
     }
 
+    /// iOS's own AutoFill "Save Password?" sheet can appear at any point
+    /// after a fresh sign-up, on its own schedule, covering the whole
+    /// screen and blocking hit-testing on whatever's underneath — a
+    /// single dismiss check before tapping can miss it if it shows up
+    /// mid-wait instead. Polls both conditions together until the target
+    /// element is actually tappable (or the timeout elapses), tapping it
+    /// the moment it is.
+    @MainActor
+    @discardableResult
+    private func tapWhenHittable(_ element: XCUIElement, in app: XCUIApplication, timeout: TimeInterval = 15) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            dismissSavePasswordPromptIfPresent(app)
+            if element.exists && element.isHittable {
+                element.tap()
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        return false
+    }
+
+    /// Profile is no longer a direct tab bar item — it's reached through
+    /// the "More" hub, which groups it with Messages/Administrator/
+    /// Discover behind icon-badge cards rather than plain rows (see
+    /// MoreHubView). Card buttons carry a combined accessibility label
+    /// ("Profile. Account & purchases"), so match on a prefix rather than
+    /// the exact title.
     @MainActor
     private func signOutIfAlreadySignedIn(_ app: XCUIApplication) {
-        let profileTab = app.tabBars.buttons["Profile"]
-        guard profileTab.waitForExistence(timeout: 3) else { return }
-        profileTab.tap()
+        let moreTab = app.tabBars.buttons["More"]
+        guard moreTab.waitForExistence(timeout: 3) else { return }
+        moreTab.tap()
+        let profileCard = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Profile'")).firstMatch
+        guard profileCard.waitForExistence(timeout: 3) else { return }
+        profileCard.tap()
         let signOutButton = app.buttons["Sign Out"]
         guard signOutButton.waitForExistence(timeout: 3) else { return }
         signOutButton.tap()

@@ -9,14 +9,32 @@ import Testing
 
 struct EntitlementGrantingTests {
 
-    @Test func promoIsEligibleBeforeCutoff() {
+    @Test func tier1IsEligibleBeforeItsOwnCutoff() {
         let beforeCutoff = ISO8601DateFormatter().date(from: "2026-01-01T00:00:00Z")!
-        #expect(LaunchCreditPromo.isEligible(on: beforeCutoff))
+        #expect(LaunchCreditPromo.isTier1Eligible(on: beforeCutoff))
     }
 
-    @Test func promoIsNotEligibleAfterCutoff() {
+    @Test func tier1IsNotEligibleAfterItsOwnCutoff() {
+        let afterCutoff = ISO8601DateFormatter().date(from: "2027-06-01T00:00:00Z")!
+        #expect(!LaunchCreditPromo.isTier1Eligible(on: afterCutoff))
+    }
+
+    @Test func tier2IsEligibleBeforeItsOwnCutoff() {
+        let beforeCutoff = ISO8601DateFormatter().date(from: "2028-01-01T00:00:00Z")!
+        #expect(LaunchCreditPromo.isTier2Eligible(on: beforeCutoff))
+    }
+
+    @Test func tier2IsNotEligibleAfterItsOwnCutoff() {
         let afterCutoff = ISO8601DateFormatter().date(from: "2029-06-01T00:00:00Z")!
-        #expect(!LaunchCreditPromo.isEligible(on: afterCutoff))
+        #expect(!LaunchCreditPromo.isTier2Eligible(on: afterCutoff))
+    }
+
+    /// Between the two cutoffs, tier1 has expired but tier2 hasn't —
+    /// confirms the tiers are gated independently, not by one shared date.
+    @Test func tier1ExpiresBeforeTier2() {
+        let betweenCutoffs = ISO8601DateFormatter().date(from: "2028-01-01T00:00:00Z")!
+        #expect(!LaunchCreditPromo.isTier1Eligible(on: betweenCutoffs))
+        #expect(LaunchCreditPromo.isTier2Eligible(on: betweenCutoffs))
     }
 
     @Test func fakeGranterGrantsOncePerUser() async throws {

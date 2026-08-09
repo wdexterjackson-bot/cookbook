@@ -14,6 +14,10 @@ final class InMemoryGroupsService: GroupsServicing {
     /// Mirrors the `entitlements/{uid}.tier2Credits` counter the real
     /// adapter reads/writes via Firestore.
     var tier2CreditsByUserID: [String: Int] = [:]
+    /// Mirrors `entitlements/{uid}.tier2ExpiresAt` — nil means no
+    /// expiration recorded (never expires, matching the real adapter's
+    /// tolerant treatment of a missing field).
+    var tier2ExpiresAtByUserID: [String: Date] = [:]
     private var processedIdempotencyKeys: [String: String] = [:] // key -> created group id
     private var claimedUniquenessKeys: Set<String> = []
 
@@ -33,6 +37,9 @@ final class InMemoryGroupsService: GroupsServicing {
         let availableCredits = tier2CreditsByUserID[creatorUserID] ?? 0
         guard availableCredits > 0 else {
             throw GroupsServiceError.insufficientCredits
+        }
+        if let expiresAt = tier2ExpiresAtByUserID[creatorUserID], expiresAt < .now {
+            throw GroupsServiceError.creditExpired
         }
 
         let uniquenessKey = FamilyGroup.uniquenessKey(cookbookName: details.cookbookName, familyName: details.name, locationText: details.locationText)

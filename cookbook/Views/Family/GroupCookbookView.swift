@@ -29,6 +29,10 @@ struct GroupCookbookView: View {
     /// truth; this is just this screen's own read of it).
     @State private var likedPublicationIDs: Set<String> = []
     @State private var busyLikePublicationIDs: Set<String> = []
+    /// This user's own rating per publication, if any — same load-once,
+    /// keep-in-sync-locally shape as likedPublicationIDs above.
+    @State private var myRatings: [String: Int] = [:]
+    @State private var busyRatingPublicationIDs: Set<String> = []
 
     private let publicationsService: PublicationsServicing = FirestorePublicationsService()
     private let photoUploadService: RecipePhotoUploadServicing = FirebaseRecipePhotoUploadService()
@@ -150,6 +154,7 @@ struct GroupCookbookView: View {
                         .foregroundStyle(.secondary)
                 }
                 likeRow(publication)
+                ratingRow(publication)
 
                 if publication.ownerUserID == accountState.currentUserID {
                     Button("Unpublish", role: .destructive) {
@@ -180,6 +185,75 @@ struct GroupCookbookView: View {
         .disabled(busyLikePublicationIDs.contains(publication.id))
         .accessibilityLabel(isLiked ? "Unlike" : "Like")
         .accessibilityValue("\(publication.likeCount ?? 0) likes")
+    }
+
+    /// Shared-cookbook-only, same as likeRow above — a 1-5 star rating
+    /// with the group's average, plus a Clear affordance since a user
+    /// might want to remove their rating entirely, not just change it.
+    @ViewBuilder
+    private func ratingRow(_ publication: Publication) -> some View {
+        let myRating = myRatings[publication.id]
+        HStack(spacing: 4) {
+            ForEach(1...5, id: \.self) { star in
+                Button {
+                    Task { await applyRating(publication, rating: star) }
+                } label: {
+                    Image(systemName: star <= (myRating ?? 0) ? "star.fill" : "star")
+                        .foregroundStyle(star <= (myRating ?? 0) ? Color.potluckSunflower : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Text(averageRatingText(for: publication))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if myRating != nil {
+                Button("Clear") {
+                    Task { await removeRating(publication) }
+                }
+                .font(.caption)
+            }
+        }
+        .disabled(busyRatingPublicationIDs.contains(publication.id))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(myRating.map { "Your rating: \($0) of 5 stars" } ?? "Not yet rated")
+    }
+
+    private func averageRatingText(for publication: Publication) -> String {
+        guard let count = publication.ratingCount, count > 0, let sum = publication.ratingSum else {
+            return "No ratings yet"
+        }
+        let average = Double(sum) / Double(count)
+        return "\(average.formatted(.number.precision(.fractionLength(1)))) (\(count))"
+    }
+
+    private func applyRating(_ publication: Publication, rating: Int) async {
+        guard let userID = accountState.currentUserID else { return }
+        guard let index = publications.firstIndex(where: { $0.id == publication.id }) else { return }
+        busyRatingPublicationIDs.insert(publication.id)
+        defer { busyRatingPublicationIDs.remove(publication.id) }
+        do {
+            let (sum, count) = try await publicationsService.setRating(publication.id, userID: userID, rating: rating)
+            publications[index].ratingSum = sum
+            publications[index].ratingCount = count
+            myRatings[publication.id] = rating
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeRating(_ publication: Publication) async {
+        guard let userID = accountState.currentUserID else { return }
+        guard let index = publications.firstIndex(where: { $0.id == publication.id }) else { return }
+        busyRatingPublicationIDs.insert(publication.id)
+        defer { busyRatingPublicationIDs.remove(publication.id) }
+        do {
+            let (sum, count) = try await publicationsService.clearRating(publication.id, userID: userID)
+            publications[index].ratingSum = sum
+            publications[index].ratingCount = count
+            myRatings[publication.id] = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func toggleLike(_ publication: Publication) async {
@@ -229,6 +303,14 @@ struct GroupCookbookView: View {
                     liked.insert(publication.id)
                 }
                 likedPublicationIDs = liked
+
+                var ratings: [String: Int] = [:]
+                for publication in publications {
+                    if let rating = try await publicationsService.myRating(publication.id, userID: userID) {
+                        ratings[publication.id] = rating
+                    }
+                }
+                myRatings = ratings
             }
         } catch {
             errorMessage = error.localizedDescription

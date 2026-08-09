@@ -145,6 +145,7 @@ struct RecipeBackupPayload: Codable {
     var authorLineageIsExternal: Bool
     var inspirationCredit: String?
     var videoURLs: [String]
+    var prepSummary: String?
 
     init(
         recipe: Recipe,
@@ -199,6 +200,7 @@ struct RecipeBackupPayload: Codable {
         authorLineageIsExternal = recipe.authorLineageIsExternal
         inspirationCredit = recipe.inspirationCredit
         videoURLs = recipe.videoURLs
+        prepSummary = recipe.prepSummary
     }
 }
 

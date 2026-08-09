@@ -24,7 +24,7 @@ struct PostSignInCoordinatorTests {
         try context.save()
         let result = AuthResult(userID: "new-uid", isNewAccount: true)
 
-        PostSignInCoordinator.handle(result, modelContext: context)
+        try PostSignInCoordinator.handle(result, modelContext: context)
 
         #expect(recipe.ownerID == "new-uid")
     }
@@ -36,7 +36,7 @@ struct PostSignInCoordinatorTests {
         try context.save()
         let result = AuthResult(userID: "existing-uid", isNewAccount: false)
 
-        PostSignInCoordinator.handle(result, modelContext: context)
+        try PostSignInCoordinator.handle(result, modelContext: context)
 
         #expect(recipe.ownerID == "existing-uid")
     }

@@ -70,6 +70,33 @@ struct EntitlementServicingTests {
         #expect(try await service.redeemTier1CreditForProUser(userID: "alice") == false)
     }
 
+    @Test func redeemTier1CreditThrowsCreditExpiredWhenPastItsExpirationDate() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 1, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+            tier1ExpiresAt: Date(timeIntervalSince1970: 0)
+        )
+
+        await #expect(throws: EntitlementServiceError.creditExpired) {
+            try await service.redeemTier1CreditForProUser(userID: "alice")
+        }
+        // Untouched — the credit is still there, just unusable.
+        #expect(service.entitlementsByUserID["alice"]?.tier1Credits == 1)
+        #expect(service.entitlementsByUserID["alice"]?.isProUser == false)
+    }
+
+    @Test func redeemTier1CreditSucceedsWhenExpirationIsStillInTheFuture() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 1, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+            tier1ExpiresAt: LaunchCreditPromo.tier1ExpirationDate
+        )
+
+        #expect(try await service.redeemTier1CreditForProUser(userID: "alice"))
+    }
+
     // MARK: - EntitlementGate decision logic
 
     @Test func groupCreationGateNeedsConfirmationWhenCreditsAvailable() {

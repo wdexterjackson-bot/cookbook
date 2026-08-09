@@ -192,6 +192,47 @@ describe('entitlements', () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData()));
   });
+
+  // Credit expiration (tier1: 1/1/2027, tier2: 1/1/2029 — must match
+  // tier1ExpirationTimestamp()/tier2ExpirationTimestamp() in firestore.rules
+  // and LaunchCreditPromo in EntitlementGranting.swift exactly).
+  const PAST = Timestamp.fromDate(new Date('2020-01-01T00:00:00Z'));
+  const FUTURE_TIER1 = Timestamp.fromDate(new Date('2026-06-01T00:00:00Z'));
+  const FUTURE_TIER2 = Timestamp.fromDate(new Date('2028-06-01T00:00:00Z'));
+
+  it('allows spending a tier-2 credit that has not expired yet', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2ExpiresAt: FUTURE_TIER2 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 1, tier2ExpiresAt: FUTURE_TIER2 })));
+  });
+
+  it('rejects spending a tier-2 credit past its expiration', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2ExpiresAt: PAST })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 1, tier2ExpiresAt: PAST })));
+  });
+
+  it('allows spending a tier-1 credit that has not expired yet', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier1ExpiresAt: FUTURE_TIER1 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      tier1Credits: 0, isProUser: true, tier1ExpiresAt: FUTURE_TIER1,
+    })));
+  });
+
+  it('rejects spending a tier-1 credit past its expiration', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier1ExpiresAt: PAST })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      tier1Credits: 0, isProUser: true, tier1ExpiresAt: PAST,
+    })));
+  });
+
+  it('a doc with no *ExpiresAt field at all is treated as not-expired (legacy tolerance)', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
+  });
 });
 
 describe('group creation', () => {
@@ -297,6 +338,89 @@ describe('purchase claims', () => {
       userID: 'alice', productID: 'VibeApp.cookbook.familyUser.lifetime',
       transactionID: 'txn1', jwsRepresentation: 'stub-jws', submittedAt: Timestamp.now(), processed: true,
     }));
+  });
+});
+
+describe('personalCookbooks', () => {
+  function personalCookbookData(overrides = {}) {
+    return {
+      id: 'cb1', ownerUserID: 'alice', title: 'Weeknight Dinners',
+      coverColorHex: 'C25432', coverStyleImageName: null, coverImageURL: null,
+      sortOrder: 0, hasBeenConfigured: true, chaptersManuallyReordered: false,
+      createdAt: Timestamp.now(), updatedAt: Timestamp.now(), chapters: [],
+      ...overrides,
+    };
+  }
+
+  function personalRecipeData(overrides = {}) {
+    return {
+      id: 'recipe1', ownerUserID: 'alice', cookbookID: 'cb1', sectionID: null,
+      title: 'Cornbread', summary: '', story: '',
+      heroPhotoURL: null, galleryPhotoURLs: [],
+      yield: '', prepTimeMinutes: null, cookTimeMinutes: null, totalTimeMinutes: null,
+      ingredientSections: [], stepSections: [],
+      notes: '', sourceType: 'manual', sourceURL: null, sourceAuthorText: null,
+      externalSource: null, externalSourceID: null,
+      calories: null, proteinGrams: null, fatGrams: null, carbsGrams: null,
+      sugarGrams: null, fiberGrams: null, sodiumMilligrams: null,
+      cuisine: null, course: null, dietaryLabels: [], allergens: [], tags: [], equipment: [],
+      isFavorite: false, personalRating: null, privateNotes: '', isArchived: false,
+      createdAt: Timestamp.now(), updatedAt: Timestamp.now(), language: 'en',
+      rootOriginRecipeID: null, immediateSourceRecipeID: null,
+      sourceOwnerSnapshot: null, sourceGroupSnapshot: null,
+      authorLineage: null, authorLineageIsExternal: false, inspirationCredit: null,
+      videoURLs: [], prepSummary: null,
+      ...overrides,
+    };
+  }
+
+  it('an owner can write their own personal cookbook doc', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'personalCookbooks/cb1'), personalCookbookData()));
+  });
+
+  it("rejects writing a cookbook doc claiming someone else's ownerUserID", async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'personalCookbooks/cb1'), personalCookbookData({ ownerUserID: 'bob' })));
+  });
+
+  it('an owner can read their own personal cookbook doc', async () => {
+    await seed((db) => setDoc(doc(db, 'personalCookbooks/cb1'), personalCookbookData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(getDoc(doc(alice, 'personalCookbooks/cb1')));
+  });
+
+  it("rejects a different user reading someone else's personal cookbook doc", async () => {
+    await seed((db) => setDoc(doc(db, 'personalCookbooks/cb1'), personalCookbookData()));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(getDoc(doc(bob, 'personalCookbooks/cb1')));
+  });
+
+  it("rejects a different user overwriting someone else's personal cookbook doc", async () => {
+    await seed((db) => setDoc(doc(db, 'personalCookbooks/cb1'), personalCookbookData()));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'personalCookbooks/cb1'), personalCookbookData({ title: 'Hijacked' })));
+  });
+
+  it('an owner can write a recipe subdoc under their own cookbook', async () => {
+    await seed((db) => setDoc(doc(db, 'personalCookbooks/cb1'), personalCookbookData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'personalCookbooks/cb1/recipes/recipe1'), personalRecipeData()));
+  });
+
+  it("rejects writing a recipe subdoc claiming someone else's ownerUserID, even under your own cookbook", async () => {
+    await seed((db) => setDoc(doc(db, 'personalCookbooks/cb1'), personalCookbookData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'personalCookbooks/cb1/recipes/recipe1'), personalRecipeData({ ownerUserID: 'bob' })));
+  });
+
+  it("rejects a different user reading a recipe subdoc under someone else's cookbook", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'personalCookbooks/cb1'), personalCookbookData());
+      await setDoc(doc(db, 'personalCookbooks/cb1/recipes/recipe1'), personalRecipeData());
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(getDoc(doc(bob, 'personalCookbooks/cb1/recipes/recipe1')));
   });
 });
 
@@ -421,6 +545,52 @@ describe('publications', () => {
     });
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertSucceeds(getDoc(doc(bob, 'publications/pub1')));
+  });
+
+  // Exercises the exact update path AccountDeletionCoordinator's new
+  // publication-tombstoning relies on (PublicationsServicing.
+  // tombstoneOwnerAttribution): the owner overwriting `content` on their
+  // own publication while `groupID`/`ownerUserID`/`sourceRecipeID`/`state`
+  // stay put — the same shape as an ordinary "publish update."
+  it('the owner can update content.authorLineage on their own publication (e.g. account-deletion tombstone)', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData());
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData());
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'publications/pub1'), publicationData({
+      content: {
+        title: 'Cornbread', summary: '', yield: '', totalTimeMinutes: null,
+        ingredientSections: [], stepSections: [], notes: '', tags: [],
+        authorLineage: 'Original contributor deleted',
+      },
+    })));
+  });
+
+  it('a non-owner member cannot rewrite the content of someone else\'s publication', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData());
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData());
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'publications/pub1'), publicationData({
+      content: {
+        title: 'Hijacked', summary: '', yield: '', totalTimeMinutes: null,
+        ingredientSections: [], stepSections: [], notes: '', tags: [],
+      },
+    })));
   });
 });
 

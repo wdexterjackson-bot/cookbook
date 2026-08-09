@@ -20,6 +20,9 @@ final class InMemoryEntitlementService: EntitlementServicing {
         else {
             return false
         }
+        if let expiresAt = entitlement.tier1ExpiresAt, expiresAt < .now {
+            throw EntitlementServiceError.creditExpired
+        }
 
         entitlement.tier1Credits -= 1
         entitlement.isProUser = true

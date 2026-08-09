@@ -58,6 +58,39 @@ final class Cookbook {
     /// project's own real, already-populated Simulator store.
     var chaptersManuallyReordered: Bool = false
 
+    /// Backing storage for `storageMode` below — a plain Bool, not the
+    /// StorageMode enum directly. SwiftData's automatic lightweight
+    /// migration reliably backfills new *primitive* (Bool/Int/String)
+    /// properties given an inline literal default (chaptersManuallyReordered
+    /// above is the proven example), but a custom Codable-enum-typed
+    /// stored property is a real, documented SwiftData rough edge — adding
+    /// `var storageMode: StorageMode = .local` directly here crashed every
+    /// save on this app's existing on-disk store (`swift_dynamicCastFailure`
+    /// deep inside SwiftData, observed 2026-08-08 from a totally unrelated
+    /// CookbookConfigurationView.save() call). A Bool sidesteps the issue
+    /// entirely while `storageMode` below keeps the same enum-typed API
+    /// for every other file in this feature.
+    var isCloudSynced: Bool = false
+
+    /// Last time this cookbook was successfully pushed to or pulled from
+    /// the cloud — nil means never synced. Informational only (UI cache,
+    /// not security/ordering-sensitive), so a client-set `Date()` is fine
+    /// rather than round-tripping a server timestamp.
+    var lastSyncedAt: Date? = nil
+
+    /// On-device-only (default) vs. pushed to Firestore/Storage via
+    /// Personal Cookbook Cloud Sync — see StorageMode.swift and
+    /// `isCloudSynced`'s comment for why this is computed, not stored
+    /// directly. Deliberately excluded from CookbookBackupService's local
+    /// file backup/restore payload — a restored cookbook always lands as
+    /// `.local` regardless of the source's mode, since restoring onto a
+    /// new device shouldn't silently start pushing data to the cloud
+    /// before the user re-confirms that's what they want.
+    var storageMode: StorageMode {
+        get { isCloudSynced ? .cloudSynced : .local }
+        set { isCloudSynced = (newValue == .cloudSynced) }
+    }
+
     @Relationship(deleteRule: .cascade, inverse: nil)
     var sections: [CookbookSection]
 
@@ -80,6 +113,8 @@ final class Cookbook {
         self.updatedAt = .now
         self.hasBeenConfigured = false
         self.chaptersManuallyReordered = false
+        self.isCloudSynced = false
+        self.lastSyncedAt = nil
         self.sections = []
     }
 }

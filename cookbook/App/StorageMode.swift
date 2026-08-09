@@ -2,18 +2,23 @@
 //  StorageMode.swift
 //  cookbook
 //
+//  Whether a Cookbook's data lives only on this device, or is also pushed
+//  to Firestore/Storage via the Personal Cookbook Cloud Sync feature
+//  (2026-08-08). Was originally a single app-wide placeholder
+//  (`static let current: StorageMode = .local`) documented as "Phase 2
+//  turns this into a real user setting" — this is that Phase 2, except the
+//  setting turned out to belong per-Cookbook (see CookbookConfigurationView's
+//  "Sync to Cloud" toggle), not globally, since the user explicitly wants
+//  to choose it per cookbook rather than for the whole account at once.
+//
+//  Stored directly as a Cookbook property, same pattern as
+//  Recipe.sourceType: RecipeSourceType (a Codable enum SwiftData persists
+//  natively, no separate Bool/String plumbing needed).
+//
 
 import Foundation
 
-/// Whether recipe data lives only on this device or also syncs to the cloud.
-///
-/// Phase 1 is local-only end to end: every call site checks this, but the
-/// app never offers a way to change it yet, and no sync service exists.
-/// Phase 2 turns this into a real user setting backed by account state
-/// without changing how anything that already checks it behaves.
-enum StorageMode {
+enum StorageMode: String, Codable {
     case local
     case cloudSynced
-
-    static let current: StorageMode = .local
 }

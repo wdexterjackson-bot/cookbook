@@ -17,7 +17,7 @@ import {
   assertFails,
 } from '@firebase/rules-unit-testing';
 import { doc, setDoc, Timestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getBytes } from 'firebase/storage';
+import { ref, uploadBytes, getBytes, deleteObject } from 'firebase/storage';
 
 let testEnv;
 
@@ -96,5 +96,46 @@ describe('publication photo uploads', () => {
 
     const anon = testEnv.unauthenticatedContext().storage();
     await assertFails(getBytes(ref(anon, 'publications/group-read-anon/alice_recipe1.jpg')));
+  });
+});
+
+describe('personal cookbook photo uploads', () => {
+  it('allows a user to upload under their own uid prefix', async () => {
+    const alice = testEnv.authenticatedContext('alice').storage();
+    const fileRef = ref(alice, 'personalCookbooks/alice/recipe1.jpg');
+    await assertSucceeds(uploadBytes(fileRef, jpegBytes, { contentType: 'image/jpeg' }));
+  });
+
+  it("rejects uploading under someone else's uid prefix", async () => {
+    const alice = testEnv.authenticatedContext('alice').storage();
+    const fileRef = ref(alice, 'personalCookbooks/bob/recipe1.jpg');
+    await assertFails(uploadBytes(fileRef, jpegBytes, { contentType: 'image/jpeg' }));
+  });
+
+  it('rejects a non-image content type', async () => {
+    const alice = testEnv.authenticatedContext('alice').storage();
+    const fileRef = ref(alice, 'personalCookbooks/alice/recipe1.jpg');
+    await assertFails(uploadBytes(fileRef, jpegBytes, { contentType: 'text/plain' }));
+  });
+
+  it('allows the owner to read their own photo', async () => {
+    const alice = testEnv.authenticatedContext('alice').storage();
+    await uploadBytes(ref(alice, 'personalCookbooks/alice/recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
+    await assertSucceeds(getBytes(ref(alice, 'personalCookbooks/alice/recipe1.jpg')));
+  });
+
+  it("rejects another user reading someone else's personal cookbook photo", async () => {
+    const alice = testEnv.authenticatedContext('alice').storage();
+    await uploadBytes(ref(alice, 'personalCookbooks/alice/recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
+
+    const bob = testEnv.authenticatedContext('bob').storage();
+    await assertFails(getBytes(ref(bob, 'personalCookbooks/alice/recipe1.jpg')));
+  });
+
+  it('allows the owner to delete their own photo', async () => {
+    const alice = testEnv.authenticatedContext('alice').storage();
+    const fileRef = ref(alice, 'personalCookbooks/alice/recipe1.jpg');
+    await uploadBytes(fileRef, jpegBytes, { contentType: 'image/jpeg' });
+    await assertSucceeds(deleteObject(fileRef));
   });
 });

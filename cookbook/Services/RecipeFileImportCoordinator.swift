@@ -66,28 +66,39 @@ enum RecipeFileImportCoordinator {
     static func parseRecipes(
         from text: String,
         defaultAuthorLineage: String?,
-        lineImportService: RecipeLineImportServicing
+        lineImportService: RecipeLineImportServicing,
+        onChunkProgress: @escaping @Sendable @MainActor (Int, Int) -> Void = { _, _ in }
     ) async -> RecipeFileImportPreview {
         var preview = RecipeFileImportPreview()
+        let chunks = splitIntoRecipeChunks(text)
+        let total = chunks.count
+        // Reported before the loop starts, not just after each chunk
+        // finishes — the total is known immediately, but each chunk's
+        // on-device AI parse can take several seconds, so waiting for the
+        // first callback left the UI showing an indeterminate spinner
+        // with no total for that whole first chunk (the entire parse, for
+        // a single-recipe file).
+        await onChunkProgress(0, total)
 
-        for chunk in splitIntoRecipeChunks(text) {
+        for (index, chunk) in chunks.enumerated() {
             do {
                 let parsed = try await lineImportService.parseLines(from: chunk)
-                guard let title = parsed.title, !title.isEmpty else {
+                if let title = parsed.title, !title.isEmpty {
+                    preview.drafts.append(DraftRecipe(
+                        title: title,
+                        chapterName: parsed.chapterName,
+                        notes: parsed.notes ?? "",
+                        authorLineage: parsed.authorLineageText ?? defaultAuthorLineage,
+                        ingredients: parsed.ingredients,
+                        steps: parsed.steps
+                    ))
+                } else {
                     preview.failedChunks.append(String(chunk.prefix(60)))
-                    continue
                 }
-                preview.drafts.append(DraftRecipe(
-                    title: title,
-                    chapterName: parsed.chapterName,
-                    notes: parsed.notes ?? "",
-                    authorLineage: parsed.authorLineageText ?? defaultAuthorLineage,
-                    ingredients: parsed.ingredients,
-                    steps: parsed.steps
-                ))
             } catch {
                 preview.failedChunks.append(String(chunk.prefix(60)))
             }
+            await onChunkProgress(index + 1, total)
         }
 
         return preview

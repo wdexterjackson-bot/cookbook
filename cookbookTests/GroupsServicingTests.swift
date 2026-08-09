@@ -52,6 +52,29 @@ struct GroupsServicingTests {
         }
     }
 
+    @Test func createGroupWithExpiredCreditThrowsCreditExpired() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        service.tier2ExpiresAtByUserID["alice"] = Date(timeIntervalSince1970: 0)
+
+        await #expect(throws: GroupsServiceError.creditExpired) {
+            try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+        }
+        // Untouched — the credit is still there, just unusable.
+        #expect(service.tier2CreditsByUserID["alice"] == 1)
+    }
+
+    @Test func createGroupSucceedsWhenExpirationIsStillInTheFuture() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        service.tier2ExpiresAtByUserID["alice"] = LaunchCreditPromo.tier2ExpirationDate
+
+        let group = try await service.createGroup(makeDetails(), creatorUserID: "alice", idempotencyKey: "req-1")
+
+        #expect(service.tier2CreditsByUserID["alice"] == 0)
+        #expect(group.createdByUserID == "alice")
+    }
+
     @Test func repeatedCreateGroupCallWithSameIdempotencyKeyDoesNotDoubleCharge() async throws {
         let service = InMemoryGroupsService()
         service.tier2CreditsByUserID["alice"] = 1

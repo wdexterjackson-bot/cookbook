@@ -139,20 +139,24 @@ struct RecipeDetailView: View {
     private func addAllIngredientsToCart() {
         let ownerID = accountState.currentOwnerID
         let sourceRecipeID = recipe.id.uuidString
-        for section in recipe.ingredientSections {
-            for ingredient in section.ingredients {
-                CartItemStore.addFromRecipe(
-                    ownerID: ownerID,
-                    displayText: ingredient.displayText,
-                    quantityValue: ingredient.quantityValue,
-                    unit: ingredient.unit,
-                    sourceRecipeID: sourceRecipeID,
-                    sourceRecipeTitleSnapshot: recipe.title,
-                    in: modelContext
-                )
+        do {
+            for section in recipe.ingredientSections {
+                for ingredient in section.ingredients {
+                    try CartItemStore.addFromRecipe(
+                        ownerID: ownerID,
+                        displayText: ingredient.displayText,
+                        quantityValue: ingredient.quantityValue,
+                        unit: ingredient.unit,
+                        sourceRecipeID: sourceRecipeID,
+                        sourceRecipeTitleSnapshot: recipe.title,
+                        in: modelContext
+                    )
+                }
             }
+            showCartToast("Added all ingredients to cart")
+        } catch {
+            showCartToast("Couldn't add all ingredients to cart")
         }
-        showCartToast("Added all ingredients to cart")
     }
 
     /// Favorite/Like toggle first, save second — if the save throws, undo
@@ -218,6 +222,7 @@ struct RecipeDetailView: View {
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
                 .potluckCardShadow()
+                .accessibilityLabel("Photo of \(recipe.title)")
         }
         #endif
     }

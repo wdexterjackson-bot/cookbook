@@ -11,6 +11,9 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 
 struct ImportRecipesFileView: View {
     @Environment(\.dismiss) private var dismiss
@@ -21,7 +24,7 @@ struct ImportRecipesFileView: View {
     @State private var selectedCookbookID: UUID?
     @State private var isPresentingFilePicker = false
     @State private var pendingFileText: String?
-    @State private var isParsing = false
+    @State private var importSession = RecipeImportSession()
     @State private var preview: RecipeFileImportPreview?
     @State private var errorMessage: String?
     @State private var isPresentingAuthorPrompt = false
@@ -56,17 +59,21 @@ struct ImportRecipesFileView: View {
                         Button("Choose File") {
                             isPresentingFilePicker = true
                         }
-                        .disabled(selectedCookbookID == nil || isParsing)
+                        .disabled(selectedCookbookID == nil || importSession.phase != .idle)
                     } footer: {
-                        Text("A plain text or PDF file with one or more recipes — see Recipe_Import_Format.md for the format.")
+                        Text("A plain text or PDF file with one or more recipes — see Recipe_Import_Format.md for the format. This may take several minutes for large files — please keep this screen open until it finishes.")
                     }
                 }
 
-                if isParsing {
+                if let progressDescription {
                     Section {
                         HStack {
-                            ProgressView()
-                            Text("Reading recipes…")
+                            if let progressFraction {
+                                ProgressView(value: progressFraction)
+                            } else {
+                                ProgressView()
+                            }
+                            Text(progressDescription)
                         }
                     }
                 }
@@ -96,7 +103,7 @@ struct ImportRecipesFileView: View {
                 set: { isPresented in if !isPresented { preview = nil } }
             )) {
                 if let preview, let cookbook = ownedCookbooks.first(where: { $0.id == selectedCookbookID }) {
-                    ImportReviewView(preview: preview, cookbook: cookbook, ownerID: accountState.currentOwnerID)
+                    ImportReviewView(preview: preview, cookbook: cookbook, ownerID: accountState.currentOwnerID, importSession: importSession)
                 }
             }
             .sheet(isPresented: $isPresentingAuthorPrompt, onDismiss: {
@@ -127,10 +134,60 @@ struct ImportRecipesFileView: View {
                 )
             }
         }
+        // Spans the whole flow (extraction + parsing + review) since this
+        // view stays mounted the entire time — ImportReviewView is
+        // presented as its nested sheet, never replacing it — matching
+        // the confirmed decision that the user must stay on this screen
+        // until Save or Abort.
+        #if os(iOS)
+        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        #endif
+    }
+
+    private var progressDescription: String? {
+        switch importSession.phase {
+        case .idle:
+            return nil
+        case .extracting(let page, let total):
+            guard total > 0 else { return "Reading file…" }
+            return "Extracting page \(page) of \(total)… (\(percentString(page, total)))"
+        case .parsing(let chunk, let total):
+            guard total > 0 else { return "Parsing recipes…" }
+            return "Parsing recipe \(chunk) of \(total)… (\(percentString(chunk, total)))"
+        case .saving:
+            return "Saving…"
+        }
+    }
+
+    private func percentString(_ completed: Int, _ total: Int) -> String {
+        let percent = Int((Double(completed) / Double(total) * 100).rounded())
+        return "\(percent)%"
+    }
+
+    private var progressFraction: Double? {
+        switch importSession.phase {
+        case .idle, .saving:
+            return nil
+        case .extracting(let page, let total):
+            return total > 0 ? Double(page) / Double(total) : nil
+        case .parsing(let chunk, let total):
+            return total > 0 ? Double(chunk) / Double(total) : nil
+        }
     }
 
     private func handleFileSelection(_ result: Result<URL, Error>) {
-        preview = nil
+        // Guarded (not an unconditional reset) so this never writes to a
+        // sheet-presentation-driving var in the same synchronous scope as
+        // resolveAuthorLineageAndImport() below potentially setting
+        // isPresentingAuthorPrompt — two such writes stacked inside one
+        // .fileImporter completion handler is the exact shape that crashed
+        // UIKit's focus system elsewhere in this app (CookbooksHubView's
+        // restore flow, fixed 2026-08-08). preview can't actually be
+        // non-nil here in practice (the review sheet isn't reachable while
+        // the file picker is up), so this guard is nearly always a no-op —
+        // it's defensive, not a behavior change.
+        if preview != nil { preview = nil }
         errorMessage = nil
         switch result {
         case .failure(let error):
@@ -140,12 +197,18 @@ struct ImportRecipesFileView: View {
                 errorMessage = "Couldn't open that file."
                 return
             }
-            defer { url.stopAccessingSecurityScopedResource() }
-            do {
-                pendingFileText = try RecipeFileTextExtractor.extractText(from: url)
-                resolveAuthorLineageAndImport()
-            } catch {
-                errorMessage = error.localizedDescription
+            importSession.phase = .extracting(page: 0, of: 0)
+            Task {
+                defer { url.stopAccessingSecurityScopedResource() }
+                do {
+                    pendingFileText = try await RecipeFileTextExtractor.extractText(from: url) { page, total in
+                        importSession.phase = .extracting(page: page, of: total)
+                    }
+                    resolveAuthorLineageAndImport()
+                } catch {
+                    importSession.phase = .idle
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -175,14 +238,16 @@ struct ImportRecipesFileView: View {
     /// once the user has reviewed and approved them.
     private func runParse(defaultAuthorLineage: String?) {
         guard let pendingFileText else { return }
-        isParsing = true
+        importSession.phase = .parsing(chunk: 0, of: 0)
         Task {
             let result = await RecipeFileImportCoordinator.parseRecipes(
                 from: pendingFileText,
                 defaultAuthorLineage: defaultAuthorLineage,
                 lineImportService: lineImportService
-            )
-            isParsing = false
+            ) { chunk, total in
+                importSession.phase = .parsing(chunk: chunk, of: total)
+            }
+            importSession.phase = .idle
             self.pendingFileText = nil
             if result.drafts.isEmpty && result.failedChunks.isEmpty {
                 errorMessage = "No recipes found in that file — make sure each recipe starts with a \"Name:\" line."

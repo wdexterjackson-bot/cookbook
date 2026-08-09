@@ -14,8 +14,8 @@ import Foundation
 import SwiftData
 
 enum PostSignInCoordinator {
-    static func handle(_ result: AuthResult, modelContext: ModelContext) {
-        RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: modelContext, to: result.userID)
-        CookbookMigrator.migrateGuestCookbooksIfNeeded(in: modelContext, to: result.userID)
+    static func handle(_ result: AuthResult, modelContext: ModelContext) throws {
+        try RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: modelContext, to: result.userID)
+        try CookbookMigrator.migrateGuestCookbooksIfNeeded(in: modelContext, to: result.userID)
     }
 }

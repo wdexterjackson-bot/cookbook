@@ -27,7 +27,8 @@ enum AccountDeletionCoordinator {
         modelContext: ModelContext,
         groupsService: GroupsServicing,
         entitlementService: EntitlementServicing,
-        userProfileService: UserProfileServicing
+        userProfileService: UserProfileServicing,
+        publicationsService: PublicationsServicing = InMemoryPublicationsService()
     ) async throws {
         let memberships = try await groupsService.fetchMemberships(forUser: userID).filter { $0.status == .active }
 
@@ -48,6 +49,23 @@ enum AccountDeletionCoordinator {
             throw AccountDeletionError.blockedByAdminOnlyCookbooks(cookbookNames: blockingCookbookNames)
         }
 
+        // Tombstone attribution on every publication this user owns, in
+        // every group they're still an active member of, *before* leaving
+        // any of them below — firestore.rules' publication read/update
+        // rules both require active membership, so this window closes the
+        // moment leaveGroup runs. Best-effort (a failure here shouldn't
+        // block the deletion the user actually asked for, same reasoning
+        // as the entitlement/profile cleanup below), but PRD §6.6 wants
+        // descendants and remaining group members to see "Original
+        // contributor deleted" rather than a publication that silently
+        // still shows a since-deleted account's name forever.
+        for membership in memberships {
+            let ownedPublications = (try? await publicationsService.fetchPublications(forOwner: userID, groupID: membership.groupID)) ?? []
+            for publication in ownedPublications {
+                try? await publicationsService.tombstoneOwnerAttribution(publication.id, actingUserID: userID)
+            }
+        }
+
         for membership in memberships {
             // Pre-flight already ruled out stranding any group; a failure
             // here is a secondary concern, not worth blocking the deletion
@@ -57,15 +75,21 @@ enum AccountDeletionCoordinator {
             try? await groupsService.leaveGroup(groupID: membership.groupID, userID: userID)
         }
 
-        deleteLocalData(ownerID: userID, in: modelContext)
+        try deleteLocalData(ownerID: userID, in: modelContext)
 
         try? await entitlementService.deleteEntitlement(userID: userID)
         try? await userProfileService.deleteProfile(userID: userID)
     }
 
-    private static func deleteLocalData(ownerID: String, in context: ModelContext) {
+    /// Unlike the entitlement/profile cleanup below, a failure here isn't
+    /// best-effort — this is the user's own local data, and a save failure
+    /// would leave photos deleted from disk while their SwiftData records
+    /// still exist (or vice versa), silently. Throws so the caller can
+    /// surface a real error instead of reporting deletion as successful
+    /// when it wasn't.
+    private static func deleteLocalData(ownerID: String, in context: ModelContext) throws {
         let recipeDescriptor = FetchDescriptor<Recipe>(predicate: #Predicate { $0.ownerID == ownerID })
-        let recipes = (try? context.fetch(recipeDescriptor)) ?? []
+        let recipes = try context.fetch(recipeDescriptor)
         for recipe in recipes {
             if let heroPhotoFilename = recipe.heroPhotoFilename {
                 PhotoStore.delete(heroPhotoFilename)
@@ -77,11 +101,11 @@ enum AccountDeletionCoordinator {
         }
 
         let cookbookDescriptor = FetchDescriptor<Cookbook>(predicate: #Predicate { $0.ownerID == ownerID })
-        let cookbooks = (try? context.fetch(cookbookDescriptor)) ?? []
+        let cookbooks = try context.fetch(cookbookDescriptor)
         for cookbook in cookbooks {
             context.delete(cookbook)
         }
 
-        try? context.save()
+        try context.save()
     }
 }

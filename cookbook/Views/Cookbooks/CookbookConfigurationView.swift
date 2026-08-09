@@ -34,6 +34,10 @@ struct CookbookConfigurationView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(AccountState.self) private var accountState
+
+    private let syncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService()
+    private let photoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
 
     @State private var title: String
     @State private var coverColorHex: String
@@ -54,6 +58,17 @@ struct CookbookConfigurationView: View {
     @State private var chaptersManuallyReordered: Bool
     @State private var newCustomSectionTitle = ""
     @State private var validationMessage: String?
+    @State private var isCloudSynced: Bool
+    /// Captured at open time so save() can tell "just turned on this
+    /// session" (which pushes immediately, per the confirmed decision that
+    /// there's never a window where the toggle says on but no cloud copy
+    /// exists) apart from "was already on, editing something else" (which
+    /// must NOT push — sync stays tied to the explicit Back Up action for
+    /// every other edit, matching the "manual, not continuous" design).
+    private let initialIsCloudSynced: Bool
+    @State private var lastSyncedAt: Date?
+    @State private var isSyncing = false
+    @State private var syncErrorMessage: String?
 
     init(mode: Mode) {
         self.mode = mode
@@ -65,6 +80,9 @@ struct CookbookConfigurationView: View {
             _coverImageData = State(initialValue: nil)
             _chapterTitles = State(initialValue: [])
             _chaptersManuallyReordered = State(initialValue: false)
+            _isCloudSynced = State(initialValue: false)
+            initialIsCloudSynced = false
+            _lastSyncedAt = State(initialValue: nil)
 
         case .edit(let cookbook):
             _title = State(initialValue: cookbook.title)
@@ -79,6 +97,9 @@ struct CookbookConfigurationView: View {
             let sortedSections = cookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
             _chapterTitles = State(initialValue: sortedSections.map(\.title))
             _chaptersManuallyReordered = State(initialValue: cookbook.chaptersManuallyReordered)
+            _isCloudSynced = State(initialValue: cookbook.isCloudSynced)
+            initialIsCloudSynced = cookbook.isCloudSynced
+            _lastSyncedAt = State(initialValue: cookbook.lastSyncedAt)
         }
     }
 
@@ -87,6 +108,22 @@ struct CookbookConfigurationView: View {
             Form {
                 Section("Title") {
                     TextField("Cookbook Title", text: $title)
+                }
+
+                Section {
+                    Toggle("Sync to Cloud", isOn: $isCloudSynced)
+                    if isCloudSynced {
+                        LabeledContent("Last Synced") {
+                            if let lastSyncedAt {
+                                Text(lastSyncedAt, style: .relative)
+                            } else {
+                                Text("Never")
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("On-device only by default. When on, tap Back Up any time to push the latest copy to the cloud — Restore from Cloud pulls it down on another device. Nothing syncs automatically.")
                 }
 
                 Section("Cover Color") {
@@ -154,6 +191,15 @@ struct CookbookConfigurationView: View {
                             .foregroundStyle(.red)
                     }
                 }
+                if isSyncing {
+                    Section {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Syncing to the cloud…")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(Color.potluckCream)
@@ -163,8 +209,22 @@ struct CookbookConfigurationView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: save)
+                    Button("Done") {
+                        Task { await saveAndSync() }
+                    }
+                    .disabled(isSyncing)
                 }
+            }
+            .alert(
+                "Couldn't Sync to the Cloud",
+                isPresented: Binding(
+                    get: { syncErrorMessage != nil },
+                    set: { if !$0 { syncErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { dismiss() }
+            } message: {
+                Text((syncErrorMessage ?? "") + " Your cookbook was still saved locally — try Back Up again later.")
             }
         }
     }
@@ -301,11 +361,45 @@ struct CookbookConfigurationView: View {
         return false
     }
 
-    private func save() {
+    /// Saves locally, then — only if Sync to Cloud was just switched on
+    /// this session — pushes immediately. Dismisses on success either way;
+    /// a push failure shows an alert instead (whose own dismiss button
+    /// closes this screen), since the local save already succeeded and
+    /// isn't itself in question.
+    private func saveAndSync() async {
+        guard let cookbook = save() else { return }
+        guard !initialIsCloudSynced, isCloudSynced else {
+            dismiss()
+            return
+        }
+        guard let ownerUserID = accountState.currentUserID else {
+            dismiss()
+            return
+        }
+
+        isSyncing = true
+        defer { isSyncing = false }
+        do {
+            let cookbookID = cookbook.id
+            let recipeDescriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.cookbookID == cookbookID })
+            let recipes = try modelContext.fetch(recipeDescriptor)
+            try await PersonalCookbookSyncCoordinator.push(
+                cookbook, recipes: recipes, ownerUserID: ownerUserID,
+                syncService: syncService, photoUploadService: photoUploadService
+            )
+            try? modelContext.save()
+            dismiss()
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    private func save() -> Cookbook? {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else {
             validationMessage = "Give your cookbook a title."
-            return
+            return nil
         }
         validationMessage = nil
 
@@ -314,6 +408,9 @@ struct CookbookConfigurationView: View {
         case .create(let ownerID):
             cookbook = Cookbook(ownerID: ownerID, title: trimmedTitle, coverColorHex: coverColorHex)
             modelContext.insert(cookbook)
+            // Brand new, so it can't hold any pre-migration ingredient
+            // text — see CookbookMigrator's matching comment.
+            RecipeStandardizationState.markStandardized(cookbook.id)
         case .edit(let existing):
             cookbook = existing
             cookbook.title = trimmedTitle
@@ -323,6 +420,7 @@ struct CookbookConfigurationView: View {
         cookbook.hasBeenConfigured = true
         cookbook.chaptersManuallyReordered = chaptersManuallyReordered
         cookbook.coverStyleImageName = coverStyleImageName
+        cookbook.isCloudSynced = isCloudSynced
         cookbook.updatedAt = .now
 
         #if os(iOS)
@@ -367,9 +465,10 @@ struct CookbookConfigurationView: View {
 
         do {
             try modelContext.save()
-            dismiss()
+            return cookbook
         } catch {
             validationMessage = "Couldn't save this cookbook: \(error.localizedDescription)"
+            return nil
         }
     }
 }
@@ -377,4 +476,5 @@ struct CookbookConfigurationView: View {
 #Preview {
     CookbookConfigurationView(mode: .create(ownerID: "preview-owner"))
         .modelContainer(for: Cookbook.self, inMemory: true)
+        .environment(AccountState(authService: FakeAuthService()))
 }

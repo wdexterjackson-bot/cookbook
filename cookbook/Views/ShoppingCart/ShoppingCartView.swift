@@ -28,6 +28,7 @@ struct ShoppingCartView: View {
     @Query private var items: [CartItem]
     @State private var newItemText = ""
     @State private var isPresentingClearAllConfirmation = false
+    @State private var errorMessage: String?
 
     init() {
         _items = Query(sort: \CartItem.createdAt)
@@ -96,7 +97,11 @@ struct ShoppingCartView: View {
                         Menu {
                             if checkedCount > 0 {
                                 Button("Clear Checked (\(checkedCount))") {
-                                    CartItemStore.clearChecked(ownerID: accountState.currentOwnerID, in: modelContext)
+                                    do {
+                                        try CartItemStore.clearChecked(ownerID: accountState.currentOwnerID, in: modelContext)
+                                    } catch {
+                                        errorMessage = error.localizedDescription
+                                    }
                                 }
                             }
                             Button("Clear All", role: .destructive) {
@@ -115,9 +120,21 @@ struct ShoppingCartView: View {
                 titleVisibility: .visible
             ) {
                 Button("Clear All", role: .destructive) {
-                    CartItemStore.clearAll(ownerID: accountState.currentOwnerID, in: modelContext)
+                    do {
+                        try CartItemStore.clearAll(ownerID: accountState.currentOwnerID, in: modelContext)
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
+            }
+            .alert("Couldn't Update Cart", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
             }
         }
     }
@@ -125,19 +142,28 @@ struct ShoppingCartView: View {
     private func addManualItem() {
         let trimmed = newItemText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        CartItemStore.addManualItem(ownerID: accountState.currentOwnerID, displayText: trimmed, in: modelContext)
-        newItemText = ""
+        do {
+            try CartItemStore.addManualItem(ownerID: accountState.currentOwnerID, displayText: trimmed, in: modelContext)
+            newItemText = ""
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 
 private struct CartItemRow: View {
     @Bindable var item: CartItem
     @Environment(\.modelContext) private var modelContext
+    @State private var errorMessage: String?
 
     var body: some View {
         HStack {
             Button {
-                CartItemStore.setChecked(!item.checked, for: item, in: modelContext)
+                do {
+                    try CartItemStore.setChecked(!item.checked, for: item, in: modelContext)
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
             } label: {
                 Image(systemName: item.checked ? "checkmark.square.fill" : "square")
                     .foregroundStyle(item.checked ? Color.potluckSage : Color.secondary)
@@ -150,7 +176,7 @@ private struct CartItemRow: View {
                 .foregroundStyle(item.checked ? .secondary : .primary)
 
             Button(role: .destructive) {
-                CartItemStore.remove(item, in: modelContext)
+                remove()
             } label: {
                 Image(systemName: "trash")
             }
@@ -159,8 +185,24 @@ private struct CartItemRow: View {
         }
         .swipeActions {
             Button("Delete", role: .destructive) {
-                CartItemStore.remove(item, in: modelContext)
+                remove()
             }
+        }
+        .alert("Couldn't Update Cart", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func remove() {
+        do {
+            try CartItemStore.remove(item, in: modelContext)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

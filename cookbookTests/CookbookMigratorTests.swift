@@ -23,7 +23,7 @@ struct CookbookMigratorTests {
     @Test func createsADefaultCookbookWhenNoneExists() throws {
         let context = try makeInMemoryContext()
 
-        let cookbook = CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
+        let cookbook = try CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
 
         #expect(cookbook.title == "Personal Cookbook")
         #expect(cookbook.ownerID == "owner-1")
@@ -32,8 +32,8 @@ struct CookbookMigratorTests {
     @Test func isIdempotentAcrossRepeatedCalls() throws {
         let context = try makeInMemoryContext()
 
-        let first = CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
-        let second = CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
+        let first = try CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
+        let second = try CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
 
         #expect(first.id == second.id)
         let descriptor = FetchDescriptor<Cookbook>(predicate: #Predicate<Cookbook> { $0.ownerID == "owner-1" })
@@ -47,7 +47,7 @@ struct CookbookMigratorTests {
         try context.save()
         #expect(recipe.cookbookID == nil)
 
-        let cookbook = CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
+        let cookbook = try CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
 
         #expect(recipe.cookbookID == cookbook.id)
     }
@@ -60,7 +60,7 @@ struct CookbookMigratorTests {
         context.insert(recipe)
         try context.save()
 
-        _ = CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
+        _ = try CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
 
         #expect(recipe.cookbookID == otherCookbookID)
     }
@@ -71,7 +71,7 @@ struct CookbookMigratorTests {
         context.insert(otherOwnerRecipe)
         try context.save()
 
-        _ = CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
+        _ = try CookbookMigrator.ensureDefaultCookbookExists(in: context, ownerID: "owner-1")
 
         #expect(otherOwnerRecipe.cookbookID == nil)
     }

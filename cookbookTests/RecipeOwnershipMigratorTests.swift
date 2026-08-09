@@ -23,7 +23,7 @@ struct RecipeOwnershipMigratorTests {
         context.insert(guestRecipe)
         try context.save()
 
-        RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: context, to: "firebase-uid-123")
+        try RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: context, to: "firebase-uid-123")
 
         #expect(guestRecipe.ownerID == "firebase-uid-123")
     }
@@ -34,7 +34,7 @@ struct RecipeOwnershipMigratorTests {
         context.insert(otherRecipe)
         try context.save()
 
-        RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: context, to: "firebase-uid-123")
+        try RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: context, to: "firebase-uid-123")
 
         #expect(otherRecipe.ownerID == "already-signed-in-uid")
     }
@@ -45,7 +45,7 @@ struct RecipeOwnershipMigratorTests {
         context.insert(recipe)
         try context.save()
 
-        RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: context, to: LocalOwner.id)
+        try RecipeOwnershipMigrator.migrateGuestRecipesIfNeeded(in: context, to: LocalOwner.id)
 
         #expect(recipe.ownerID == LocalOwner.id)
     }

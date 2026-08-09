@@ -9,6 +9,18 @@
 // way applyPurchaseClaim.js injects verifyTransaction), which bypasses
 // both rules files.
 
+const { checkAndRecordRateLimit, RateLimitExceededError } = require('./rateLimiter');
+
+// This is the single most destructive callable in the app — a successful
+// call permanently removes a shared cookbook, its publications, and their
+// photos for every member, with no undo. A legitimate caller hits this at
+// most once per group per lifetime (leaving the last group they belong to),
+// so a low cap here costs no real user anything while meaningfully
+// narrowing a scripted-abuse window (SAFE-002/SEC-004 — this callable had
+// no rate limiting at all before, unlike resolveSignInProviders).
+const DELETE_GROUP_RATE_LIMIT_MAX_ATTEMPTS = 5;
+const DELETE_GROUP_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
 async function deletePublicationsForGroup(db, groupID) {
   const snapshot = await db.collection('publications').where('groupID', '==', groupID).get();
   await Promise.all(snapshot.docs.map((docSnap) => docSnap.ref.delete()));
@@ -25,6 +37,16 @@ async function deleteGroupPermanently({ db, bucket, groupID, callerUserID }) {
     throw new Error('groupID is required');
   }
 
+  const allowed = await checkAndRecordRateLimit(db, {
+    collection: 'deleteGroupPermanentlyAttempts',
+    key: callerUserID,
+    maxAttempts: DELETE_GROUP_RATE_LIMIT_MAX_ATTEMPTS,
+    windowMs: DELETE_GROUP_RATE_LIMIT_WINDOW_MS,
+  });
+  if (!allowed) {
+    throw new RateLimitExceededError('Too many deletion attempts — try again later.');
+  }
+
   const groupRef = db.collection('groups').doc(trimmedGroupID);
   const groupSnap = await groupRef.get();
   if (!groupSnap.exists) {
@@ -34,12 +56,19 @@ async function deleteGroupPermanently({ db, bucket, groupID, callerUserID }) {
   const groupData = groupSnap.data();
 
   const membershipsSnapshot = await db.collection('memberships').where('groupID', '==', trimmedGroupID).get();
-  const isActiveMember = membershipsSnapshot.docs.some((docSnap) => {
-    const data = docSnap.data();
-    return data.userID === callerUserID && data.status === 'active';
-  });
-  if (!isActiveMember) {
-    throw new Error('Only an active member of this cookbook can delete it.');
+  const activeMemberships = membershipsSnapshot.docs
+    .map((docSnap) => docSnap.data())
+    .filter((data) => data.status === 'active');
+  // Mirrors GroupPolicy.isLastActiveMember on the client exactly — the
+  // client only ever calls this callable when the caller is the sole
+  // remaining active member, but that invariant was previously enforced
+  // only client-side. Re-checking it here server-side is load-bearing: any
+  // active member (not just the last one) could otherwise call this
+  // callable directly with an arbitrary groupID and delete a shared
+  // cookbook out from under everyone else.
+  const isLastActiveMember = activeMemberships.length === 1 && activeMemberships[0].userID === callerUserID;
+  if (!isLastActiveMember) {
+    throw new Error('Only the last active member of this cookbook can permanently delete it.');
   }
 
   await Promise.all(membershipsSnapshot.docs.map((docSnap) => docSnap.ref.delete()));

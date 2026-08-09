@@ -23,7 +23,7 @@ struct CartItemStoreTests {
     @Test func addFromRecipeInsertsANewItem() throws {
         let context = try makeInMemoryContext()
 
-        let item = CartItemStore.addFromRecipe(
+        let item = try CartItemStore.addFromRecipe(
             ownerID: "alice",
             displayText: "2 lb ground beef",
             quantityValue: 2,
@@ -41,11 +41,11 @@ struct CartItemStoreTests {
     @Test func addingTheSameIngredientFromTheSameRecipeTwiceIsANoOp() throws {
         let context = try makeInMemoryContext()
 
-        let first = CartItemStore.addFromRecipe(
+        let first = try CartItemStore.addFromRecipe(
             ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb",
             sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context
         )
-        let second = CartItemStore.addFromRecipe(
+        let second = try CartItemStore.addFromRecipe(
             ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb",
             sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context
         )
@@ -57,8 +57,8 @@ struct CartItemStoreTests {
     @Test func sameIngredientTextFromDifferentRecipesAreSeparateRows() throws {
         let context = try makeInMemoryContext()
 
-        CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context)
-        CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-2", sourceRecipeTitleSnapshot: "Tacos", in: context)
+        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context)
+        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-2", sourceRecipeTitleSnapshot: "Tacos", in: context)
 
         #expect(CartItemStore.fetchAll(ownerID: "alice", in: context).count == 2)
     }
@@ -67,7 +67,7 @@ struct CartItemStoreTests {
         let context = try makeInMemoryContext()
         #expect(CartItemStore.isInCart(ownerID: "alice", sourceRecipeID: "recipe-1", displayText: "Salt", in: context) == false)
 
-        CartItemStore.addFromRecipe(ownerID: "alice", displayText: "Salt", quantityValue: nil, unit: nil, sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context)
+        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "Salt", quantityValue: nil, unit: nil, sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context)
 
         #expect(CartItemStore.isInCart(ownerID: "alice", sourceRecipeID: "recipe-1", displayText: "Salt", in: context) == true)
     }
@@ -75,8 +75,8 @@ struct CartItemStoreTests {
     @Test func addManualItemAlwaysInsertsANewRow() throws {
         let context = try makeInMemoryContext()
 
-        CartItemStore.addManualItem(ownerID: "alice", displayText: "Paper towels", in: context)
-        CartItemStore.addManualItem(ownerID: "alice", displayText: "Paper towels", in: context)
+        try CartItemStore.addManualItem(ownerID: "alice", displayText: "Paper towels", in: context)
+        try CartItemStore.addManualItem(ownerID: "alice", displayText: "Paper towels", in: context)
 
         let items = CartItemStore.fetchAll(ownerID: "alice", in: context)
         #expect(items.count == 2)
@@ -85,31 +85,31 @@ struct CartItemStoreTests {
 
     @Test func setCheckedTogglesTheFlag() throws {
         let context = try makeInMemoryContext()
-        let item = CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
+        let item = try CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
 
-        CartItemStore.setChecked(true, for: item, in: context)
+        try CartItemStore.setChecked(true, for: item, in: context)
         #expect(item.checked == true)
 
-        CartItemStore.setChecked(false, for: item, in: context)
+        try CartItemStore.setChecked(false, for: item, in: context)
         #expect(item.checked == false)
     }
 
     @Test func removeDeletesTheItem() throws {
         let context = try makeInMemoryContext()
-        let item = CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
+        let item = try CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
 
-        CartItemStore.remove(item, in: context)
+        try CartItemStore.remove(item, in: context)
 
         #expect(CartItemStore.fetchAll(ownerID: "alice", in: context).isEmpty)
     }
 
     @Test func clearAllRemovesEverythingForThatOwnerOnly() throws {
         let context = try makeInMemoryContext()
-        CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
-        CartItemStore.addManualItem(ownerID: "alice", displayText: "Eggs", in: context)
-        CartItemStore.addManualItem(ownerID: "bob", displayText: "Bread", in: context)
+        try CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
+        try CartItemStore.addManualItem(ownerID: "alice", displayText: "Eggs", in: context)
+        try CartItemStore.addManualItem(ownerID: "bob", displayText: "Bread", in: context)
 
-        let removedCount = CartItemStore.clearAll(ownerID: "alice", in: context)
+        let removedCount = try CartItemStore.clearAll(ownerID: "alice", in: context)
 
         #expect(removedCount == 2)
         #expect(CartItemStore.fetchAll(ownerID: "alice", in: context).isEmpty)
@@ -118,11 +118,11 @@ struct CartItemStoreTests {
 
     @Test func clearCheckedOnlyRemovesCheckedItems() throws {
         let context = try makeInMemoryContext()
-        let milk = CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
-        CartItemStore.addManualItem(ownerID: "alice", displayText: "Eggs", in: context)
-        CartItemStore.setChecked(true, for: milk, in: context)
+        let milk = try CartItemStore.addManualItem(ownerID: "alice", displayText: "Milk", in: context)
+        try CartItemStore.addManualItem(ownerID: "alice", displayText: "Eggs", in: context)
+        try CartItemStore.setChecked(true, for: milk, in: context)
 
-        let removedCount = CartItemStore.clearChecked(ownerID: "alice", in: context)
+        let removedCount = try CartItemStore.clearChecked(ownerID: "alice", in: context)
 
         #expect(removedCount == 1)
         let remaining = CartItemStore.fetchAll(ownerID: "alice", in: context)
@@ -132,8 +132,8 @@ struct CartItemStoreTests {
 
     @Test func fetchAllIsSortedByCreationOrder() throws {
         let context = try makeInMemoryContext()
-        CartItemStore.addManualItem(ownerID: "alice", displayText: "First", in: context)
-        CartItemStore.addManualItem(ownerID: "alice", displayText: "Second", in: context)
+        try CartItemStore.addManualItem(ownerID: "alice", displayText: "First", in: context)
+        try CartItemStore.addManualItem(ownerID: "alice", displayText: "Second", in: context)
 
         let items = CartItemStore.fetchAll(ownerID: "alice", in: context)
 

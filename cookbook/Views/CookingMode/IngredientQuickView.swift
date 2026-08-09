@@ -62,21 +62,25 @@ struct IngredientQuickView: View {
     private func addAllIngredientsToCart() {
         let ownerID = accountState.currentOwnerID
         let sourceRecipeID = recipe.id.uuidString
-        for section in recipe.ingredientSections {
-            for ingredient in section.ingredients {
-                let (scaledValue, scaledText) = scaled(ingredient)
-                CartItemStore.addFromRecipe(
-                    ownerID: ownerID,
-                    displayText: scaledText,
-                    quantityValue: scaledValue,
-                    unit: ingredient.unit,
-                    sourceRecipeID: sourceRecipeID,
-                    sourceRecipeTitleSnapshot: recipe.title,
-                    in: modelContext
-                )
+        do {
+            for section in recipe.ingredientSections {
+                for ingredient in section.ingredients {
+                    let (scaledValue, scaledText) = scaled(ingredient)
+                    try CartItemStore.addFromRecipe(
+                        ownerID: ownerID,
+                        displayText: scaledText,
+                        quantityValue: scaledValue,
+                        unit: ingredient.unit,
+                        sourceRecipeID: sourceRecipeID,
+                        sourceRecipeTitleSnapshot: recipe.title,
+                        in: modelContext
+                    )
+                }
             }
+            cartToastMessage = "Added all ingredients to cart"
+        } catch {
+            cartToastMessage = "Couldn't add all ingredients to cart"
         }
-        cartToastMessage = "Added all ingredients to cart"
         Task {
             try? await Task.sleep(for: .seconds(2))
             cartToastMessage = nil

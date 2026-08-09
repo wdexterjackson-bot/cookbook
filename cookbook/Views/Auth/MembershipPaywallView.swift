@@ -30,9 +30,7 @@ struct MembershipPaywallView: View {
         NavigationStack {
             Form {
                 Section("Your Membership") {
-                    LabeledContent("Pro User", value: (entitlement?.isProUser ?? false) ? "Yes" : "No")
-                    LabeledContent("Pro User Credits", value: "\(entitlement?.tier1Credits ?? 0)")
-                    LabeledContent("Family Cookbook Credits", value: "\(entitlement?.tier2Credits ?? 0)")
+                    MembershipSummaryView(entitlement: entitlement)
                 }
 
                 if (entitlement?.tier1Credits ?? 0) > 0, entitlement?.isProUser != true {
@@ -117,10 +115,11 @@ struct MembershipPaywallView: View {
         statusMessage = nil
         defer { isBusy = false }
         do {
-            let outcome = try await purchaseService.purchase(productID: product.id)
+            let outcome = try await PurchaseCoordinator.purchase(
+                product, userID: userID, purchaseService: purchaseService, claimWriter: claimWriter
+            )
             switch outcome {
-            case .success(let receipt):
-                try await claimWriter.submit(receipt, userID: userID)
+            case .success:
                 statusMessage = "Purchase complete — your membership will update shortly."
             case .pending:
                 statusMessage = "Purchase pending approval."

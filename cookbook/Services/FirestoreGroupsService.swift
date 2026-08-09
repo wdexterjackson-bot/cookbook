@@ -38,6 +38,15 @@ final class FirestoreGroupsService: GroupsServicing {
                     errorPointer?.pointee = GroupsServiceError.insufficientCredits as NSError
                     return nil
                 }
+                // Checked in the same transaction as the credit count
+                // itself (not a separate pre-fetch) so this stays atomic
+                // with the read it's judging — the rules-side
+                // tier2NotExpired check is the real enforcement against a
+                // client that skips this, this is just for a clean error.
+                if let expiresAt = (entitlementSnapshot.data()?["tier2ExpiresAt"] as? Timestamp)?.dateValue(), expiresAt < Date() {
+                    errorPointer?.pointee = GroupsServiceError.creditExpired as NSError
+                    return nil
+                }
 
                 // Checked defensively for a clean error even though the
                 // rules' create-vs-update semantics are the real

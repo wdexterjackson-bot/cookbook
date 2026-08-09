@@ -12,6 +12,11 @@ import Foundation
 
 enum GroupsServiceError: Error, Equatable {
     case insufficientCredits
+    /// The account has a tier-2 credit on paper, but it's past
+    /// `Entitlement.tier2ExpiresAt` — thrown by a client-side pre-check so
+    /// this surfaces as a clean, catchable error instead of an opaque
+    /// Firestore permission-denied from the rules-side enforcement.
+    case creditExpired
     case groupNotFound
     case membershipNotFound
     case joinRequestNotFound

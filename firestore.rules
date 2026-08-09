@@ -80,6 +80,29 @@ service cloud.firestore {
       return ('tier2Credits' in entitlementData) ? entitlementData.tier2Credits : 0;
     }
 
+    // Each free launch-promo tier is grantable to, and usable by, new
+    // accounts only until its own date (must match
+    // LaunchCreditPromo.tier1ExpirationDate/tier2ExpirationDate in
+    // EntitlementGranting.swift exactly) — independent per tier, not one
+    // shared cutoff.
+    function tier1ExpirationTimestamp() {
+      return timestamp.date(2027, 1, 1);
+    }
+    function tier2ExpirationTimestamp() {
+      return timestamp.date(2029, 1, 1);
+    }
+    // Tolerant of a credit granted before this field existed (no
+    // expiration recorded) — treated as not-expired, since going forward
+    // every path that grants a tier credit also sets its matching
+    // *ExpiresAt; this only matters for the narrow window before that
+    // field shipped.
+    function tier1NotExpired(entitlementData) {
+      return !('tier1ExpiresAt' in entitlementData) || request.time < entitlementData.tier1ExpiresAt;
+    }
+    function tier2NotExpired(entitlementData) {
+      return !('tier2ExpiresAt' in entitlementData) || request.time < entitlementData.tier2ExpiresAt;
+    }
+
     // The Pro User paywall's join gate: MFB is the one cookbook exempt
     // from requiring Pro User status. isMFB is never client-settable (see
     // groups/create and groups/update below) — it's meant to be flipped
@@ -94,17 +117,33 @@ service cloud.firestore {
     match /entitlements/{userID} {
       allow read: if isSignedIn() && request.auth.uid == userID;
 
-      // The one-time free-launch-credit grant (both tiers together, exact
-      // shape, only before the cutoff) — used the first time this account
-      // is ever granted credits (see EntitlementGranting.swift).
+      // The one-time free-launch-credit grant — used the first time this
+      // account is ever granted credits (see EntitlementGranting.swift).
+      // Each tier's exact shape is branched independently since a brand
+      // new account created after tier1's window closes but before
+      // tier2's should still get tier2 (and vice versa) — not an
+      // all-or-nothing "both tiers together" shape.
       allow create: if isSignedIn() && request.auth.uid == userID
         && request.resource.data.userID == userID
-        && request.resource.data.tier1Credits == 1
-        && request.resource.data.tier2Credits == 2
         && request.resource.data.isProUser == false
-        && request.resource.data.receivedTier1PromoCredit == true
-        && request.resource.data.receivedTier2PromoCredits == true
-        && request.time < timestamp.date(2029, 1, 1);
+        && (
+          (request.time < tier1ExpirationTimestamp()
+            && request.resource.data.tier1Credits == 1
+            && request.resource.data.receivedTier1PromoCredit == true)
+          ||
+          (request.time >= tier1ExpirationTimestamp()
+            && request.resource.data.tier1Credits == 0
+            && request.resource.data.receivedTier1PromoCredit == false)
+        )
+        && (
+          (request.time < tier2ExpirationTimestamp()
+            && request.resource.data.tier2Credits == 2
+            && request.resource.data.receivedTier2PromoCredits == true)
+          ||
+          (request.time >= tier2ExpirationTimestamp()
+            && request.resource.data.tier2Credits == 0
+            && request.resource.data.receivedTier2PromoCredits == false)
+        );
 
       // Exactly three client-writable transitions on an existing doc,
       // nothing else:
@@ -113,19 +152,25 @@ service cloud.firestore {
         && (
           // Spending a tier-2 credit (group/Family Cookbook creation) —
           // exact decrement of 1, never below zero, nothing else moves.
+          // Blocked once the credit has expired (tier2NotExpired) — the
+          // client pre-checks this too for a clean error, but the rule is
+          // the real enforcement against a client that skips the check.
           (request.resource.data.tier2Credits == resource.data.tier2Credits - 1
             && request.resource.data.tier2Credits >= 0
+            && tier2NotExpired(resource.data)
             && request.resource.data.tier1Credits == resource.data.tier1Credits
             && request.resource.data.isProUser == resource.data.isProUser
             && request.resource.data.receivedTier1PromoCredit == resource.data.receivedTier1PromoCredit
             && request.resource.data.receivedTier2PromoCredits == resource.data.receivedTier2PromoCredits)
           ||
           // Spending a tier-1 credit to become a Pro User — flips both
-          // together, exactly once, nothing else moves.
+          // together, exactly once, nothing else moves. Same expiration
+          // gate as tier2's spend branch above.
           (resource.data.isProUser == false
             && request.resource.data.isProUser == true
             && request.resource.data.tier1Credits == resource.data.tier1Credits - 1
             && request.resource.data.tier1Credits >= 0
+            && tier1NotExpired(resource.data)
             && request.resource.data.tier2Credits == resource.data.tier2Credits
             && request.resource.data.receivedTier1PromoCredit == resource.data.receivedTier1PromoCredit
             && request.resource.data.receivedTier2PromoCredits == resource.data.receivedTier2PromoCredits)
@@ -133,28 +178,41 @@ service cloud.firestore {
           // Backfilling a free launch credit this account hasn't received
           // yet (an entitlement doc that predates one/both tiers, possibly
           // missing the field entirely — see hasReceivedTier1/2 above).
-          // Each tier independently either flips its received-flag to true
-          // together with the exact matching credit bump, or stays
-          // untouched; at least one of the two must actually change;
+          // Each tier independently either (a) grants, while still within
+          // its own expiration window, (b) stays untouched because it was
+          // already received, or (c) stays untouched because its window
+          // has passed and it was never received (a genuine no-grant, not
+          // a rejection) — at least one tier must actually change;
           // isProUser never moves here.
-          (request.time < timestamp.date(2029, 1, 1)
-            && request.resource.data.isProUser == resource.data.isProUser
+          (request.resource.data.isProUser == resource.data.isProUser
             && (
               (!hasReceivedTier1(resource.data)
+                && request.time < tier1ExpirationTimestamp()
                 && request.resource.data.receivedTier1PromoCredit == true
                 && request.resource.data.tier1Credits == priorTier1Credits(resource.data) + 1)
               ||
               (hasReceivedTier1(resource.data)
                 && request.resource.data.receivedTier1PromoCredit == true
                 && request.resource.data.tier1Credits == priorTier1Credits(resource.data))
+              ||
+              (!hasReceivedTier1(resource.data)
+                && request.time >= tier1ExpirationTimestamp()
+                && request.resource.data.receivedTier1PromoCredit == false
+                && request.resource.data.tier1Credits == priorTier1Credits(resource.data))
             )
             && (
               (!hasReceivedTier2(resource.data)
+                && request.time < tier2ExpirationTimestamp()
                 && request.resource.data.receivedTier2PromoCredits == true
                 && request.resource.data.tier2Credits == priorTier2Credits(resource.data) + 2)
               ||
               (hasReceivedTier2(resource.data)
                 && request.resource.data.receivedTier2PromoCredits == true
+                && request.resource.data.tier2Credits == priorTier2Credits(resource.data))
+              ||
+              (!hasReceivedTier2(resource.data)
+                && request.time >= tier2ExpirationTimestamp()
+                && request.resource.data.receivedTier2PromoCredits == false
                 && request.resource.data.tier2Credits == priorTier2Credits(resource.data))
             )
             && (!hasReceivedTier1(resource.data) || !hasReceivedTier2(resource.data))
@@ -347,11 +405,15 @@ service cloud.firestore {
             && request.resource.data.state == 'hidden'
             && request.resource.data.content == resource.data.content)
           ||
-          // Any member liking/unliking — state and content are pinned
-          // equal so this can only ever touch likeCount, not sneak in a
-          // content or visibility change. The exact ±1 math is trusted to
-          // the client's own transaction (PublicationsServicing.setLiked)
-          // rather than re-verified here — a "like" count isn't
+          // Any member liking/unliking or rating/re-rating/clearing —
+          // state and content are pinned equal so this can only ever
+          // touch aggregate fields (likeCount, ratingSum, ratingCount),
+          // not sneak in a content or visibility change. This branch
+          // doesn't name which non-pinned field moves, so it already
+          // covers both counters without a separate branch — the exact
+          // math is trusted to the client's own transaction
+          // (PublicationsServicing.setLiked/setRating/clearRating) rather
+          // than re-verified here; neither a "like" nor a "rating" is
           // money/credits, so this doesn't need the same getAfter()-paired
           // rigor as entitlements/groups.
           (isMember(resource.data.groupID)
@@ -371,6 +433,18 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == userID;
       allow update: if false;
+      allow delete: if isSignedIn() && request.auth.uid == userID;
+    }
+
+    // One doc per user who's rated a publication, holding their own 1-5
+    // value — unlike likes, a rating can be *changed* in place (not just
+    // toggled on/off), so this deliberately allows update, matching
+    // PublicationsServicing.setRating's upsert semantics.
+    match /publications/{publicationID}/ratings/{userID} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && request.auth.uid == userID
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5;
       allow delete: if isSignedIn() && request.auth.uid == userID;
     }
 
@@ -420,6 +494,33 @@ service cloud.firestore {
     // Cloud Function — the owner manages their own doc directly.
     match /userProfiles/{userID} {
       allow read, write, delete: if isSignedIn() && request.auth.uid == userID;
+    }
+
+    // Personal Cookbook Cloud Sync (opt-in per cookbook, manual "push on
+    // Back Up" — see CookbookConfigurationView's Sync to Cloud toggle).
+    // Strictly single-owner data, no group/sharing concept involved, so
+    // both this and the recipes subcollection below check `ownerUserID`
+    // directly on the resource rather than doing a cross-collection
+    // membership-style lookup the way groups/publications need to.
+    match /personalCookbooks/{cookbookID} {
+      allow read: if isSignedIn() && request.auth.uid == resource.data.ownerUserID;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerUserID;
+      allow update: if isSignedIn()
+        && request.auth.uid == resource.data.ownerUserID
+        && request.auth.uid == request.resource.data.ownerUserID;
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.ownerUserID;
+
+      // ownerUserID is duplicated onto every recipe doc specifically so
+      // this can check it directly, cheaper than a get() on the parent
+      // cookbook doc for every recipe read/write.
+      match /recipes/{recipeID} {
+        allow read: if isSignedIn() && request.auth.uid == resource.data.ownerUserID;
+        allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerUserID;
+        allow update: if isSignedIn()
+          && request.auth.uid == resource.data.ownerUserID
+          && request.auth.uid == request.resource.data.ownerUserID;
+        allow delete: if isSignedIn() && request.auth.uid == resource.data.ownerUserID;
+      }
     }
 
     match /{document=**} {

@@ -28,23 +28,31 @@ extension Color {
 extension Font {
     /// Bold, rounded geometric headlines — Poppins ExtraBold throughout,
     /// per the sketch's type direction.
-    static func potluckHeadline(_ size: CGFloat) -> Font {
-        .custom("Poppins-ExtraBold", size: size)
+    ///
+    /// `relativeTo:` matters here, not just cosmetically: `.custom(_,
+    /// size:)` without it is a *fixed* point size that ignores the user's
+    /// Dynamic Type setting entirely — a real accessibility gap (PRD
+    /// A11Y-001) discovered in a 2026-08-08 review, since every call site
+    /// across the app passes a literal size to these four functions.
+    /// `.custom(_, size:, relativeTo:)` scales that size against the given
+    /// text style the same way system fonts do.
+    static func potluckHeadline(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .title2) -> Font {
+        .custom("Poppins-ExtraBold", size: size, relativeTo: textStyle)
     }
 
-    static func potluckSemiboldBody(_ size: CGFloat) -> Font {
-        .custom("Poppins-SemiBold", size: size)
+    static func potluckSemiboldBody(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("Poppins-SemiBold", size: size, relativeTo: textStyle)
     }
 
-    static func potluckBody(_ size: CGFloat) -> Font {
-        .custom("Poppins-Regular", size: size)
+    static func potluckBody(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("Poppins-Regular", size: size, relativeTo: textStyle)
     }
 
     /// Playful script accent ("yum!"-style stickers) — Sketch C repurposes
     /// the same script family Sketch A used for lineage notes, but here
     /// it's decorative, not an attribution signal.
-    static func potluckScript(_ size: CGFloat) -> Font {
-        .custom("Snell Roundhand", size: size)
+    static func potluckScript(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("Snell Roundhand", size: size, relativeTo: textStyle)
     }
 }
 

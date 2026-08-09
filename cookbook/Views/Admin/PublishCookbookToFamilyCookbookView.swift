@@ -28,6 +28,7 @@ struct PublishCookbookToFamilyCookbookView: View {
     @State private var isPublishing = false
     @State private var publishedCount = 0
     @State private var failedTitles: [String] = []
+    @State private var titlesWithFailedPhotos: [String] = []
     @State private var isComplete = false
     @State private var errorMessage: String?
 
@@ -54,6 +55,15 @@ struct PublishCookbookToFamilyCookbookView: View {
                             Text("\(failedTitles.count) couldn't be published:")
                                 .foregroundStyle(.secondary)
                             ForEach(failedTitles, id: \.self) { title in
+                                Text(title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if !titlesWithFailedPhotos.isEmpty {
+                            Text("\(titlesWithFailedPhotos.count) published without their photo (upload failed):")
+                                .foregroundStyle(.secondary)
+                            ForEach(titlesWithFailedPhotos, id: \.self) { title in
                                 Text(title)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -165,14 +175,18 @@ struct PublishCookbookToFamilyCookbookView: View {
         errorMessage = nil
         publishedCount = 0
         failedTitles = []
+        titlesWithFailedPhotos = []
 
         for recipe in recipesInSelectedCookbook {
             do {
-                try await RecipePublishingCoordinator.publish(
+                let photoUploadSucceeded = try await RecipePublishingCoordinator.publish(
                     recipe, to: group, ownerUserID: userID,
                     publicationsService: publicationsService, photoUploadService: photoUploadService
                 )
                 publishedCount += 1
+                if !photoUploadSucceeded {
+                    titlesWithFailedPhotos.append(recipe.title)
+                }
             } catch {
                 failedTitles.append(recipe.title)
             }

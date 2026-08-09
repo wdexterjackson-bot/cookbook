@@ -38,8 +38,22 @@ struct CookbooksHubView: View {
     @State private var backupErrorMessage: String?
     @State private var restoreErrorMessage: String?
     @State private var restoreSuccessMessage: String?
+    /// Deliberately not navigated to until the "Cookbook Restored" alert is
+    /// dismissed — setting this and showing the alert in the same update
+    /// both queue a presentation-affecting transition (alert popover +
+    /// NavigationStack push) on top of the .fileImporter sheet's own
+    /// dismissal, which reliably crashed UIKit's focus system (SIGABRT deep
+    /// inside _UIFocusContainerGuideFallbackItemsContainer, observed
+    /// 2026-08-08). Sequencing them — alert first, push only from the
+    /// alert's own dismiss action — avoids stacking three transitions at once.
+    @State private var restoredCookbookID: UUID?
+    @State private var isPresentingCloudRestore = false
+    @State private var cloudSyncErrorMessage: String?
+    @State private var syncingCookbookID: PersistentIdentifier?
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
+    private let syncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService()
+    private let photoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
 
     private var ownedCookbooks: [Cookbook] {
         allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
@@ -67,7 +81,22 @@ struct CookbooksHubView: View {
                         // tappable. Setting the active cookbook happens in
                         // the destination's .onAppear instead, so the whole
                         // row is a single, unambiguous tap target.
-                        NavigationLink(cookbook.title, value: cookbook.id)
+                        NavigationLink(value: cookbook.id) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(cookbook.title)
+                                    if cookbook.storageMode == .cloudSynced {
+                                        Text(lastSyncedCaption(for: cookbook))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                if syncingCookbookID == cookbook.persistentModelID {
+                                    Spacer()
+                                    ProgressView()
+                                }
+                            }
+                        }
                             .swipeActions {
                                 Button("Delete", role: .destructive) {
                                     cookbookPendingDeletion = cookbook
@@ -76,10 +105,11 @@ struct CookbooksHubView: View {
                                     cookbookPendingEdit = cookbook
                                 }
                                 .tint(.blue)
-                                Button("Back Up") {
-                                    beginBackup(cookbook)
+                                Button(cookbook.storageMode == .cloudSynced ? "Sync Now" : "Back Up") {
+                                    Task { await beginBackup(cookbook) }
                                 }
                                 .tint(.orange)
+                                .disabled(syncingCookbookID == cookbook.persistentModelID)
                             }
                     }
                 }
@@ -122,6 +152,11 @@ struct CookbooksHubView: View {
                         } label: {
                             Label("Restore from Backup", systemImage: "arrow.counterclockwise")
                         }
+                        Button {
+                            isPresentingCloudRestore = true
+                        } label: {
+                            Label("Restore from Cloud", systemImage: "icloud.and.arrow.down")
+                        }
                     } label: {
                         Label("New Cookbook", systemImage: "plus")
                     }
@@ -146,6 +181,11 @@ struct CookbooksHubView: View {
             }
             .sheet(item: $cookbookPendingEdit) { cookbook in
                 CookbookConfigurationView(mode: .edit(cookbook))
+            }
+            .sheet(isPresented: $isPresentingCloudRestore) {
+                RestoreFromCloudView { restoredID in
+                    path.append(restoredID)
+                }
             }
             .confirmationDialog(
                 deletionConfirmationTitle,
@@ -217,9 +257,25 @@ struct CookbooksHubView: View {
                     set: { if !$0 { restoreSuccessMessage = nil } }
                 )
             ) {
-                Button("OK", role: .cancel) {}
+                Button("OK", role: .cancel) {
+                    if let restoredCookbookID {
+                        path.append(restoredCookbookID)
+                    }
+                    restoredCookbookID = nil
+                }
             } message: {
                 Text(restoreSuccessMessage ?? "")
+            }
+            .alert(
+                "Couldn't Sync to the Cloud",
+                isPresented: Binding(
+                    get: { cloudSyncErrorMessage != nil },
+                    set: { if !$0 { cloudSyncErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(cloudSyncErrorMessage ?? "")
             }
         }
     }
@@ -268,18 +324,44 @@ struct CookbooksHubView: View {
 
     // MARK: - Backup / Restore
 
-    private func beginBackup(_ cookbook: Cookbook) {
+    /// A cloud-synced cookbook's "Back Up" swipe action becomes "Sync Now"
+    /// — a quick push to Firestore/Storage instead of the local JSON file
+    /// export, per the confirmed "manual, tied to Back Up" sync design.
+    /// An on-device-only cookbook keeps today's exact behavior.
+    private func beginBackup(_ cookbook: Cookbook) async {
         let recipesInCookbook = allRecipes.filter {
             $0.ownerID == accountState.currentOwnerID && $0.cookbookID == cookbook.id
         }
-        do {
-            let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipesInCookbook)
-            cookbookPendingBackup = cookbook
-            backupDocument = CookbookBackupDocument(data: data)
-            isPresentingBackupExporter = true
-        } catch {
-            backupErrorMessage = error.localizedDescription
+
+        guard cookbook.storageMode == .cloudSynced else {
+            do {
+                let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipesInCookbook)
+                cookbookPendingBackup = cookbook
+                backupDocument = CookbookBackupDocument(data: data)
+                isPresentingBackupExporter = true
+            } catch {
+                backupErrorMessage = error.localizedDescription
+            }
+            return
         }
+
+        guard let ownerUserID = accountState.currentUserID else { return }
+        syncingCookbookID = cookbook.persistentModelID
+        defer { syncingCookbookID = nil }
+        do {
+            try await PersonalCookbookSyncCoordinator.push(
+                cookbook, recipes: recipesInCookbook, ownerUserID: ownerUserID,
+                syncService: syncService, photoUploadService: photoUploadService
+            )
+            try? modelContext.save()
+        } catch {
+            cloudSyncErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func lastSyncedCaption(for cookbook: Cookbook) -> String {
+        guard let lastSyncedAt = cookbook.lastSyncedAt else { return "Never synced" }
+        return "Synced \(lastSyncedAt.formatted(.relative(presentation: .named)))"
     }
 
     private func restore(from url: URL) {
@@ -296,7 +378,7 @@ struct CookbooksHubView: View {
             let restoredRecipeCount = (try? modelContext.fetchCount(descriptor)) ?? 0
             let recipeWord = restoredRecipeCount == 1 ? "recipe" : "recipes"
             restoreSuccessMessage = "Restored \"\(cookbook.title)\" with \(restoredRecipeCount) \(recipeWord)."
-            path.append(cookbook.id)
+            restoredCookbookID = cookbook.id
         } catch {
             restoreErrorMessage = error.localizedDescription
         }

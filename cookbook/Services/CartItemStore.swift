@@ -29,7 +29,7 @@ enum CartItemStore {
         sourceRecipeID: String,
         sourceRecipeTitleSnapshot: String,
         in context: ModelContext
-    ) -> CartItem {
+    ) throws -> CartItem {
         if let existing = existingItem(ownerID: ownerID, sourceRecipeID: sourceRecipeID, displayText: displayText, in: context) {
             return existing
         }
@@ -42,47 +42,47 @@ enum CartItemStore {
             sourceRecipeTitleSnapshot: sourceRecipeTitleSnapshot
         )
         context.insert(item)
-        try? context.save()
+        try context.save()
         return item
     }
 
     @discardableResult
-    static func addManualItem(ownerID: String, displayText: String, in context: ModelContext) -> CartItem {
+    static func addManualItem(ownerID: String, displayText: String, in context: ModelContext) throws -> CartItem {
         let item = CartItem(ownerID: ownerID, displayText: displayText)
         context.insert(item)
-        try? context.save()
+        try context.save()
         return item
     }
 
-    static func setChecked(_ checked: Bool, for item: CartItem, in context: ModelContext) {
+    static func setChecked(_ checked: Bool, for item: CartItem, in context: ModelContext) throws {
         item.checked = checked
-        try? context.save()
+        try context.save()
     }
 
-    static func remove(_ item: CartItem, in context: ModelContext) {
+    static func remove(_ item: CartItem, in context: ModelContext) throws {
         context.delete(item)
-        try? context.save()
+        try context.save()
     }
 
     /// Returns how many items were removed, so the caller can show "Clear
     /// N items?" per the spec's confirmation requirement.
     @discardableResult
-    static func clearAll(ownerID: String, in context: ModelContext) -> Int {
+    static func clearAll(ownerID: String, in context: ModelContext) throws -> Int {
         let items = fetchAll(ownerID: ownerID, in: context)
         for item in items {
             context.delete(item)
         }
-        try? context.save()
+        try context.save()
         return items.count
     }
 
     @discardableResult
-    static func clearChecked(ownerID: String, in context: ModelContext) -> Int {
+    static func clearChecked(ownerID: String, in context: ModelContext) throws -> Int {
         let items = fetchAll(ownerID: ownerID, in: context).filter(\.checked)
         for item in items {
             context.delete(item)
         }
-        try? context.save()
+        try context.save()
         return items.count
     }
 

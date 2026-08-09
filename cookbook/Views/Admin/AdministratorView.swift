@@ -17,6 +17,8 @@ struct AdministratorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingImport = false
     @State private var isPresentingPublishCookbook = false
+    @State private var isPresentingStandardizeRecipes = false
+    @State private var isPresentingExportPDF = false
 
     var body: some View {
         NavigationStack {
@@ -30,6 +32,16 @@ struct AdministratorView: View {
                     isPresentingPublishCookbook = true
                 } label: {
                     Label("Publish a Cookbook to a Family Cookbook", systemImage: "square.and.arrow.up.on.square")
+                }
+                Button {
+                    isPresentingStandardizeRecipes = true
+                } label: {
+                    Label("Standardize Recipes", systemImage: "wand.and.stars")
+                }
+                Button {
+                    isPresentingExportPDF = true
+                } label: {
+                    Label("Export Cookbook to PDF", systemImage: "doc.richtext")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -49,6 +61,12 @@ struct AdministratorView: View {
         }
         .sheet(isPresented: $isPresentingPublishCookbook) {
             PublishCookbookToFamilyCookbookView()
+        }
+        .sheet(isPresented: $isPresentingStandardizeRecipes) {
+            StandardizeRecipesView()
+        }
+        .sheet(isPresented: $isPresentingExportPDF) {
+            ExportCookbookPDFView()
         }
     }
 }

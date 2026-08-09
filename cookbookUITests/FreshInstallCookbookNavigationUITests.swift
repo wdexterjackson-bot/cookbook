@@ -53,18 +53,11 @@ final class FreshInstallCookbookNavigationUITests: XCTestCase {
 
         let cookbooksTab = app.tabBars.buttons["Cookbooks"]
         XCTAssertTrue(cookbooksTab.waitForExistence(timeout: 20))
-        cookbooksTab.tap()
-        dismissSavePasswordPromptIfPresent(app)
+        XCTAssertTrue(tapWhenHittable(cookbooksTab, in: app))
 
         let personalCookbookRow = app.buttons["Personal Cookbook"]
         XCTAssertTrue(personalCookbookRow.waitForExistence(timeout: 10))
-        dismissSavePasswordPromptIfPresent(app)
-        // Existing isn't the same as hittable — the tab-switch transition
-        // (or a delayed system "Save Password?" prompt) can still be
-        // covering the row for a moment after the element appears.
-        let isHittable = NSPredicate(format: "isHittable == true")
-        wait(for: [expectation(for: isHittable, evaluatedWith: personalCookbookRow)], timeout: 5)
-        personalCookbookRow.tap()
+        XCTAssertTrue(tapWhenHittable(personalCookbookRow, in: app))
 
         // Landing on the recipe list (empty state, since this account has
         // no recipes yet) is the whole point — the race used to instead
@@ -83,9 +76,28 @@ final class FreshInstallCookbookNavigationUITests: XCTestCase {
     @MainActor
     private func dismissSavePasswordPromptIfPresent(_ app: XCUIApplication) {
         let notNow = app.buttons["Not Now"]
-        if notNow.waitForExistence(timeout: 2) {
+        if notNow.waitForExistence(timeout: 1) {
             notNow.tap()
         }
+    }
+
+    /// A single dismiss check right before tapping can still miss the
+    /// AutoFill sheet if it appears mid-wait instead — polls both
+    /// conditions together until the target element is actually tappable
+    /// (or the timeout elapses), tapping it the moment it is.
+    @MainActor
+    @discardableResult
+    private func tapWhenHittable(_ element: XCUIElement, in app: XCUIApplication, timeout: TimeInterval = 15) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            dismissSavePasswordPromptIfPresent(app)
+            if element.exists && element.isHittable {
+                element.tap()
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        return false
     }
 
     /// Firebase Auth's session survives app uninstall via the Simulator's
@@ -95,11 +107,21 @@ final class FreshInstallCookbookNavigationUITests: XCTestCase {
     /// instead of the sign-up screen it needs. Sign out through the app's
     /// own UI to get back to a clean slate rather than depending on the
     /// simulator being erased externally before every run.
+    ///
+    /// Profile is no longer a direct tab bar item — it's reached through
+    /// the "More" hub, which groups it with Messages/Administrator/
+    /// Discover behind icon-badge cards rather than plain rows (see
+    /// MoreHubView). Card buttons carry a combined accessibility label
+    /// ("Profile. Account & purchases"), so match on a prefix rather than
+    /// the exact title.
     @MainActor
     private func signOutIfAlreadySignedIn(_ app: XCUIApplication) {
-        let profileTab = app.tabBars.buttons["Profile"]
-        guard profileTab.waitForExistence(timeout: 3) else { return }
-        profileTab.tap()
+        let moreTab = app.tabBars.buttons["More"]
+        guard moreTab.waitForExistence(timeout: 3) else { return }
+        moreTab.tap()
+        let profileCard = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Profile'")).firstMatch
+        guard profileCard.waitForExistence(timeout: 3) else { return }
+        profileCard.tap()
         let signOutButton = app.buttons["Sign Out"]
         guard signOutButton.waitForExistence(timeout: 3) else { return }
         signOutButton.tap()

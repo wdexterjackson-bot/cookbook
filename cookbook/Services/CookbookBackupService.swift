@@ -212,6 +212,7 @@ private extension Recipe {
         recipe.authorLineageIsExternal = payload.authorLineageIsExternal
         recipe.inspirationCredit = payload.inspirationCredit
         recipe.videoURLs = payload.videoURLs
+        recipe.prepSummary = payload.prepSummary
 
         return recipe
     }

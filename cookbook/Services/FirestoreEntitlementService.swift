@@ -25,6 +25,14 @@ final class FirestoreEntitlementService: EntitlementServicing {
                 guard tier1Credits > 0, !alreadyPro else {
                     return false
                 }
+                // Checked in the same transaction as the credit count
+                // itself, same reasoning as FirestoreGroupsService.createGroup's
+                // matching check — the rules-side tier1NotExpired check is
+                // the real enforcement, this is just for a clean error.
+                if let expiresAt = (snapshot.data()?["tier1ExpiresAt"] as? Timestamp)?.dateValue(), expiresAt < Date() {
+                    errorPointer?.pointee = EntitlementServiceError.creditExpired as NSError
+                    return nil
+                }
 
                 transaction.setData([
                     "tier1Credits": tier1Credits - 1,

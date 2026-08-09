@@ -15,11 +15,16 @@ struct CookingTimersView: View {
         NavigationStack {
             List {
                 Section("New Timer") {
-                    TextField("Name (e.g. Rice)", text: $newTimerName)
-                    Stepper("Duration: \(newTimerMinutes) min", value: $newTimerMinutes, in: 1...180)
-                    Button("Start Timer") {
-                        manager.addTimer(name: newTimerName, totalSeconds: newTimerMinutes * 60)
-                        newTimerName = ""
+                    if manager.canAddTimer {
+                        TextField("Name (e.g. Rice)", text: $newTimerName)
+                        Stepper("Duration: \(newTimerMinutes) min", value: $newTimerMinutes, in: 1...180)
+                        Button("Start Timer") {
+                            manager.addTimer(name: newTimerName, totalSeconds: newTimerMinutes * 60)
+                            newTimerName = ""
+                        }
+                    } else {
+                        Text("You can have up to \(CookingTimerManager.maxConcurrentTimers) timers running at once. Remove one to start another.")
+                            .foregroundStyle(.secondary)
                     }
                 }
 

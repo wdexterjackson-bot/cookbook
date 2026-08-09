@@ -38,6 +38,7 @@ struct AccountView: View {
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let userProfileService: UserProfileServicing = FirestoreUserProfileService()
+    private let publicationsService: PublicationsServicing = FirestorePublicationsService()
 
     var body: some View {
         NavigationStack {
@@ -94,10 +95,8 @@ struct AccountView: View {
                     }
 
                     Section("Membership") {
-                        LabeledContent("Pro User", value: (entitlement?.isProUser ?? false) ? "Yes" : "No")
-                        LabeledContent("Pro User Credits", value: "\(entitlement?.tier1Credits ?? 0)")
-                        LabeledContent("Family Cookbook Credits", value: "\(entitlement?.tier2Credits ?? 0)")
-                        Button("Purchases") {
+                        MembershipSummaryView(entitlement: entitlement)
+                        Button(entitlement?.isProUser == true ? "Purchases" : "Upgrade") {
                             isPresentingMembership = true
                         }
                     }
@@ -265,7 +264,8 @@ struct AccountView: View {
                 modelContext: modelContext,
                 groupsService: groupsService,
                 entitlementService: entitlementService,
-                userProfileService: userProfileService
+                userProfileService: userProfileService,
+                publicationsService: publicationsService
             )
             try await accountState.deleteAccount()
             activeCookbookState.reset()
