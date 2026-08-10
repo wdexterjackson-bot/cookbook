@@ -97,7 +97,117 @@ private struct AmountWheelPickerSheet: View {
         }
         #if os(iOS)
         .presentationDetents([.height(320)])
+        // Without this, the wheel Picker's own drag gesture loses the
+        // gesture-recognizer race to the sheet's swipe-to-dismiss handler
+        // — for a short sheet like this one, that race goes to dismiss
+        // almost every time, so a touch meant to scroll the wheel instead
+        // closes the whole sheet before any scrolling registers. Done is
+        // still a normal, explicit way to close it.
+        .interactiveDismissDisabled()
         #endif
+    }
+}
+
+/// Wraps just the id being edited so the Amount sheet can use `.sheet(item:)`,
+/// owned by CreateEditRecipeView (not IngredientsListSection below) and
+/// presented from its NavigationStack rather than from anything nested
+/// inside the List. Both of those are load-bearing, confirmed by direct
+/// reproduction — not just tidiness.
+///
+/// A `.sheet` attached to a Section *nested inside a List* (as this one
+/// originally was) reproducibly flickered the sheet's content through 4
+/// onAppear calls within ~30ms of presenting, then force-closed it about
+/// a second later without Done ever being tapped — visible to a user as
+/// "I tap Amount and the wheel picker instantly disappears." List's
+/// internal row/section diffing apparently doesn't preserve presentation
+/// state reliably for a `.sheet` attached several levels down inside it,
+/// regardless of the presented content's own view identity or how the
+/// presentation is driven. Isolated via a minimal reproduction outside
+/// this file entirely: extracting this section into its own child View,
+/// switching from `.sheet(isPresented:)` to `.sheet(item:)`, flattening
+/// surrounding sheet nesting one level up, disabling interactive dismiss,
+/// and deferring the presenting state change to the next run loop turn
+/// all failed to fix it individually or in combination. What did fix it
+/// was moving the `.sheet` modifier itself off of anything inside the
+/// List, to a modifier on the List instead (a sibling, not a descendant)
+/// — see where it's actually attached, further down.
+private struct AmountEditingTarget: Identifiable, Equatable {
+    let id: UUID
+}
+
+private struct IngredientsListSection: View {
+    @Binding var ingredientRows: [DraftIngredientRow]
+    @Binding var amountEditingTarget: AmountEditingTarget?
+    @FocusState private var focusedIngredientRowID: UUID?
+
+    var body: some View {
+        Section("Ingredients") {
+            ForEach($ingredientRows) { $row in
+                ingredientRow($row)
+            }
+            .onDelete { offsets in
+                ingredientRows.remove(atOffsets: offsets)
+            }
+            .onMove { from, to in
+                ingredientRows.move(fromOffsets: from, toOffset: to)
+            }
+            .environment(\.editMode, .constant(.active))
+
+            CreateEditRecipeView.addRowButton(label: "Add an ingredient") {
+                let row = DraftIngredientRow()
+                ingredientRows.append(row)
+                focusedIngredientRowID = row.id
+            }
+        }
+    }
+
+    private func ingredientRow(_ row: Binding<DraftIngredientRow>) -> some View {
+        HStack(spacing: 8) {
+            CreateEditRecipeView.removeRowButton(accessibilityLabel: "Remove ingredient") {
+                ingredientRows.removeAll { $0.id == row.wrappedValue.id }
+            }
+
+            TextField("Ingredient", text: row.name)
+                .focused($focusedIngredientRowID, equals: row.wrappedValue.id)
+                .accessibilityLabel("Ingredient name")
+
+            Button {
+                // Resigning focus and presenting the sheet in the same
+                // transaction stacks two UIKit-transition-triggering state
+                // changes (keyboard dismissal + sheet presentation) into
+                // one update — the same shape that caused a real crash
+                // for Create-tab + sheet in RootTabView (see its matching
+                // comment). Clear focus synchronously, defer presenting
+                // to the next run loop turn.
+                focusedIngredientRowID = nil
+                Task { @MainActor in
+                    amountEditingTarget = AmountEditingTarget(id: row.wrappedValue.id)
+                }
+            } label: {
+                Text(row.wrappedValue.quantity.displayText.isEmpty ? "Amount" : row.wrappedValue.quantity.displayText)
+                    .foregroundStyle(row.wrappedValue.quantity.displayText.isEmpty ? .secondary : .primary)
+                    .frame(width: 64, alignment: .trailing)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Amount")
+            .accessibilityValue(row.wrappedValue.quantity.displayText.isEmpty ? "None" : row.wrappedValue.quantity.displayText)
+
+            HStack(spacing: 2) {
+                TextField("unit", text: row.unit)
+                    .frame(width: 56)
+                    .accessibilityLabel("Unit")
+                Menu {
+                    ForEach(CreateEditRecipeView.commonUnits, id: \.self) { unit in
+                        Button(unit) { row.wrappedValue.unit = unit }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Choose a unit")
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -130,6 +240,7 @@ struct CreateEditRecipeView: View {
     @State private var yield: String
     @State private var notes: String
     @State private var ingredientRows: [DraftIngredientRow]
+    @State private var amountEditingTarget: AmountEditingTarget?
     @State private var stepRows: [DraftStepRow]
     @State private var selectedChapterID: UUID?
     /// Only meaningful in `.create` mode — nil means "use the app's
@@ -172,11 +283,7 @@ struct CreateEditRecipeView: View {
     @State private var heroImageData: Data?
     @State private var removesExistingPhoto = false
 
-    @FocusState private var focusedIngredientRowID: UUID?
     @FocusState private var focusedStepRowID: UUID?
-    /// Which row's amount is being edited in the wheel-picker sheet — one
-    /// shared sheet rather than one per row.
-    @State private var amountEditorRowID: UUID?
 
     init(mode: Mode) {
         self.mode = mode
@@ -358,86 +465,31 @@ struct CreateEditRecipeView: View {
                     }
                 )
             }
+            // Deliberately a modifier on the List itself, not content
+            // nested inside it (same shape as isPresentingAuthorPrompt's
+            // sheet right above) — see AmountEditingTarget's doc comment
+            // for why that distinction is load-bearing here.
+            .sheet(item: $amountEditingTarget) { target in
+                if let index = ingredientRows.firstIndex(where: { $0.id == target.id }) {
+                    AmountWheelPickerSheet(quantity: $ingredientRows[index].quantity) {
+                        amountEditingTarget = nil
+                    }
+                }
+            }
         }
     }
 
     // MARK: - Ingredients
 
     private var ingredientsSection: some View {
-        Section("Ingredients") {
-            ForEach($ingredientRows) { $row in
-                ingredientRow($row)
-            }
-            .onDelete { offsets in
-                ingredientRows.remove(atOffsets: offsets)
-            }
-            .onMove { from, to in
-                ingredientRows.move(fromOffsets: from, toOffset: to)
-            }
-            .environment(\.editMode, .constant(.active))
-
-            addRowButton(label: "Add an ingredient") {
-                let row = DraftIngredientRow()
-                ingredientRows.append(row)
-                focusedIngredientRowID = row.id
-            }
-        }
-        .sheet(isPresented: Binding(
-            get: { amountEditorRowID != nil },
-            set: { if !$0 { amountEditorRowID = nil } }
-        )) {
-            if let index = amountEditorRowID.flatMap({ id in ingredientRows.firstIndex { $0.id == id } }) {
-                AmountWheelPickerSheet(quantity: $ingredientRows[index].quantity) {
-                    amountEditorRowID = nil
-                }
-            }
-        }
-    }
-
-    private func ingredientRow(_ row: Binding<DraftIngredientRow>) -> some View {
-        HStack(spacing: 8) {
-            removeRowButton(accessibilityLabel: "Remove ingredient") {
-                ingredientRows.removeAll { $0.id == row.wrappedValue.id }
-            }
-
-            TextField("Ingredient", text: row.name)
-                .focused($focusedIngredientRowID, equals: row.wrappedValue.id)
-                .accessibilityLabel("Ingredient name")
-
-            Button {
-                amountEditorRowID = row.wrappedValue.id
-            } label: {
-                Text(row.wrappedValue.quantity.displayText.isEmpty ? "Amount" : row.wrappedValue.quantity.displayText)
-                    .foregroundStyle(row.wrappedValue.quantity.displayText.isEmpty ? .secondary : .primary)
-                    .frame(width: 64, alignment: .trailing)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Amount")
-            .accessibilityValue(row.wrappedValue.quantity.displayText.isEmpty ? "None" : row.wrappedValue.quantity.displayText)
-
-            HStack(spacing: 2) {
-                TextField("unit", text: row.unit)
-                    .frame(width: 56)
-                    .accessibilityLabel("Unit")
-                Menu {
-                    ForEach(Self.commonUnits, id: \.self) { unit in
-                        Button(unit) { row.wrappedValue.unit = unit }
-                    }
-                } label: {
-                    Image(systemName: "chevron.down.circle")
-                        .foregroundStyle(.secondary)
-                }
-                .accessibilityLabel("Choose a unit")
-            }
-        }
-        .padding(.vertical, 2)
+        IngredientsListSection(ingredientRows: $ingredientRows, amountEditingTarget: $amountEditingTarget)
     }
 
     /// Styled to read as part of the list itself — a green "+" circle
     /// matching the size/weight of the system red delete circle edit mode
     /// already renders on every row above it — rather than a separate
     /// button hanging off the bottom of the section.
-    private func addRowButton(label: String, action: @escaping () -> Void) -> some View {
+    fileprivate static func addRowButton(label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: "plus.circle.fill")
@@ -456,7 +508,7 @@ struct CreateEditRecipeView: View {
     /// Explicit, always-visible per-row delete — doesn't depend on List's
     /// native swipe/edit-mode delete chrome, which wasn't reliably
     /// reachable in practice inside this flat List(.plain) layout.
-    private func removeRowButton(accessibilityLabel: String, action: @escaping () -> Void) -> some View {
+    fileprivate static func removeRowButton(accessibilityLabel: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "minus.circle.fill")
                 .foregroundStyle(.red)
@@ -472,7 +524,7 @@ struct CreateEditRecipeView: View {
         Section("Steps") {
             ForEach($stepRows) { $row in
                 HStack(spacing: 8) {
-                    removeRowButton(accessibilityLabel: "Remove step") {
+                    Self.removeRowButton(accessibilityLabel: "Remove step") {
                         stepRows.removeAll { $0.id == row.id }
                     }
 
@@ -490,7 +542,7 @@ struct CreateEditRecipeView: View {
             }
             .environment(\.editMode, .constant(.active))
 
-            addRowButton(label: "Add a step") {
+            Self.addRowButton(label: "Add a step") {
                 let row = DraftStepRow()
                 stepRows.append(row)
                 focusedStepRowID = row.id
