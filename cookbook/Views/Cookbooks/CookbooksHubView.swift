@@ -47,6 +47,12 @@ struct CookbooksHubView: View {
     /// 2026-08-08). Sequencing them — alert first, push only from the
     /// alert's own dismiss action — avoids stacking three transitions at once.
     @State private var restoredCookbookID: UUID?
+    /// Set while waiting on the user to pick Overwrite vs. Add as New for
+    /// a backup file that contains at least one recipe they already have
+    /// (by originalRecipeID) — nil the rest of the time, including when a
+    /// backup has no such overlap at all, since there's nothing to ask
+    /// about then and restore proceeds straight to .addAsNew.
+    @State private var pendingRestoreChoice: (data: Data, matchCount: Int)?
     @State private var isPresentingCloudRestore = false
     @State private var cloudSyncErrorMessage: String?
     @State private var syncingCookbookID: PersistentIdentifier?
@@ -228,6 +234,28 @@ struct CookbooksHubView: View {
                     restoreErrorMessage = error.localizedDescription
                 }
             }
+            .confirmationDialog(
+                restoreChoiceDialogTitle,
+                isPresented: Binding(
+                    get: { pendingRestoreChoice != nil },
+                    set: { isPresented in if !isPresented { pendingRestoreChoice = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let pendingRestoreChoice {
+                    Button("Overwrite Existing Recipes") {
+                        performRestore(data: pendingRestoreChoice.data, mode: .overwriteExisting)
+                        self.pendingRestoreChoice = nil
+                    }
+                    Button("Add All as New") {
+                        performRestore(data: pendingRestoreChoice.data, mode: .addAsNew)
+                        self.pendingRestoreChoice = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingRestoreChoice = nil
+                }
+            }
             .alert(
                 "Couldn't Back Up Cookbook",
                 isPresented: Binding(
@@ -364,24 +392,68 @@ struct CookbooksHubView: View {
         return "Synced \(lastSyncedAt.formatted(.relative(presentation: .named)))"
     }
 
+    /// Pulled out to a plain function (rather than inline in the
+    /// .confirmationDialog call) — a large SwiftUI body already close to
+    /// its type-checking budget can time out over one more nontrivial
+    /// inline ternary/string-interpolation expression, the same class of
+    /// issue fixed elsewhere in this file.
+    private var restoreChoiceDialogTitle: String {
+        guard let pendingRestoreChoice else { return "" }
+        if pendingRestoreChoice.matchCount == 1 {
+            return "You already have 1 recipe from this backup. Overwrite it with the backup's version, or add it as a new copy?"
+        }
+        return "You already have \(pendingRestoreChoice.matchCount) recipes from this backup. Overwrite them with the backup's versions, or add them as new copies?"
+    }
+
+    /// Reads the picked file and decides whether Overwrite-vs-Add-New is
+    /// even worth asking about: a backup with no recipes the owner
+    /// already has (the common case — a fresh restore, or one from
+    /// another device) proceeds straight to .addAsNew with no extra
+    /// prompt; one that does overlap defers to pendingRestoreChoice so
+    /// the confirmationDialog can ask.
     private func restore(from url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
         do {
             let data = try Data(contentsOf: url)
-            let cookbook = try CookbookBackupService.restore(data, ownerID: accountState.currentOwnerID, modelContext: modelContext)
-            // Queried directly against modelContext (not the view's own
-            // @Query snapshot) so this reflects what restore() just saved
-            // without depending on SwiftUI's own refresh timing.
-            let cookbookID = cookbook.id
-            let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate { $0.cookbookID == cookbookID })
-            let restoredRecipeCount = (try? modelContext.fetchCount(descriptor)) ?? 0
-            let recipeWord = restoredRecipeCount == 1 ? "recipe" : "recipes"
-            restoreSuccessMessage = "Restored \"\(cookbook.title)\" with \(restoredRecipeCount) \(recipeWord)."
-            restoredCookbookID = cookbook.id
+            let matchCount = try CookbookBackupService.matchingRecipeCount(
+                in: data, ownerID: accountState.currentOwnerID, modelContext: modelContext
+            )
+            if matchCount > 0 {
+                pendingRestoreChoice = (data: data, matchCount: matchCount)
+            } else {
+                performRestore(data: data, mode: .addAsNew)
+            }
         } catch {
             restoreErrorMessage = error.localizedDescription
         }
+    }
+
+    private func performRestore(data: Data, mode: RecipeRestoreMode) {
+        do {
+            let (cookbookID, cookbookTitle, outcome) = try CookbookBackupService.restore(
+                data, ownerID: accountState.currentOwnerID, modelContext: modelContext, mode: mode
+            )
+            restoreSuccessMessage = restoreSuccessMessage(title: cookbookTitle, outcome: outcome)
+            // nil exactly when nothing new was filed into a shell cookbook
+            // (a pure overwrite) — CookbookBackupService already discarded
+            // that empty shell, so there's nowhere sensible to navigate.
+            restoredCookbookID = cookbookID
+        } catch {
+            restoreErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func restoreSuccessMessage(title: String, outcome: RecipeRestoreOutcome) -> String {
+        let addedWord = outcome.addedCount == 1 ? "recipe" : "recipes"
+        guard outcome.overwrittenCount > 0 else {
+            return "Restored \"\(title)\" with \(outcome.addedCount) \(addedWord)."
+        }
+        let overwrittenWord = outcome.overwrittenCount == 1 ? "recipe" : "recipes"
+        guard outcome.addedCount > 0 else {
+            return "Updated \(outcome.overwrittenCount) existing \(overwrittenWord) from \"\(title)\"."
+        }
+        return "Restored \"\(title)\": \(outcome.addedCount) new \(addedWord), \(outcome.overwrittenCount) existing \(overwrittenWord) updated."
     }
 
     private static func backupFilename(for cookbook: Cookbook) -> String {

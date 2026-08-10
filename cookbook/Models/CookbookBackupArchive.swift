@@ -20,13 +20,17 @@
 //  Mirror-based guard-rail test that fails loudly if a model gains a
 //  stored property neither payload type knows about yet.
 //
-//  id fields on Cookbook/Recipe are deliberately NOT part of these
-//  payloads — restore always creates brand-new records with fresh UUIDs
+//  Cookbook's own id is deliberately NOT part of these payloads — restore
+//  always creates a brand-new Cookbook with a fresh UUID
 //  (CookbookBackupService.restore), so a restore is safe to run anytime,
-//  even onto a device that still has the original cookbook. The one
-//  exception is CookbookSectionBackup.id, which IS preserved — it's the
-//  key RecipeBackupPayload.originalSectionID references to say which
-//  chapter a recipe belongs to, remapped to a fresh id at restore time.
+//  even onto a device that still has the original cookbook.
+//
+//  CookbookSectionBackup.id and RecipeBackupPayload.originalRecipeID ARE
+//  preserved, for two different reasons: the section id is only ever used
+//  to remap which (freshly-created) chapter a recipe belongs to, never
+//  reused as-is; the recipe id is a real stable identifier — restore's
+//  caller can look a recipe up by it later (e.g. to offer "overwrite the
+//  recipe I already have" instead of always creating a duplicate).
 //
 
 import Foundation
@@ -84,6 +88,16 @@ struct CookbookSectionBackup: Codable {
 }
 
 struct RecipeBackupPayload: Codable {
+    /// The recipe's own id at the time of backup — stable across repeated
+    /// backups of the same recipe, unlike everything else here. Lets
+    /// CookbookBackupService.restore recognize "this is a recipe I
+    /// already have" and update it in place instead of always creating a
+    /// duplicate, when the caller asks for that (RecipeRestoreMode).
+    /// Optional only so a backup file made before this field existed still
+    /// decodes — always populated on export from here on, and a nil value
+    /// on restore is simply never treated as a match for overwriting.
+    var originalRecipeID: UUID?
+
     /// The CookbookSectionBackup.id this recipe belonged to, if any — not
     /// a live reference, remapped to the restored section's fresh id by
     /// CookbookBackupService.restore.
@@ -154,6 +168,7 @@ struct RecipeBackupPayload: Codable {
         ingredientSections: [IngredientSectionBackup],
         stepSections: [StepSectionBackup]
     ) {
+        originalRecipeID = recipe.id
         originalSectionID = recipe.sectionID
         title = recipe.title
         summary = recipe.summary

@@ -65,12 +65,18 @@ struct CookbookBackupServiceTests {
         return (cookbook, [filedRecipe, unfiledRecipe])
     }
 
+    private func fetchCookbook(id: UUID, in context: ModelContext) throws -> Cookbook {
+        let descriptor = FetchDescriptor<Cookbook>(predicate: #Predicate<Cookbook> { $0.id == id })
+        return try #require(try context.fetch(descriptor).first)
+    }
+
     @Test func exportThenRestoreRoundTripsCookbookMetadata() throws {
         let context = try makeInMemoryContext()
         let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
 
         let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
-        let restored = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let (cookbookID, _, _) = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let restored = try fetchCookbook(id: try #require(cookbookID), in: context)
 
         #expect(restored.title == "Grandma's Kitchen")
         #expect(restored.coverColorHex == "C25432")
@@ -84,7 +90,8 @@ struct CookbookBackupServiceTests {
         let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
 
         let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
-        let restored = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let (cookbookID, _, _) = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let restored = try fetchCookbook(id: try #require(cookbookID), in: context)
 
         #expect(restored.sections.count == 1)
         #expect(restored.sections.first?.title == "Appetizers")
@@ -104,7 +111,8 @@ struct CookbookBackupServiceTests {
         let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
 
         let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
-        let restored = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let (cookbookID, _, _) = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let restored = try fetchCookbook(id: try #require(cookbookID), in: context)
 
         let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.title == "Sausage Balls" })
         let restoredRecipe = try #require(try context.fetch(descriptor).first { $0.cookbookID == restored.id })
@@ -122,6 +130,18 @@ struct CookbookBackupServiceTests {
         #expect(steps.map(\.text) == ["Mix everything together.", "Bake at 350°F for 20 minutes."])
     }
 
+    @Test func exportThenRestoreRoundTripsRecipeID() throws {
+        let context = try makeInMemoryContext()
+        let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
+        let originalRecipeID = recipes[0].id
+
+        let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
+        let archive = try CookbookBackupService.jsonDecoder.decode(CookbookBackupArchive.self, from: data)
+
+        let payload = try #require(archive.cookbook.recipes.first { $0.title == "Sausage Balls" })
+        #expect(payload.originalRecipeID == originalRecipeID)
+    }
+
     @Test func exportThenRestoreRoundTripsCoverAndHeroPhotos() throws {
         let context = try makeInMemoryContext()
         let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
@@ -137,7 +157,8 @@ struct CookbookBackupServiceTests {
         }
 
         let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
-        let restored = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let (cookbookID, _, _) = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let restored = try fetchCookbook(id: try #require(cookbookID), in: context)
         defer {
             if let filename = restored.coverImageFilename { PhotoStore.delete(filename) }
         }
@@ -160,6 +181,7 @@ struct CookbookBackupServiceTests {
 
         // Restoring the SAME backup twice, with the original cookbook still
         // present, must never collide — three independent cookbooks total.
+        // Default mode (.addAsNew) ignores the matching originalRecipeIDs.
         _ = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
         _ = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
 
@@ -181,11 +203,101 @@ struct CookbookBackupServiceTests {
         archive.cookbook.recipes[0].heroPhotoBase64 = "not valid base64!!"
         data = try CookbookBackupService.jsonEncoder.encode(archive)
 
-        let restored = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let (cookbookID, _, _) = try CookbookBackupService.restore(data, ownerID: "alice", modelContext: context)
+        let restored = try fetchCookbook(id: try #require(cookbookID), in: context)
 
         let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.title == "Sausage Balls" })
         let restoredRecipe = try #require(try context.fetch(descriptor).first { $0.cookbookID == restored.id })
         #expect(restoredRecipe.heroPhotoFilename == nil)
+    }
+
+    // MARK: - Overwrite vs. Add as New
+
+    @Test func matchingRecipeCountIsZeroWhenNothingLocalMatches() throws {
+        let context = try makeInMemoryContext()
+        let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
+        let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
+
+        // Different owner — same recipe ids exist, but not for "bob".
+        let count = try CookbookBackupService.matchingRecipeCount(in: data, ownerID: "bob", modelContext: context)
+        #expect(count == 0)
+    }
+
+    @Test func matchingRecipeCountCountsRecipesTheOwnerAlreadyHas() throws {
+        let context = try makeInMemoryContext()
+        let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
+        let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
+
+        let count = try CookbookBackupService.matchingRecipeCount(in: data, ownerID: "alice", modelContext: context)
+        #expect(count == 2)
+    }
+
+    @Test func overwriteExistingUpdatesTheOriginalRecipeInPlace() throws {
+        let context = try makeInMemoryContext()
+        let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
+        let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
+        let originalRecipeID = recipes[0].id
+        let originalCookbookID = cookbook.id
+
+        // Simulate the live recipe having drifted from the backup since
+        // it was taken.
+        recipes[0].title = "Sausage Balls (Edited)"
+        recipes[0].tags = ["changed"]
+        try context.save()
+
+        let (cookbookID, _, outcome) = try CookbookBackupService.restore(
+            data, ownerID: "alice", modelContext: context, mode: .overwriteExisting
+        )
+
+        #expect(outcome.overwrittenCount == 2)
+        #expect(outcome.addedCount == 0)
+        // Nothing new was filed anywhere, so the shell cookbook is
+        // discarded rather than left behind, empty.
+        #expect(cookbookID == nil)
+
+        let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.id == originalRecipeID })
+        let updated = try #require(try context.fetch(descriptor).first)
+        #expect(updated.title == "Sausage Balls")
+        #expect(updated.tags == ["party", "pork"])
+        // Stayed exactly where it already lived — not moved into a new
+        // cookbook.
+        #expect(updated.cookbookID == originalCookbookID)
+
+        let cookbookDescriptor = FetchDescriptor<Cookbook>(predicate: #Predicate<Cookbook> { $0.title == "Grandma's Kitchen" })
+        #expect(try context.fetch(cookbookDescriptor).count == 1)
+    }
+
+    @Test func overwriteExistingStillAddsRecipesWithNoLocalMatch() throws {
+        let context = try makeInMemoryContext()
+        let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
+        let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
+
+        // "bob" has none of these recipes yet, so overwrite mode should
+        // behave like a normal add for every one of them.
+        let (cookbookID, _, outcome) = try CookbookBackupService.restore(
+            data, ownerID: "bob", modelContext: context, mode: .overwriteExisting
+        )
+
+        #expect(outcome.addedCount == 2)
+        #expect(outcome.overwrittenCount == 0)
+        #expect(cookbookID != nil)
+    }
+
+    @Test func addAsNewIgnoresMatchesAndAlwaysDuplicates() throws {
+        let context = try makeInMemoryContext()
+        let (cookbook, recipes) = try makeSampleCookbook(in: context, ownerID: "alice")
+        let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipes)
+
+        let (cookbookID, _, outcome) = try CookbookBackupService.restore(
+            data, ownerID: "alice", modelContext: context, mode: .addAsNew
+        )
+
+        #expect(outcome.addedCount == 2)
+        #expect(outcome.overwrittenCount == 0)
+        #expect(cookbookID != nil)
+
+        let descriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.title == "Sausage Balls" })
+        #expect(try context.fetch(descriptor).count == 2)
     }
 
     // MARK: - Forward-compatibility guard rail
@@ -222,10 +334,11 @@ struct CookbookBackupServiceTests {
         let payloadProperties = storedPropertyNames(of: samplePayload)
 
         let deliberatelyExcludedOrRenamed: Set<String> = [
-            "id", "ownerID", "cookbookID",   // restore-time-determined, never backed up
-            "sectionID",                      // -> originalSectionID
-            "heroPhotoFilename",               // -> heroPhotoBase64
-            "galleryPhotoFilenames",           // -> galleryPhotoBase64
+            "id",                              // -> originalRecipeID
+            "ownerID", "cookbookID",           // restore-time-determined, never backed up
+            "sectionID",                        // -> originalSectionID
+            "heroPhotoFilename",                 // -> heroPhotoBase64
+            "galleryPhotoFilenames",             // -> galleryPhotoBase64
         ]
 
         let uncovered = recipeProperties.subtracting(payloadProperties).subtracting(deliberatelyExcludedOrRenamed)
