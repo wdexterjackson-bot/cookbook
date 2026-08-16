@@ -11,7 +11,9 @@
 
 import SwiftUI
 import SwiftData
+#if os(iOS)
 import PhotosUI
+#endif
 
 struct CookbookConfigurationView: View {
     enum Mode {
@@ -47,12 +49,24 @@ struct CookbookConfigurationView: View {
     @State private var coverStyleImageName: String?
     @State private var coverImageData: Data?
     @State private var removesExistingCoverImage = false
+    #if os(iOS)
     @State private var selectedPhotoItem: PhotosPickerItem?
+    #endif
     /// One ordered list for every chapter currently included — whether it
     /// came from a catalog toggle or the custom-name field — so the two
     /// can be freely reordered together instead of always showing catalog
     /// chapters first. Display/save order is exactly this array's order.
     @State private var chapterTitles: [String]
+    /// Keyed by chapter title, same as chapterTitles/existingSectionsByTitle
+    /// in save() below — a title with no entry here just shows the
+    /// generic placeholder, not an error. Populated automatically with
+    /// CookbookSectionIconCatalog's matching full-color icon the moment a
+    /// chapter is added (see addChapter(_:)); the "Change" action can
+    /// reassign to any icon, full-color or black.
+    @State private var chapterIcons: [String: String]
+    /// Drives SectionIconPickerView's presentation — the title of whichever
+    /// chapter's "Change" button was tapped, nil when no picker is open.
+    @State private var chapterTitlePendingIconChange: String?
     /// Flips to true the moment the user actually drags to reorder (not
     /// from adding/removing a chapter) — see Cookbook.chaptersManuallyReordered.
     @State private var chaptersManuallyReordered: Bool
@@ -79,6 +93,7 @@ struct CookbookConfigurationView: View {
             _coverStyleImageName = State(initialValue: nil)
             _coverImageData = State(initialValue: nil)
             _chapterTitles = State(initialValue: [])
+            _chapterIcons = State(initialValue: [:])
             _chaptersManuallyReordered = State(initialValue: false)
             _isCloudSynced = State(initialValue: false)
             initialIsCloudSynced = false
@@ -96,6 +111,10 @@ struct CookbookConfigurationView: View {
 
             let sortedSections = cookbook.sections.sorted { $0.sortOrder < $1.sortOrder }
             _chapterTitles = State(initialValue: sortedSections.map(\.title))
+            _chapterIcons = State(initialValue: Dictionary(
+                sortedSections.compactMap { section in section.iconAssetName.map { (section.title, $0) } },
+                uniquingKeysWith: { _, latest in latest }
+            ))
             _chaptersManuallyReordered = State(initialValue: cookbook.chaptersManuallyReordered)
             _isCloudSynced = State(initialValue: cookbook.isCloudSynced)
             initialIsCloudSynced = cookbook.isCloudSynced
@@ -162,7 +181,7 @@ struct CookbookConfigurationView: View {
 
                 Section {
                     ForEach(chapterTitles, id: \.self) { title in
-                        Text(title)
+                        chapterOrderRow(title)
                     }
                     .onDelete { offsets in
                         chapterTitles.remove(atOffsets: offsets)
@@ -201,7 +220,7 @@ struct CookbookConfigurationView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle(isEditing ? "Edit Cookbook" : "New Cookbook")
             .toolbar {
@@ -226,6 +245,57 @@ struct CookbookConfigurationView: View {
             } message: {
                 Text((syncErrorMessage ?? "") + " Your cookbook was still saved locally — try Back Up again later.")
             }
+            // Attached to the Form itself, not nested inside the Chapter
+            // Order Section/List content above — a sheet attached to
+            // content nested inside a List is unreliable in SwiftUI (see
+            // the ingredient Amount wheel-picker fix for the same lesson
+            // learned the hard way).
+            .sheet(isPresented: Binding(
+                get: { chapterTitlePendingIconChange != nil },
+                set: { if !$0 { chapterTitlePendingIconChange = nil } }
+            )) {
+                if let title = chapterTitlePendingIconChange {
+                    SectionIconPickerView(currentAssetName: chapterIcons[title]) { assetName in
+                        chapterIcons[title] = assetName
+                    }
+                }
+            }
+        }
+    }
+
+    private func chapterOrderRow(_ title: String) -> some View {
+        HStack(spacing: 12) {
+            chapterIconThumbnail(for: title)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Button("Change") {
+                    chapterTitlePendingIconChange = title
+                }
+                .font(.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func chapterIconThumbnail(for title: String) -> some View {
+        if let assetName = chapterIcons[title], let icon = CookbookSectionIconCatalog.icon(named: assetName) {
+            Image(icon.assetName)
+                .resizable()
+                .scaledToFit()
+                .padding(6)
+                .frame(width: 60, height: 60)
+                .background(Color(white: 0.95))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        } else {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.secondary.opacity(0.12))
+                .frame(width: 60, height: 60)
+                .overlay {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                }
         }
     }
 
@@ -339,9 +409,7 @@ struct CookbookConfigurationView: View {
             get: { chapterTitles.contains(title) },
             set: { isSelected in
                 if isSelected {
-                    if !chapterTitles.contains(title) {
-                        chapterTitles.append(title)
-                    }
+                    addChapter(title)
                 } else {
                     chapterTitles.removeAll { $0 == title }
                 }
@@ -352,8 +420,21 @@ struct CookbookConfigurationView: View {
     private func addCustomSection() {
         let trimmed = newCustomSectionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !chapterTitles.contains(trimmed) else { return }
-        chapterTitles.append(trimmed)
+        addChapter(trimmed)
         newCustomSectionTitle = ""
+    }
+
+    /// Shared by both add paths (catalog toggle-on and custom-name Add) so
+    /// every new chapter gets the same default-icon treatment — a custom
+    /// name that happens to match a manifest category (e.g. typed in a
+    /// different case) still gets its icon, not just ones picked from the
+    /// catalog list.
+    private func addChapter(_ title: String) {
+        guard !chapterTitles.contains(title) else { return }
+        chapterTitles.append(title)
+        if chapterIcons[title] == nil, let defaultIcon = CookbookSectionIconCatalog.defaultIcon(forChapterTitled: title) {
+            chapterIcons[title] = defaultIcon.assetName
+        }
     }
 
     private var isEditing: Bool {
@@ -455,6 +536,7 @@ struct CookbookConfigurationView: View {
         for (index, title) in chapterTitles.enumerated() {
             let section = existingSectionsByTitle[title] ?? CookbookSection(title: title, sortOrder: index)
             section.sortOrder = index
+            section.iconAssetName = chapterIcons[title]
             sections.append(section)
         }
         let keptTitles = Set(chapterTitles)

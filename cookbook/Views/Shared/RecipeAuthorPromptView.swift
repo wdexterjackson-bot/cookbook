@@ -46,7 +46,7 @@ struct RecipeAuthorPromptView: View {
                     LocationFieldsView(city: $city, isUS: $isUS, stateCode: $stateCode, country: $country)
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Add Your Name?")
             #if os(iOS)

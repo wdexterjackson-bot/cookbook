@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "section-bw-10-breakfast.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

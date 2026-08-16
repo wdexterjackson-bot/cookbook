@@ -41,6 +41,11 @@ struct CookbooksListView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    // swipeActions itself is unavailable on tvOS (no swipe
+                    // gesture there) — Edit/Delete for a cookbook isn't
+                    // offered on this platform; see CookbooksHubView's
+                    // matching tvOS notes for the same reasoning on backup.
+                    #if !os(tvOS)
                     .swipeActions {
                         Button("Delete", role: .destructive) {
                             cookbookPendingDeletion = cookbook
@@ -50,9 +55,10 @@ struct CookbooksListView: View {
                         }
                         .tint(.blue)
                     }
+                    #endif
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Cookbooks")
             .toolbar {
@@ -83,7 +89,7 @@ struct CookbooksListView: View {
             ) {
                 if let cookbookPendingDeletion {
                     Button("Delete", role: .destructive) {
-                        delete(cookbookPendingDeletion)
+                        Task { await delete(cookbookPendingDeletion) }
                         self.cookbookPendingDeletion = nil
                     }
                 }
@@ -105,7 +111,7 @@ struct CookbooksListView: View {
     /// CookbookDeletionCoordinator), so this works even when it's the
     /// user's only cookbook — CookbookMigrator recreates an empty
     /// "Personal Cookbook" next time one is needed.
-    private func delete(_ cookbook: Cookbook) {
+    private func delete(_ cookbook: Cookbook) async {
         if activeCookbookState.activeCookbookID == cookbook.id {
             if let fallback = ownedCookbooks.first(where: { $0.id != cookbook.id }) {
                 activeCookbookState.setActive(fallback.id)
@@ -114,7 +120,7 @@ struct CookbooksListView: View {
             }
         }
 
-        CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, in: modelContext)
+        await CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, ownerUserID: cookbook.ownerID, in: modelContext)
     }
 }
 

@@ -79,6 +79,14 @@ service cloud.firestore {
     function priorTier2Credits(entitlementData) {
       return ('tier2Credits' in entitlementData) ? entitlementData.tier2Credits : 0;
     }
+    // Generic: works on either resource.data (the doc's prior state) or
+    // request.resource.data (the write's resulting state) — both need the
+    // same "field absent means false" tolerance, since a merge-style
+    // backfill write can leave isProUser out of the payload entirely when
+    // it was never set on the doc being merged onto.
+    function isProUserFlag(entitlementData) {
+      return ('isProUser' in entitlementData) && entitlementData.isProUser == true;
+    }
 
     // Each free launch-promo tier is grantable to, and usable by, new
     // accounts only until its own date (must match
@@ -155,25 +163,33 @@ service cloud.firestore {
           // Blocked once the credit has expired (tier2NotExpired) — the
           // client pre-checks this too for a clean error, but the rule is
           // the real enforcement against a client that skips the check.
-          (request.resource.data.tier2Credits == resource.data.tier2Credits - 1
+          // Uses the same 'in'-guarded prior*/has* helpers the backfill
+          // branch below already relied on — this whole || chain is
+          // evaluated on every update, including a backfill of a
+          // genuinely legacy doc that's missing these fields entirely, so
+          // direct resource.data.tier2Credits-style access here would
+          // throw (and, per the emulator, deny the whole update) before
+          // ever reaching the branch that was actually meant to match.
+          (request.resource.data.tier2Credits == priorTier2Credits(resource.data) - 1
             && request.resource.data.tier2Credits >= 0
             && tier2NotExpired(resource.data)
-            && request.resource.data.tier1Credits == resource.data.tier1Credits
-            && request.resource.data.isProUser == resource.data.isProUser
-            && request.resource.data.receivedTier1PromoCredit == resource.data.receivedTier1PromoCredit
-            && request.resource.data.receivedTier2PromoCredits == resource.data.receivedTier2PromoCredits)
+            && request.resource.data.tier1Credits == priorTier1Credits(resource.data)
+            && isProUserFlag(request.resource.data) == isProUserFlag(resource.data)
+            && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
           ||
           // Spending a tier-1 credit to become a Pro User — flips both
           // together, exactly once, nothing else moves. Same expiration
-          // gate as tier2's spend branch above.
-          (resource.data.isProUser == false
+          // gate, and same guarded-helper reasoning, as tier2's spend
+          // branch above.
+          (isProUserFlag(resource.data) == false
             && request.resource.data.isProUser == true
-            && request.resource.data.tier1Credits == resource.data.tier1Credits - 1
+            && request.resource.data.tier1Credits == priorTier1Credits(resource.data) - 1
             && request.resource.data.tier1Credits >= 0
             && tier1NotExpired(resource.data)
-            && request.resource.data.tier2Credits == resource.data.tier2Credits
-            && request.resource.data.receivedTier1PromoCredit == resource.data.receivedTier1PromoCredit
-            && request.resource.data.receivedTier2PromoCredits == resource.data.receivedTier2PromoCredits)
+            && request.resource.data.tier2Credits == priorTier2Credits(resource.data)
+            && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
           ||
           // Backfilling a free launch credit this account hasn't received
           // yet (an entitlement doc that predates one/both tiers, possibly
@@ -184,7 +200,7 @@ service cloud.firestore {
           // has passed and it was never received (a genuine no-grant, not
           // a rejection) — at least one tier must actually change;
           // isProUser never moves here.
-          (request.resource.data.isProUser == resource.data.isProUser
+          (isProUserFlag(request.resource.data) == isProUserFlag(resource.data)
             && (
               (!hasReceivedTier1(resource.data)
                 && request.time < tier1ExpirationTimestamp()

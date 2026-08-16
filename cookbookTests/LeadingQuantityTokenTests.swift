@@ -47,6 +47,33 @@ struct LeadingQuantityTokenTests {
     @Test func returnsNilForMalformedFraction() {
         #expect(LeadingQuantityToken.parse(from: "1/0 cups flour") == nil)
     }
+
+    // MARK: - No space between the quantity and unit (2026-08-15 feedback:
+    // Discover-tab imports in grams were silently dropping their quantity)
+
+    @Test func parsesWholeNumberRunDirectlyIntoAUnitWithNoSpace() {
+        let parsed = LeadingQuantityToken.parse(from: "280g flour")
+        #expect(parsed?.value == 280)
+        #expect(parsed?.matchedText == "280")
+    }
+
+    @Test func parsesASingleDigitRunDirectlyIntoAUnitWithNoSpace() {
+        let parsed = LeadingQuantityToken.parse(from: "5g salt")
+        #expect(parsed?.value == 5)
+        #expect(parsed?.matchedText == "5")
+    }
+
+    @Test func parsesAFractionRunDirectlyIntoAUnitWithNoSpace() {
+        let parsed = LeadingQuantityToken.parse(from: "1/2g sugar")
+        #expect(parsed?.value == 0.5)
+        #expect(parsed?.matchedText == "1/2")
+    }
+
+    @Test func parsesAMixedNumberRunDirectlyIntoAUnitWithNoSpace() {
+        let parsed = LeadingQuantityToken.parse(from: "1 1/2g sugar")
+        #expect(parsed?.value == 1.5)
+        #expect(parsed?.matchedText == "1 1/2")
+    }
 }
 
 private extension Double {

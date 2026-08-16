@@ -64,7 +64,7 @@ struct StandardizeRecipesView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Standardize Recipes")
             #if os(iOS)
@@ -89,9 +89,10 @@ struct StandardizeRecipesView: View {
         let changedCount = RecipeQuantityStandardizer.standardize(cookbook, modelContext: modelContext)
         RecipeStandardizationState.markStandardized(cookbook.id)
         isStandardizing = false
-        resultMessage = changedCount == 0
+        let outcome = changedCount == 0
             ? "\"\(cookbook.title)\" was already up to date."
             : "Updated \(changedCount) ingredient\(changedCount == 1 ? "" : "s") in \"\(cookbook.title)\"."
+        resultMessage = "\(outcome) You may close this window now."
     }
 }
 

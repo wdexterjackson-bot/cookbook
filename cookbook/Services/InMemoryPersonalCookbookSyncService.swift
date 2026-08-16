@@ -30,4 +30,10 @@ final class InMemoryPersonalCookbookSyncService: PersonalCookbookSyncServicing {
         }
         return (cookbook, recipesByCookbookID[cookbookID] ?? [])
     }
+
+    func delete(cookbookID: UUID, ownerUserID: String) async throws {
+        if let stubbedError { throw stubbedError }
+        cookbooksByID.removeValue(forKey: cookbookID)
+        recipesByCookbookID.removeValue(forKey: cookbookID)
+    }
 }

@@ -36,8 +36,35 @@ final class FirestorePersonalCookbookSyncService: PersonalCookbookSyncServicing 
         guard let cookbook = try await cookbookRef.getDocument().data(as: PersonalCookbookDoc?.self) else {
             throw PersonalCookbookSyncError.notFound
         }
-        let recipesSnapshot = try await cookbookRef.collection("recipes").getDocuments()
+        // firestore.rules' recipes/{recipeID} read rule checks
+        // resource.data.ownerUserID — Firestore only allows a list query
+        // against a rule like that if the query itself carries a matching
+        // filter (it validates the query's shape, not each document's
+        // actual data), so an unfiltered getDocuments() here is rejected
+        // outright with "Missing or insufficient permissions" even though
+        // every real document in the subcollection would individually
+        // pass the rule.
+        let recipesSnapshot = try await cookbookRef.collection("recipes")
+            .whereField("ownerUserID", isEqualTo: ownerUserID)
+            .getDocuments()
         let recipes = try recipesSnapshot.documents.map { try $0.data(as: PersonalCookbookRecipeDoc.self) }
         return (cookbook, recipes)
+    }
+
+    func delete(cookbookID: UUID, ownerUserID: String) async throws {
+        let cookbookRef = db.collection("personalCookbooks").document(cookbookID.uuidString)
+        // Firestore doesn't cascade-delete subcollections when a parent
+        // doc is deleted — the recipe subdocs need deleting explicitly,
+        // in the same batch so a partial failure can't leave recipe
+        // subdocs orphaned under a now-gone cookbook doc.
+        let recipesSnapshot = try await cookbookRef.collection("recipes")
+            .whereField("ownerUserID", isEqualTo: ownerUserID)
+            .getDocuments()
+        let batch = db.batch()
+        for document in recipesSnapshot.documents {
+            batch.deleteDocument(document.reference)
+        }
+        batch.deleteDocument(cookbookRef)
+        try await batch.commit()
     }
 }

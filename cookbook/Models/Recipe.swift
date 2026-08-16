@@ -23,12 +23,13 @@ final class Recipe {
     /// offers to change it.
     var ownerID: String
 
-    /// Which Cookbook this recipe belongs to. Optional at the type level
-    /// (SwiftData lightweight migration needs new fields to default
-    /// safely) but should never be nil in practice once CookbookMigrator
-    /// has run at launch — a plain scalar reference, not a @Relationship,
-    /// matching how ownerID/lineage fields already reference other
-    /// entities without cascade-delete coupling.
+    /// Which Cookbook this recipe belongs to — nil for a brand-new
+    /// account with no cookbook yet (see the Home dashboard's "Getting
+    /// Started" card); CreateEditRecipeView's save-time guard prevents
+    /// ever creating a recipe with this left nil. A plain scalar
+    /// reference, not a @Relationship, matching how ownerID/lineage
+    /// fields already reference other entities without cascade-delete
+    /// coupling.
     var cookbookID: UUID?
     /// Which chapter within that Cookbook, if any — nil means unfiled.
     var sectionID: UUID?

@@ -18,7 +18,7 @@ struct IngredientQuickView: View {
         NavigationStack {
             List {
                 Section {
-                    Stepper(value: $servingMultiplier, in: 0.25...4, step: 0.25) {
+                    PotluckStepper(value: $servingMultiplier, range: 0.25...4, step: 0.25) {
                         Text("Scale: \(servingMultiplier.formatted(.number.precision(.fractionLength(0...2))))×")
                     }
                     if servingMultiplier != 1 {
@@ -42,7 +42,7 @@ struct IngredientQuickView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Ingredients")
             .toolbar {
@@ -144,12 +144,17 @@ struct IngredientQuickView: View {
         }
     }
 
+    /// Snaps the scaled amount to the nearest eighth/third and renders it
+    /// as a fraction ("1 2/3"), never a decimal ("1.67") — the same
+    /// wheel-quantity vocabulary amounts are entered in, so scaling a
+    /// recipe never shows a precision it was never written to
+    /// (2026-08-15 feedback).
     private func scaledText(for ingredient: Ingredient) -> String {
         guard let value = ingredient.quantityValue, servingMultiplier != 1 else {
             return ingredient.displayText
         }
         let scaled = value * servingMultiplier
-        let formattedValue = scaled.formatted(.number.precision(.fractionLength(0...2)))
+        let formattedValue = WheelQuantity.nearest(to: scaled).displayText
         let unit = ingredient.unit.map { " \($0)" } ?? ""
         return "\(formattedValue)\(unit) \(ingredient.name)"
     }

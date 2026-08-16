@@ -79,7 +79,7 @@ struct MessagesView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Messages")
             .task(id: accountState.currentUserID) {

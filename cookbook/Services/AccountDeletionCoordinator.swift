@@ -28,7 +28,9 @@ enum AccountDeletionCoordinator {
         groupsService: GroupsServicing,
         entitlementService: EntitlementServicing,
         userProfileService: UserProfileServicing,
-        publicationsService: PublicationsServicing = InMemoryPublicationsService()
+        publicationsService: PublicationsServicing = InMemoryPublicationsService(),
+        personalCookbookSyncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService(),
+        personalCookbookPhotoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
     ) async throws {
         let memberships = try await groupsService.fetchMemberships(forUser: userID).filter { $0.status == .active }
 
@@ -73,6 +75,23 @@ enum AccountDeletionCoordinator {
             // active member, leaveGroup deletes the whole group rather than
             // just marking this membership left.
             try? await groupsService.leaveGroup(groupID: membership.groupID, userID: userID)
+        }
+
+        // Best-effort, before deleteLocalData below clears the SwiftData
+        // records this needs (cookbook.id/storageMode) — a cloud-synced
+        // cookbook's Firestore doc and every photo it uploaded to Storage
+        // would otherwise sit there forever, orphaned, after the account
+        // that owned them is gone. Same non-fatal precedent as the
+        // entitlement/profile cleanup below: a network hiccup here
+        // shouldn't block the deletion the user actually asked for.
+        let cloudSyncedCookbooks = (try? modelContext.fetch(
+            FetchDescriptor<Cookbook>(predicate: #Predicate<Cookbook> { $0.ownerID == userID })
+        ))?.filter { $0.storageMode == .cloudSynced } ?? []
+        for cookbook in cloudSyncedCookbooks {
+            await PersonalCookbookSyncCoordinator.deleteFromCloud(
+                cookbookID: cookbook.id, ownerUserID: userID,
+                syncService: personalCookbookSyncService, photoUploadService: personalCookbookPhotoUploadService
+            )
         }
 
         try deleteLocalData(ownerID: userID, in: modelContext)

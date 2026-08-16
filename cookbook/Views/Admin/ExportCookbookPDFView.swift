@@ -13,6 +13,11 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+// FileDocument (and therefore .fileExporter) is unavailable on tvOS — no
+// user-facing document/file system there — so this whole screen's real
+// implementation is iOS/macOS-only; tvOS gets a minimal stub below with
+// the same name/init so AdministratorView's call site never has to know.
+#if os(iOS) || os(macOS)
 struct ExportCookbookPDFView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AccountState.self) private var accountState
@@ -24,6 +29,7 @@ struct ExportCookbookPDFView: View {
     @State private var pdfDocument: PDFFileDocument?
     @State private var isPresentingExporter = false
     @State private var exportErrorMessage: String?
+    @State private var isPresentingExportSuccess = false
 
     private var ownedCookbooks: [Cookbook] {
         allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
@@ -81,7 +87,7 @@ struct ExportCookbookPDFView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Export Cookbook to PDF")
             #if os(iOS)
@@ -100,6 +106,11 @@ struct ExportCookbookPDFView: View {
             } message: {
                 Text(exportErrorMessage ?? "")
             }
+            .alert("Export Complete", isPresented: $isPresentingExportSuccess) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("\(exportFilename) was saved. You may close this window now.")
+            }
         }
         .fileExporter(
             isPresented: $isPresentingExporter,
@@ -107,7 +118,10 @@ struct ExportCookbookPDFView: View {
             contentType: .pdf,
             defaultFilename: exportFilename
         ) { result in
-            if case .failure(let error) = result {
+            switch result {
+            case .success:
+                isPresentingExportSuccess = true
+            case .failure(let error):
                 exportErrorMessage = error.localizedDescription
             }
             pdfDocument = nil
@@ -160,3 +174,24 @@ private struct PDFFileDocument: FileDocument {
         .modelContainer(for: Recipe.self, inMemory: true)
         .environment(AccountState(authService: FakeAuthService()))
 }
+#else
+struct ExportCookbookPDFView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Not Available on tvOS",
+                systemImage: "tv.slash",
+                description: Text("Exporting a cookbook to PDF isn't supported on this device — use your iPhone, iPad, or Mac instead.")
+            )
+            .navigationTitle("Export Cookbook to PDF")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+#endif

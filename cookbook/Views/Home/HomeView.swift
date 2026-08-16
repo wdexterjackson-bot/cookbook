@@ -24,6 +24,7 @@
 
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct HomeView: View {
     @Environment(AccountState.self) private var accountState
@@ -34,9 +35,19 @@ struct HomeView: View {
     @Query(sort: \Recipe.updatedAt, order: .reverse) private var allRecipes: [Recipe]
     @Query(sort: \Cookbook.sortOrder) private var allCookbooks: [Cookbook]
     @Query private var allCartItems: [CartItem]
+    @Query private var allSections: [CookbookSection]
 
     @State private var adminPendingJoinRequests: [(request: JoinRequest, group: FamilyGroup)] = []
     @State private var pendingInvitations: [(invitation: Invitation, group: FamilyGroup)] = []
+    /// "Decline" on an invitation card only enters this local soft state
+    /// (Join/Decline disabled, Reconsider/Delete shown) — see
+    /// InvitationCardState's header for why the real backend decline is
+    /// deferred to Delete instead of firing here.
+    @State private var softDeclinedInvitationIDs: Set<String> = []
+    /// Permanently hidden — "mfb" for the placeholder, or a real
+    /// Invitation's id once Delete has committed its backend decline.
+    @State private var deletedInvitationIDs: Set<String> = []
+    @State private var invitationActionErrorMessage: String?
     @State private var joinedGroups: [(membership: Membership, group: FamilyGroup)] = []
     @State private var featuredGroups: [FamilyGroup] = []
     @State private var busyFeaturedGroupIDs: Set<String> = []
@@ -46,11 +57,38 @@ struct HomeView: View {
     @State private var isPresentingCart = false
     @State private var isPresentingClearCartConfirmation = false
     @State private var cartErrorMessage: String?
+    @State private var cloudSummaries: [PersonalCookbookSummary] = []
+    @State private var busyCloudCookbookID: UUID?
+    @State private var cloudSyncErrorMessage: String?
+    @State private var isPresentingNewCookbook = false
+    @State private var isPresentingNewRecipe = false
+    @State private var isPresentingRestoreImporter = false
+    @State private var isPresentingCloudRestore = false
+    @State private var isPresentingRestoreChoice = false
+    @State private var isPresentingCommunitySearch = false
+    @State private var isPresentingGettingStartedVideo = false
+
+    /// Synthetic id for the MFB placeholder — it has no real Invitation
+    /// record to key InvitationCardState off of.
+    private static let mfbInvitationID = "mfb"
+
+    /// Flip this to true once Community Cookbooks (join requests, real
+    /// invitations) actually launches. Until then Messages has nothing
+    /// real to ever mark "active" — the MFB placeholder never counts,
+    /// per hasActivePendingInvitation's own doc comment — so the
+    /// hasActivePendingInvitation-driven position (top when something
+    /// needs a decision, bottom otherwise) would always resolve to
+    /// "bottom." Messages stays pinned right under Getting Started
+    /// instead while that's true; once flipped, it reverts to the real
+    /// position logic below.
+    private let communityCookbooksAreLive = false
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
+    private let syncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService()
+    private let photoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
     @State private var gate = EntitlementGateCoordinator()
 
     private var ownedRecipes: [Recipe] {
@@ -66,7 +104,32 @@ struct HomeView: View {
     }
 
     private var attentionCount: Int {
-        adminPendingJoinRequests.count + pendingInvitations.count
+        adminPendingJoinRequests.count + activeInvitations.count
+    }
+
+    /// Real invitations not yet soft-declined or deleted.
+    private var activeInvitations: [(invitation: Invitation, group: FamilyGroup)] {
+        pendingInvitations.filter {
+            !softDeclinedInvitationIDs.contains($0.invitation.id) && !deletedInvitationIDs.contains($0.invitation.id)
+        }
+    }
+
+    /// The MFB placeholder is permanent (no delete/decline lifecycle —
+    /// see mfbInvitationPlaceholderCard), so Messages always has
+    /// something to show; this is kept as its own flag anyway so a
+    /// future "MFB actually launches" change has one obvious place to
+    /// update the always-true assumption.
+    private var hasAnyMessagesContent: Bool { true }
+
+    /// Drives Messages' position in the dashboard — normal (near the top)
+    /// while there's a *real* invitation actually awaiting a decision,
+    /// bottom of the page once every real invitation has been
+    /// soft-declined (or there are none). MFB never counts here — its
+    /// buttons are permanently disabled, so it never represents
+    /// something the user actually needs to act on. Join requests
+    /// awaiting admin review don't affect this either — only invitations do.
+    private var hasActivePendingInvitation: Bool {
+        !activeInvitations.isEmpty
     }
 
     private var favoriteRecipes: [Recipe] {
@@ -81,14 +144,18 @@ struct HomeView: View {
 
                     continueCookingCard
 
-                    // Always visible now, not just when there's something
-                    // pending — a standing MFB invitation placeholder lives
-                    // here too (see messagesStrip), so this is never truly
-                    // empty, but the section stays even once it is.
-                    messagesStrip
+                    gettingStartedCard
+
+                    if hasAnyMessagesContent && (!communityCookbooksAreLive || hasActivePendingInvitation) {
+                        messagesStrip
+                    }
 
                     if !ownedCookbooks.isEmpty || !joinedGroups.isEmpty {
                         yourCookbooksShelf
+                    }
+
+                    if !cloudSummaries.isEmpty {
+                        cloudSyncStrip
                     }
 
                     if !featuredGroups.isEmpty {
@@ -102,10 +169,14 @@ struct HomeView: View {
                     if !ownedRecipes.isEmpty {
                         recentlyAddedStrip
                     }
+
+                    if communityCookbooksAreLive && hasAnyMessagesContent && !hasActivePendingInvitation {
+                        messagesStrip
+                    }
                 }
                 .padding(.vertical)
             }
-            .background(Color.potluckCream)
+            .potluckHubBackground()
             .navigationTitle("")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -180,11 +251,22 @@ struct HomeView: View {
             } message: {
                 Text(cartErrorMessage ?? "")
             }
+            .alert("Couldn't Sync", isPresented: Binding(
+                get: { cloudSyncErrorMessage != nil },
+                set: { if !$0 { cloudSyncErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(cloudSyncErrorMessage ?? "")
+            }
             .task(id: accountState.currentUserID) {
+                loadInvitationCardState()
                 await loadGroupData()
+                await loadCloudSummaries()
             }
             .refreshable {
                 await loadGroupData()
+                await loadCloudSummaries()
             }
         }
         .entitlementGate(
@@ -322,6 +404,156 @@ struct HomeView: View {
         }
     }
 
+    // MARK: - Getting Started
+
+    /// A standing dashboard fixture (not a one-time onboarding sheet) —
+    /// stays visible even once the account has cookbooks, since its
+    /// first row keeps being useful ("Add a New Recipe") long after
+    /// "Create My First Cookbook" stops applying. Same dashed-border/
+    /// message-plus-button shape as the MFB card in Messages, coral
+    /// instead of sage so the two read as distinct sections at a glance —
+    /// not four giant colored bars, which read as alarms/errors rather
+    /// than an inviting list of things to try.
+    private var gettingStartedCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Getting Started", badge: nil)
+            VStack(alignment: .leading, spacing: 16) {
+                gettingStartedRow(
+                    message: ownedCookbooks.isEmpty
+                        ? "Start your very first cookbook, then add recipes to it."
+                        : "Add another recipe to one of your cookbooks.",
+                    buttonTitle: ownedCookbooks.isEmpty ? "Create My First Cookbook" : "Add a New Recipe"
+                ) {
+                    if let firstCookbook = ownedCookbooks.first {
+                        if activeCookbookState.activeCookbookID == nil {
+                            activeCookbookState.setActive(firstCookbook.id)
+                        }
+                        isPresentingNewRecipe = true
+                    } else {
+                        isPresentingNewCookbook = true
+                    }
+                }
+
+                gettingStartedRow(
+                    message: "Bring a cookbook back from a backup file or the cloud.",
+                    buttonTitle: "Restore a Cookbook"
+                ) {
+                    isPresentingRestoreChoice = true
+                }
+
+                gettingStartedRow(
+                    message: "Search for a public Family Cookbook and join it.",
+                    buttonTitle: "Connect to a Community Cookbook"
+                ) {
+                    isPresentingCommunitySearch = true
+                }
+
+                gettingStartedRow(
+                    message: "A quick walkthrough of the basics.",
+                    buttonTitle: "Watch a Getting Started Tutorial"
+                ) {
+                    isPresentingGettingStartedVideo = true
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
+                    .strokeBorder(Color.potluckTomato, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            }
+            .potluckCardShadow()
+            .padding(.horizontal)
+        }
+        .sheet(isPresented: $isPresentingNewCookbook) {
+            CookbookConfigurationView(mode: .create(ownerID: accountState.currentOwnerID))
+        }
+        .sheet(isPresented: $isPresentingNewRecipe) {
+            CreateEditRecipeView(mode: .create)
+        }
+        .sheet(isPresented: $isPresentingCloudRestore) {
+            RestoreFromCloudView { cookbookID in
+                activeCookbookState.setActive(cookbookID)
+            }
+        }
+        .sheet(isPresented: $isPresentingCommunitySearch) {
+            PublicGroupSearchView(groupsService: groupsService)
+        }
+        .fullScreenCover(isPresented: $isPresentingGettingStartedVideo) {
+            GettingStartedTutorialPlayerView()
+        }
+        // .fileImporter itself is unavailable on tvOS — no user-facing
+        // document/file system there — so "Restore from a Backup File"
+        // isn't offered on this platform; "From the Cloud" (Firestore) is
+        // unaffected and still works.
+        #if !os(tvOS)
+        .fileImporter(
+            isPresented: $isPresentingRestoreImporter,
+            allowedContentTypes: [.json]
+        ) { result in
+            switch result {
+            case .success(let url):
+                restoreFromBackupFile(url)
+            case .failure(let error):
+                cloudSyncErrorMessage = error.localizedDescription
+            }
+        }
+        #endif
+        .confirmationDialog("Restore from Where?", isPresented: $isPresentingRestoreChoice, titleVisibility: .visible) {
+            #if !os(tvOS)
+            Button("From a Backup File") { isPresentingRestoreImporter = true }
+            #endif
+            Button("From the Cloud") { isPresentingCloudRestore = true }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// A first cookbook being restored can never collide with an existing
+    /// one — Getting Started only offers this button while ownedCookbooks
+    /// is empty — so this skips CookbooksHubView's own overwrite-vs-add-new
+    /// confirmation entirely and always restores as new.
+    private func restoreFromBackupFile(_ url: URL) {
+        guard url.startAccessingSecurityScopedResource() else {
+            cloudSyncErrorMessage = "Couldn't access that file."
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        do {
+            let data = try Data(contentsOf: url)
+            let (cookbookID, _, _) = try CookbookBackupService.restore(data, ownerID: accountState.currentOwnerID, modelContext: modelContext)
+            if let cookbookID {
+                activeCookbookState.setActive(cookbookID)
+            }
+        } catch {
+            cloudSyncErrorMessage = error.localizedDescription
+        }
+    }
+
+    /// One row per Getting Started option — a short message plus a
+    /// normal (not full-width) button, the same "descriptive text next
+    /// to a modest action" shape the MFB/invitation cards already use,
+    /// rather than a solid block of color that reads as an alert.
+    private func gettingStartedRow(message: String, buttonTitle: String, isComingSoon: Bool = false, action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if isComingSoon {
+                messagesPillBadge("COMING SOON")
+            }
+            // Same font/weight/color as the Messages card's title text
+            // (invitationCard/mfbInvitationPlaceholderCard) — this used to
+            // be a lighter, dimmed style; matched up to Messages per
+            // 2026-08-15 feedback.
+            Text(message)
+                .font(.potluckSemiboldBody(15))
+                .foregroundStyle(Color.potluckDeepTeal)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(buttonTitle, action: action)
+                .buttonStyle(.borderedProminent)
+                .tint(Color.potluckDenimBlue)
+                .disabled(isComingSoon)
+        }
+    }
+
     // MARK: - Messages
 
     /// Always visible (unlike the shelves above it) — a standing MFB
@@ -331,15 +563,25 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Messages", badge: attentionCount)
 
-            // Every new user gets an MFB invitation by default — the real
-            // join-flow isn't wired up yet, so this is a placeholder
-            // acknowledging it's coming rather than a real Invitation
-            // record. Full-width like Shopping Cart (not part of the
-            // horizontal strip below), since it's a standing fixture, not
-            // one of a scrollable set of equal-weight items.
+            // Every new user gets an MFB invitation by default — entirely
+            // static/disabled, since the real join flow doesn't exist yet
+            // (no Join, no Decline, no reconsider/delete lifecycle — that
+            // lifecycle only makes sense once there's a real action
+            // behind at least one of the buttons). Full-width, not part
+            // of the horizontal strip below, since it's a standing
+            // fixture, not one of a scrollable set of equal-weight items.
             mfbInvitationPlaceholderCard
 
-            if !adminPendingJoinRequests.isEmpty || !pendingInvitations.isEmpty {
+            ForEach(activeCardInvitations, id: \.invitation.id) { entry in
+                invitationCard(
+                    id: entry.invitation.id,
+                    title: "You've been invited to \(entry.group.cookbookName)",
+                    onJoin: { Task { await respondToInvitation(entry.invitation, accept: true) } },
+                    invitation: entry.invitation
+                )
+            }
+
+            if !adminPendingJoinRequests.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         ForEach(adminPendingJoinRequests, id: \.request.id) { entry in
@@ -351,20 +593,26 @@ struct HomeView: View {
                                 isPresentingMessages = true
                             }
                         }
-                        ForEach(pendingInvitations, id: \.invitation.id) { entry in
-                            attentionCard(
-                                kind: "Invitation",
-                                title: "You've been invited to \(entry.group.cookbookName)",
-                                primaryTitle: "Review"
-                            ) {
-                                isPresentingMessages = true
-                            }
-                        }
                     }
                     .padding(.horizontal)
                 }
             }
         }
+        .alert("Couldn't Update Invitation", isPresented: Binding(
+            get: { invitationActionErrorMessage != nil },
+            set: { if !$0 { invitationActionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(invitationActionErrorMessage ?? "")
+        }
+    }
+
+    /// Real invitations not yet permanently deleted — soft-declined ones
+    /// still render (with Reconsider/Delete), only a real Delete removes
+    /// the card.
+    private var activeCardInvitations: [(invitation: Invitation, group: FamilyGroup)] {
+        pendingInvitations.filter { !deletedInvitationIDs.contains($0.invitation.id) }
     }
 
     private func attentionCard(kind: String, title: String, primaryTitle: String, action: @escaping () -> Void) -> some View {
@@ -385,15 +633,63 @@ struct HomeView: View {
         }
         .padding()
         .frame(width: 220, alignment: .leading)
-        .background(Color.white)
+        .background(Color.white.opacity(0.3))
         .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
         .potluckCardShadow()
+    }
+
+    /// Shared by the MFB placeholder and every real invitation. Pending:
+    /// Join (disabled for MFB, since the real join flow doesn't exist
+    /// yet) + Decline, which only enters the soft-declined state below —
+    /// no backend call for a real invitation happens until Delete.
+    /// Soft-declined: both disabled, replaced by Reconsider (undoes the
+    /// soft state, no backend involvement) + Delete (commits the real
+    /// decline for a real invitation, then permanently hides the card).
+    private func invitationCard(id: String, title: String, onJoin: (() -> Void)?, invitation: Invitation?) -> some View {
+        let isSoftDeclined = softDeclinedInvitationIDs.contains(id)
+        return VStack(alignment: .leading, spacing: 10) {
+            messagesPillBadge("INVITATION")
+            Text(title)
+                .font(.potluckSemiboldBody(15))
+                .foregroundStyle(Color.potluckDeepTeal)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if isSoftDeclined {
+                HStack {
+                    Button("Reconsider") {
+                        reconsiderInvitation(id)
+                    }
+                    Button("Delete", role: .destructive) {
+                        Task { await deleteInvitation(id: id, invitation: invitation) }
+                    }
+                }
+            } else {
+                HStack {
+                    Button("Join") { onJoin?() }
+                        .disabled(onJoin == nil)
+                    Button("Decline", role: .destructive) {
+                        declineInvitation(id)
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+        .potluckCardShadow()
+        .padding(.horizontal)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isSoftDeclined ? "\(title). Declined. Reconsider or delete." : title)
     }
 
     /// Buttons are disabled (not omitted) and the card gets a dashed green
     /// border — both read as "placeholder, not yet active" on their own —
     /// since the real MFB join flow doesn't exist yet (no seeded MFB
-    /// group, no auto-invitation system).
+    /// group, no auto-invitation system). Unlike a real invitation, there
+    /// is no reconsider/delete lifecycle here — nothing behind either
+    /// button is real yet, so there's nothing for that state machine to
+    /// attach to.
     private var mfbInvitationPlaceholderCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
@@ -414,7 +710,7 @@ struct HomeView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(Color.white.opacity(0.3))
         .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
         .overlay {
             RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
@@ -424,6 +720,55 @@ struct HomeView: View {
         .padding(.horizontal)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Invitation, coming soon. Join the Memphis Family Barrentine shared recipe and cookbook for free with over 600 southern classics. Join and Decline are not yet available.")
+    }
+
+    private func loadInvitationCardState() {
+        let ownerID = accountState.currentOwnerID
+        softDeclinedInvitationIDs = InvitationCardState.softDeclinedIDs(ownerID: ownerID)
+        deletedInvitationIDs = InvitationCardState.deletedIDs(ownerID: ownerID)
+    }
+
+    private func declineInvitation(_ id: String) {
+        let ownerID = accountState.currentOwnerID
+        InvitationCardState.setSoftDeclined(id, ownerID: ownerID)
+        softDeclinedInvitationIDs.insert(id)
+    }
+
+    private func reconsiderInvitation(_ id: String) {
+        let ownerID = accountState.currentOwnerID
+        InvitationCardState.clearSoftDeclined(id, ownerID: ownerID)
+        softDeclinedInvitationIDs.remove(id)
+    }
+
+    /// For a real invitation, this is the moment the backend actually
+    /// learns about the decline — if that call fails, the card is left
+    /// exactly as it was (still soft-declined) rather than being hidden
+    /// on a decline that never actually went through.
+    private func deleteInvitation(id: String, invitation: Invitation?) async {
+        let ownerID = accountState.currentOwnerID
+        if let invitation, let userID = accountState.currentUserID {
+            do {
+                try await groupsService.respondToInvitation(invitation.id, accept: false, respondingUserID: userID)
+            } catch {
+                invitationActionErrorMessage = error.localizedDescription
+                return
+            }
+            pendingInvitations.removeAll { $0.invitation.id == id }
+        }
+        InvitationCardState.setDeleted(id, ownerID: ownerID)
+        deletedInvitationIDs.insert(id)
+        softDeclinedInvitationIDs.remove(id)
+    }
+
+    private func respondToInvitation(_ invitation: Invitation, accept: Bool) async {
+        guard let userID = accountState.currentUserID else { return }
+        do {
+            try await groupsService.respondToInvitation(invitation.id, accept: accept, respondingUserID: userID)
+            pendingInvitations.removeAll { $0.invitation.id == invitation.id }
+            await loadGroupData()
+        } catch {
+            invitationActionErrorMessage = error.localizedDescription
+        }
     }
 
     private func messagesPillBadge(_ text: String) -> some View {
@@ -439,7 +784,7 @@ struct HomeView: View {
 
     private var yourCookbooksShelf: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Your cookbooks", badge: nil)
+            sectionHeader("Your Cookbooks", badge: nil)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -478,6 +823,148 @@ struct HomeView: View {
         }
     }
 
+    // MARK: - Cloud Sync
+
+    /// One card per cookbook this account has ever synced to the cloud
+    /// (FirestorePersonalCookbookSyncService.fetchSyncedCookbooks), not
+    /// just ones already on this device — the whole point is surfacing a
+    /// cookbook that was synced from another device but never pulled down
+    /// here, which RootTabView's one-shot "Cookbooks Available" alert used
+    /// to be the only way to discover (and only once, ever, per cookbook
+    /// id — see DismissedCloudCookbookPrompts). This stays visible and
+    /// re-checks every launch/pull-to-refresh instead.
+    private var cloudSyncStrip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Cloud Sync", badge: nil)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(cloudSummaries) { summary in
+                        cloudSyncCard(summary)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    /// Shares its cover (image/style/color, via ownedCookbookCoverImage)
+    /// with the identical cookbook's card in yourCookbooksShelf once it's
+    /// loaded locally — a plain white card here read as "a second,
+    /// different cookbook" sitting right next to its own real cover in
+    /// Your Cookbooks, rather than the sync status of that same one.
+    private func cloudSyncCard(_ summary: PersonalCookbookSummary) -> some View {
+        let localCookbook = ownedCookbooks.first { $0.id == summary.id }
+        let isBusy = busyCloudCookbookID == summary.id
+
+        return VStack(alignment: .leading, spacing: 4) {
+            Spacer()
+            Text(localCookbook == nil ? "AVAILABLE IN THE CLOUD" : "SYNCED")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(0.85))
+            Text(summary.title)
+                .font(.potluckSemiboldBody(15))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+            if let localCookbook {
+                Text(lastSyncedCaption(for: localCookbook))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+            } else {
+                Text("Updated \(summary.updatedAt.formatted(.relative(presentation: .named)))")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+
+            if isBusy {
+                ProgressView()
+                    .tint(.white)
+            } else if let localCookbook {
+                Button("Sync Now") {
+                    Task { await syncNow(localCookbook) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.white)
+                .foregroundStyle(Color.potluckTomato)
+                .controlSize(.small)
+            } else {
+                Button("Load") {
+                    Task { await loadFromCloud(summary) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.white)
+                .foregroundStyle(Color.potluckTomato)
+                .controlSize(.small)
+            }
+        }
+        .padding()
+        .frame(width: 160, height: 160, alignment: .leading)
+        .background {
+            ZStack {
+                if let localCookbook {
+                    ownedCookbookCoverImage(localCookbook)
+                } else {
+                    Color.potluckDeepTeal
+                }
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.0),
+                        .init(color: .clear, location: 0.35),
+                        .init(color: .black.opacity(0.5), location: 1.0),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+        .potluckCardShadow()
+    }
+
+    private func lastSyncedCaption(for cookbook: Cookbook) -> String {
+        guard let lastSyncedAt = cookbook.lastSyncedAt else { return "Never synced" }
+        return "Synced \(lastSyncedAt.formatted(.relative(presentation: .named)))"
+    }
+
+    private func loadCloudSummaries() async {
+        guard let userID = accountState.currentUserID else {
+            cloudSummaries = []
+            return
+        }
+        cloudSummaries = (try? await syncService.fetchSyncedCookbooks(forUser: userID)) ?? []
+    }
+
+    private func loadFromCloud(_ summary: PersonalCookbookSummary) async {
+        guard let ownerUserID = accountState.currentUserID else { return }
+        busyCloudCookbookID = summary.id
+        defer { busyCloudCookbookID = nil }
+        do {
+            _ = try await PersonalCookbookSyncCoordinator.pull(
+                cookbookID: summary.id, ownerUserID: ownerUserID,
+                modelContext: modelContext, syncService: syncService
+            )
+        } catch {
+            cloudSyncErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func syncNow(_ cookbook: Cookbook) async {
+        guard let ownerUserID = accountState.currentUserID else { return }
+        busyCloudCookbookID = cookbook.id
+        defer { busyCloudCookbookID = nil }
+        let recipesInCookbook = ownedRecipes.filter { $0.cookbookID == cookbook.id }
+        do {
+            try await PersonalCookbookSyncCoordinator.push(
+                cookbook, recipes: recipesInCookbook, ownerUserID: ownerUserID,
+                syncService: syncService, photoUploadService: photoUploadService
+            )
+            try? modelContext.save()
+            await loadCloudSummaries()
+        } catch {
+            cloudSyncErrorMessage = error.localizedDescription
+        }
+    }
+
     // MARK: - Featured Cookbooks
 
     /// Public cookbooks the user hasn't joined that let anyone in
@@ -487,7 +974,7 @@ struct HomeView: View {
     /// grants membership right away since these opted into that.
     private var featuredCookbooksShelf: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Featured cookbooks", badge: nil)
+            sectionHeader("Featured Cookbooks", badge: nil)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -633,10 +1120,10 @@ struct HomeView: View {
 
     private var shoppingCartCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Shopping cart", badge: nil)
+            sectionHeader("Shopping Cart", badge: nil)
 
             if ownedCartItems.isEmpty {
-                emptyStateCard("Items you add to your shopping list will show here.")
+                emptyStateCard("Items you add to your shopping list will show here.", isTransparent: true)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(cartPreviewText)
@@ -659,7 +1146,7 @@ struct HomeView: View {
                 }
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white)
+                .background(Color.white.opacity(0.3))
                 .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
                 .potluckCardShadow()
                 .padding(.horizontal)
@@ -675,14 +1162,18 @@ struct HomeView: View {
 
     /// Shared by every section that's now always-visible instead of
     /// collapsing away when it has nothing to show — Favorite Dishes and
-    /// Shopping Cart both use this for their empty state.
-    private func emptyStateCard(_ message: String) -> some View {
+    /// Shopping Cart both use this for their empty state. isTransparent
+    /// only applies to Shopping Cart's call site (per 2026-08-15
+    /// feedback, matching the section-icon placeholder's own
+    /// transparency) — Favorite Dishes keeps its opaque card via the
+    /// default.
+    private func emptyStateCard(_ message: String, isTransparent: Bool = false) -> some View {
         Text(message)
             .font(.potluckBody(14))
             .foregroundStyle(.secondary)
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
+            .background(Color.white.opacity(isTransparent ? 0.3 : 1))
             .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
             .potluckCardShadow()
             .padding(.horizontal)
@@ -692,7 +1183,7 @@ struct HomeView: View {
 
     private var favoriteDishesStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Favorite dishes", badge: nil)
+            sectionHeader("Favorite Dishes", badge: nil)
 
             if favoriteRecipes.isEmpty {
                 emptyStateCard("Your favorite recipes will show here.")
@@ -725,7 +1216,7 @@ struct HomeView: View {
 
     private var recentlyAddedStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Recently added", badge: nil)
+            sectionHeader("Recently Added", badge: nil)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -788,21 +1279,40 @@ struct HomeView: View {
                 .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
                 .accessibilityHidden(true)
         } else {
-            recentlyAddedPlaceholder
+            recentlyAddedPlaceholder(recipe)
         }
         #else
-        recentlyAddedPlaceholder
+        recentlyAddedPlaceholder(recipe)
         #endif
     }
 
-    private var recentlyAddedPlaceholder: some View {
-        RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
-            .fill(Color.potluckSunflower.opacity(0.3))
-            .frame(width: 140, height: 100)
-            .overlay {
-                Image(systemName: "fork.knife")
-                    .foregroundStyle(Color.potluckTomato)
-            }
+    private func sectionIcon(for recipe: Recipe) -> CookbookSectionIcon? {
+        guard let sectionID = recipe.sectionID,
+              let section = allSections.first(where: { $0.id == sectionID }) else { return nil }
+        return CookbookSectionIconCatalog.icon(named: section.iconAssetName)
+    }
+
+    @ViewBuilder
+    private func recentlyAddedPlaceholder(_ recipe: Recipe) -> some View {
+        if let sectionIcon = sectionIcon(for: recipe) {
+            RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
+                .fill(Color.potluckSunflower.opacity(0.3))
+                .frame(width: 140, height: 100)
+                .overlay {
+                    Image(sectionIcon.assetName)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(16)
+                }
+        } else {
+            RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
+                .fill(Color.potluckSunflower.opacity(0.3))
+                .frame(width: 140, height: 100)
+                .overlay {
+                    Image(systemName: "fork.knife")
+                        .foregroundStyle(Color.potluckTomato)
+                }
+        }
     }
 
     // MARK: - Shared

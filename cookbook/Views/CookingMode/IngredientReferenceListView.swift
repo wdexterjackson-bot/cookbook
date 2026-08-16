@@ -37,13 +37,15 @@ struct IngredientReferenceListView: View {
     }
 
     /// Mirrors IngredientQuickView.scaledText(for:) — non-scalable lines
-    /// (no parsed quantityValue) are carried over exactly as written.
+    /// (no parsed quantityValue) are carried over exactly as written, and
+    /// a scalable one is always rendered as a fraction, never a decimal
+    /// (2026-08-15 feedback).
     private func scaledText(for ingredient: Ingredient) -> String {
         guard let value = ingredient.quantityValue, servingMultiplier != 1 else {
             return ingredient.displayText
         }
         let scaled = value * servingMultiplier
-        let formattedValue = scaled.formatted(.number.precision(.fractionLength(0...2)))
+        let formattedValue = WheelQuantity.nearest(to: scaled).displayText
         let unit = ingredient.unit.map { " \($0)" } ?? ""
         return "\(formattedValue)\(unit) \(ingredient.name)"
     }

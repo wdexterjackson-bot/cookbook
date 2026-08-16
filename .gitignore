@@ -12,6 +12,7 @@ cookbook/Secrets.plist
 
 # macOS
 .DS_Store
+._*
 
 # Firebase emulator (rules-tests)
 firestore-debug.log

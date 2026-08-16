@@ -30,4 +30,11 @@ protocol PersonalCookbookSyncServicing {
     /// Throws .notFound if no such cookbook doc exists (e.g. it was never
     /// pushed, or the id is wrong).
     func pull(cookbookID: UUID, ownerUserID: String) async throws -> (cookbook: PersonalCookbookDoc, recipes: [PersonalCookbookRecipeDoc])
+
+    /// Deletes the cookbook doc and every recipe subdoc beneath it.
+    /// Callers that also need the Storage photos cleaned up should use
+    /// PersonalCookbookSyncCoordinator.deleteFromCloud, which calls this
+    /// as its last step — this alone only removes the Firestore-side
+    /// data. A no-op (not an error) if the cookbook was never synced.
+    func delete(cookbookID: UUID, ownerUserID: String) async throws
 }

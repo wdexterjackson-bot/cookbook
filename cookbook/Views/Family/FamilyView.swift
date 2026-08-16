@@ -50,7 +50,7 @@ struct FamilyView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Family")
             .toolbar {

@@ -15,6 +15,12 @@ struct ParsedIngredientLine: Equatable {
     var name: String
     var quantity: Double?
     var unit: String?
+    /// The upper end of a range ("7 Bananas to 8 Bananas", "1/4 to 1/2
+    /// tsp") in the source's own written form — a fraction stays "1/2",
+    /// not 0.5, since `quantity`/`Double` can only ever hold one number
+    /// (the smaller side, for scaling) and this is purely for display.
+    /// nil for a plain, non-range amount.
+    var rangeUpperText: String? = nil
 }
 
 struct ParsedRecipeLines: Equatable {

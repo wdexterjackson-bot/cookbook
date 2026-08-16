@@ -15,10 +15,17 @@ final class CookbookSection {
     var id: UUID
     var title: String
     var sortOrder: Int
+    /// CookbookSectionIconCatalog.assetName — nil until either a default
+    /// match is assigned (CookbookConfigurationView, on adding a chapter
+    /// whose title matches a manifest category) or the user picks one
+    /// explicitly. Optional so existing chapters predating this field
+    /// decode/migrate fine with no icon shown.
+    var iconAssetName: String?
 
-    init(title: String, sortOrder: Int = 0) {
+    init(title: String, sortOrder: Int = 0, iconAssetName: String? = nil) {
         self.id = UUID()
         self.title = title
         self.sortOrder = sortOrder
+        self.iconAssetName = iconAssetName
     }
 }

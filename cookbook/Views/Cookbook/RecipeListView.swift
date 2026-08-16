@@ -6,6 +6,18 @@
 import SwiftUI
 import SwiftData
 
+private extension ToolbarItemPlacement {
+    /// .secondaryAction is unavailable on tvOS (no overflow-menu concept
+    /// there) — .automatic lets the system place these sensibly instead.
+    static var recipeListSecondaryAction: ToolbarItemPlacement {
+        #if os(tvOS)
+        .automatic
+        #else
+        .secondaryAction
+        #endif
+    }
+}
+
 /// `id` is a stable key (a section's own UUID, or a fixed sentinel for the
 /// synthetic "Other"/flat-list groups) — this used to be a plain tuple
 /// rendered via `ForEach(..., id: \.offset)`, which crashed when deleting a
@@ -142,89 +154,7 @@ struct RecipeListView: View {
         Group {
             VStack(spacing: 0) {
                 cookbookHeader
-
-                Group {
-                    if ownedRecipes.isEmpty {
-                        ContentUnavailableView(
-                            "No Recipes Yet",
-                            systemImage: "fork.knife",
-                            description: Text("Tap the + button to add your first recipe to \(activeCookbook?.title ?? "your cookbook").")
-                        )
-                    } else if filteredRecipes.isEmpty {
-                        ContentUnavailableView(
-                            "No Matching Recipes",
-                            systemImage: "magnifyingglass",
-                            description: Text("Try a different search term or clear your filters.")
-                        )
-                    } else {
-                        List {
-                            if criteria.hasActiveFilters {
-                                Section {
-                                    activeFilterChips
-                                }
-                                .listRowInsets(EdgeInsets())
-                            }
-                            ForEach(groupedBySection) { group in
-                                if let title = group.title {
-                                    // A cookbook with configured chapters shows
-                                    // each as a collapsed heading by default —
-                                    // tap to expand and see its recipes,
-                                    // rather than one long scroll of every
-                                    // chapter's recipes at once.
-                                    //
-                                    // Deliberately NOT SwiftUI's DisclosureGroup
-                                    // here — a DisclosureGroup placed directly
-                                    // in a List, with .swipeActions attached to
-                                    // it, leaks those swipe actions onto its
-                                    // expanded child rows too (observed
-                                    // 2026-08-09: swiping a recipe row showed
-                                    // the chapter's own Edit/Delete alongside
-                                    // the recipe's own Delete). A plain header
-                                    // row plus a conditionally-shown ForEach,
-                                    // both direct children of the Section, has
-                                    // no such ambiguity — the header's
-                                    // .swipeActions can only ever apply to the
-                                    // header's own row.
-                                    Section {
-                                        chapterHeaderRow(group: group, title: title)
-                                            .swipeActions {
-                                                // Only a real chapter (not the
-                                                // synthetic "Other" group) can
-                                                // be edited/deleted.
-                                                if let section = group.section {
-                                                    Button("Delete", role: .destructive) {
-                                                        sectionPendingDeletion = section
-                                                    }
-                                                    Button("Edit") {
-                                                        editedSectionTitle = section.title
-                                                        sectionPendingEdit = section
-                                                    }
-                                                    .tint(.blue)
-                                                }
-                                            }
-                                        if expandedChapterKeys.contains(group.section?.id.uuidString ?? title) {
-                                            recipeRows(group.recipes)
-                                        }
-                                    }
-                                } else {
-                                    // No chapters configured — today's flat
-                                    // list, unchanged.
-                                    Section {
-                                        recipeRows(group.recipes)
-                                    }
-                                }
-                            }
-                        }
-                        // Chapters are shown as separate List Sections (so
-                        // each gets its own DisclosureGroup), which by
-                        // default puts a noticeable gap between them —
-                        // cut down to a fraction of that so the chapter
-                        // list itself reads as compact, not spaced out.
-                        .listSectionSpacing(2)
-                    }
-                }
-                .scrollContentBackground(.hidden)
-                .background(Color.potluckCream)
+                recipeListOrEmptyState
             }
             .background(Color.potluckCream)
             .searchable(text: $criteria.searchText, prompt: "Search recipes, ingredients, tags")
@@ -232,54 +162,7 @@ struct RecipeListView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        isPresentingCreateRecipe = true
-                    } label: {
-                        Label("Add Recipe", systemImage: "plus")
-                    }
-                    .accessibilityLabel("Add Recipe")
-                }
-                ToolbarItem(placement: .secondaryAction) {
-                    Button {
-                        isPresentingCookbookSwitcher = true
-                    } label: {
-                        Label("Cookbooks", systemImage: "books.vertical")
-                    }
-                    .accessibilityLabel("Switch or manage cookbooks")
-                }
-                ToolbarItem(placement: .secondaryAction) {
-                    Menu {
-                        Picker("Sort", selection: $criteria.sort) {
-                            ForEach(RecipeSortOption.allCases) { option in
-                                Text(option.label).tag(option)
-                            }
-                        }
-                        if let activeCookbook, !activeCookbook.sections.isEmpty {
-                            Toggle(isOn: $sortChaptersByRecipeCount) {
-                                Label("Sort Chapters by # of Recipes", systemImage: "number")
-                            }
-                        }
-                        Button {
-                            isPresentingFilters = true
-                        } label: {
-                            Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
-                        }
-                    } label: {
-                        Label("Sort & Filter", systemImage: "line.3.horizontal.decrease.circle")
-                    }
-                    .accessibilityLabel("Sort and filter recipes")
-                }
-                ToolbarItem(placement: .secondaryAction) {
-                    Button {
-                        isPresentingAccount = true
-                    } label: {
-                        Image(systemName: accountState.isSignedIn ? "person.crop.circle.fill" : "person.crop.circle")
-                    }
-                    .accessibilityLabel(accountState.isSignedIn ? "Account, signed in" : "Account, not signed in")
-                }
-            }
+            .toolbar { recipeListToolbar }
             .sheet(isPresented: $isPresentingCreateRecipe) {
                 CreateEditRecipeView(mode: .create)
             }
@@ -321,6 +204,86 @@ struct RecipeListView: View {
                 Text(deleteSectionConfirmationMessage)
             }
         }
+    }
+
+    /// Broken out of `body` — folded inline, this List/ForEach/Section
+    /// nest (each chapter a Section with a header row + conditionally
+    /// shown recipe rows) pushed the whole body expression over the
+    /// type-checker's budget on tvOS ("unable to type-check this
+    /// expression in reasonable time"), even though nothing here is
+    /// individually complex — isolating it in its own property keeps each
+    /// piece cheap to infer separately.
+    @ViewBuilder
+    private var recipeListOrEmptyState: some View {
+        Group {
+            if ownedRecipes.isEmpty {
+                ContentUnavailableView(
+                    "No Recipes Yet",
+                    systemImage: "fork.knife",
+                    description: Text("Tap the + button to add your first recipe to \(activeCookbook?.title ?? "your cookbook").")
+                )
+            } else if filteredRecipes.isEmpty {
+                ContentUnavailableView(
+                    "No Matching Recipes",
+                    systemImage: "magnifyingglass",
+                    description: Text("Try a different search term or clear your filters.")
+                )
+            } else {
+                List {
+                    if criteria.hasActiveFilters {
+                        Section {
+                            activeFilterChips
+                        }
+                        .listRowInsets(EdgeInsets())
+                    }
+                    ForEach(groupedBySection) { group in
+                        if let title = group.title {
+                            // A cookbook with configured chapters shows
+                            // each as a collapsed heading by default —
+                            // tap to expand and see its recipes,
+                            // rather than one long scroll of every
+                            // chapter's recipes at once.
+                            //
+                            // Deliberately NOT SwiftUI's DisclosureGroup
+                            // here — a DisclosureGroup placed directly
+                            // in a List, with .swipeActions attached to
+                            // it, leaks those swipe actions onto its
+                            // expanded child rows too (observed
+                            // 2026-08-09: swiping a recipe row showed
+                            // the chapter's own Edit/Delete alongside
+                            // the recipe's own Delete). A plain header
+                            // row plus a conditionally-shown ForEach,
+                            // both direct children of the Section, has
+                            // no such ambiguity — the header's
+                            // .swipeActions can only ever apply to the
+                            // header's own row.
+                            Section {
+                                chapterHeaderRowWithSwipeActions(group: group, title: title)
+                                if expandedChapterKeys.contains(group.section?.id.uuidString ?? title) {
+                                    recipeRows(group.recipes)
+                                }
+                            }
+                        } else {
+                            // No chapters configured — today's flat
+                            // list, unchanged.
+                            Section {
+                                recipeRows(group.recipes)
+                            }
+                        }
+                    }
+                }
+                // Chapters are shown as separate List Sections (so
+                // each gets its own DisclosureGroup), which by
+                // default puts a noticeable gap between them —
+                // cut down to a fraction of that so the chapter
+                // list itself reads as compact, not spaced out.
+                #if !os(tvOS)
+                .listSectionSpacing(2)
+                #endif
+            }
+        }
+        .potluckHiddenScrollBackground()
+        .background(Color.potluckCream)
     }
 
     @ViewBuilder
@@ -446,6 +409,61 @@ struct RecipeListView: View {
         try? modelContext.save()
     }
 
+    /// Broken out of `body` — folded inline, this toolbar's nested
+    /// Menu/Picker pushed the whole body expression over the
+    /// type-checker's budget on tvOS ("unable to type-check this
+    /// expression in reasonable time"), the same complexity-isolation
+    /// reasoning as chapterHeaderRowWithSwipeActions below.
+    @ToolbarContentBuilder
+    private var recipeListToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                isPresentingCreateRecipe = true
+            } label: {
+                Label("Add Recipe", systemImage: "plus")
+            }
+            .accessibilityLabel("Add Recipe")
+        }
+        ToolbarItem(placement: .recipeListSecondaryAction) {
+            Button {
+                isPresentingCookbookSwitcher = true
+            } label: {
+                Label("Cookbooks", systemImage: "books.vertical")
+            }
+            .accessibilityLabel("Switch or manage cookbooks")
+        }
+        ToolbarItem(placement: .recipeListSecondaryAction) {
+            Menu {
+                Picker("Sort", selection: $criteria.sort) {
+                    ForEach(RecipeSortOption.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                if let activeCookbook, !activeCookbook.sections.isEmpty {
+                    Toggle(isOn: $sortChaptersByRecipeCount) {
+                        Label("Sort Chapters by # of Recipes", systemImage: "number")
+                    }
+                }
+                Button {
+                    isPresentingFilters = true
+                } label: {
+                    Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
+                }
+            } label: {
+                Label("Sort & Filter", systemImage: "line.3.horizontal.decrease.circle")
+            }
+            .accessibilityLabel("Sort and filter recipes")
+        }
+        ToolbarItem(placement: .recipeListSecondaryAction) {
+            Button {
+                isPresentingAccount = true
+            } label: {
+                Image(systemName: accountState.isSignedIn ? "person.crop.circle.fill" : "person.crop.circle")
+            }
+            .accessibilityLabel(accountState.isSignedIn ? "Account, signed in" : "Account, not signed in")
+        }
+    }
+
     /// Manual stand-in for DisclosureGroup's header row — see the comment
     /// at this view's call site for why DisclosureGroup itself isn't used
     /// inside this List.
@@ -477,6 +495,35 @@ struct RecipeListView: View {
         .buttonStyle(.plain)
     }
 
+    /// Broken out from the chapter ForEach in `body` — folding this
+    /// #if/.swipeActions directly into that already-large expression
+    /// pushed the type-checker over budget ("unable to type-check this
+    /// expression in reasonable time"), even though nothing here is
+    /// individually complex; isolating it in its own function keeps each
+    /// piece cheap to infer separately.
+    @ViewBuilder
+    private func chapterHeaderRowWithSwipeActions(group: RecipeSectionGroup, title: String) -> some View {
+        chapterHeaderRow(group: group, title: title)
+            // swipeActions itself is unavailable on tvOS — chapter
+            // Edit/Delete isn't offered on this platform.
+            #if !os(tvOS)
+            .swipeActions {
+                // Only a real chapter (not the synthetic "Other" group)
+                // can be edited/deleted.
+                if let section = group.section {
+                    Button("Delete", role: .destructive) {
+                        sectionPendingDeletion = section
+                    }
+                    Button("Edit") {
+                        editedSectionTitle = section.title
+                        sectionPendingEdit = section
+                    }
+                    .tint(.blue)
+                }
+            }
+            #endif
+    }
+
     @ViewBuilder
     private func recipeRows(_ recipes: [Recipe]) -> some View {
         ForEach(recipes) { recipe in
@@ -485,11 +532,15 @@ struct RecipeListView: View {
             } label: {
                 RecipeRow(recipe: recipe)
             }
+            // swipeActions itself is unavailable on tvOS — recipe deletion
+            // from this list isn't offered on this platform.
+            #if !os(tvOS)
             .swipeActions {
                 Button("Delete", role: .destructive) {
                     deleteRecipe(recipe)
                 }
             }
+            #endif
         }
     }
 }
@@ -499,6 +550,22 @@ struct RecipeListView: View {
 /// as every other recipe list in the app.
 struct RecipeRow: View {
     let recipe: Recipe
+
+    /// Unscoped — every call site (RecipeListView, SearchHubView,
+    /// FavoriteRecipesView) shows recipes that can belong to different
+    /// cookbooks/chapters, and the section count here is small enough
+    /// that a predicate isn't worth the complexity of threading a
+    /// resolved icon through three different callers instead.
+    @Query private var allSections: [CookbookSection]
+
+    /// The chapter this recipe is filed under, if any and if it has an
+    /// icon assigned — used only as the placeholder when there's no real
+    /// hero photo; a recipe's own photo always wins, unchanged.
+    private var sectionIcon: CookbookSectionIcon? {
+        guard let sectionID = recipe.sectionID,
+              let section = allSections.first(where: { $0.id == sectionID }) else { return nil }
+        return CookbookSectionIconCatalog.icon(named: section.iconAssetName)
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -545,14 +612,28 @@ struct RecipeRow: View {
         #endif
     }
 
+    @ViewBuilder
     private var placeholderThumbnail: some View {
-        RoundedRectangle(cornerRadius: 10)
-            .fill(Color.accentColor.opacity(0.12))
-            .frame(width: 56, height: 56)
-            .overlay {
-                Image(systemName: "fork.knife")
-                    .foregroundStyle(Color.accentColor)
-            }
+        if let sectionIcon {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.accentColor.opacity(0.12))
+                .frame(width: 56, height: 56)
+                .overlay {
+                    Image(sectionIcon.assetName)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(8)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        } else {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.accentColor.opacity(0.12))
+                .frame(width: 56, height: 56)
+                .overlay {
+                    Image(systemName: "fork.knife")
+                        .foregroundStyle(Color.accentColor)
+                }
+        }
     }
 
     private var metadataRow: some View {

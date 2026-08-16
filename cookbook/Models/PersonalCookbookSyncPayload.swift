@@ -60,6 +60,7 @@ struct PersonalCookbookChapterDoc: Codable {
     var id: UUID
     var title: String
     var sortOrder: Int
+    var iconAssetName: String?
 }
 
 /// `personalCookbooks/{cookbookID}/recipes/{recipeID}` — one doc per

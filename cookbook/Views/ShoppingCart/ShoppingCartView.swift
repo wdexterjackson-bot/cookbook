@@ -82,7 +82,7 @@ struct ShoppingCartView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Shopping Cart")
             #if os(iOS)
@@ -183,11 +183,15 @@ private struct CartItemRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Remove \(item.displayText)")
         }
+        // Redundant with the trash Button above on tvOS, which has no swipe
+        // gesture anyway (swipeActions itself is unavailable there).
+        #if !os(tvOS)
         .swipeActions {
             Button("Delete", role: .destructive) {
                 remove()
             }
         }
+        #endif
         .alert("Couldn't Update Cart", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }

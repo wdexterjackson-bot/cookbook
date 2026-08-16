@@ -14,6 +14,7 @@
 //  sync needs stable ids and backup/restore doesn't.
 //
 
+import FirebaseStorage
 import Foundation
 import SwiftData
 
@@ -35,14 +36,21 @@ enum PersonalCookbookSyncCoordinator {
         if let filename = cookbook.coverImageFilename, let data = PhotoStore.data(for: filename) {
             // Best-effort, matching RecipePublishingCoordinator's own
             // reasoning: a cover-photo upload hiccup shouldn't block
-            // syncing the cookbook's actual content.
-            coverImageURL = try? await photoUploadService.upload(
-                imageData: data, ownerUserID: ownerUserID, fileKey: "cover_\(cookbook.id.uuidString)"
-            ).absoluteString
+            // syncing the cookbook's actual content — but it's logged
+            // (not just swallowed) so a persistent failure is diagnosable
+            // instead of just "the photo never shows up," same lesson as
+            // the credit-backfill silent-try? bug.
+            do {
+                coverImageURL = try await photoUploadService.upload(
+                    imageData: data, ownerUserID: ownerUserID, fileKey: "cover_\(cookbook.id.uuidString)"
+                ).absoluteString
+            } catch {
+                NSLog("[PersonalCookbookSync] cover image upload failed: \(error)")
+            }
         }
 
         let chapterDocs = cookbook.sections.map { section in
-            PersonalCookbookChapterDoc(id: section.id, title: section.title, sortOrder: section.sortOrder)
+            PersonalCookbookChapterDoc(id: section.id, title: section.title, sortOrder: section.sortOrder, iconAssetName: section.iconAssetName)
         }
         let cookbookDoc = PersonalCookbookDoc(
             id: cookbook.id,
@@ -77,17 +85,24 @@ enum PersonalCookbookSyncCoordinator {
     ) async throws -> PersonalCookbookRecipeDoc {
         var heroPhotoURL: String?
         if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename) {
-            heroPhotoURL = try? await photoUploadService.upload(
-                imageData: data, ownerUserID: ownerUserID, fileKey: recipe.id.uuidString
-            ).absoluteString
+            do {
+                heroPhotoURL = try await photoUploadService.upload(
+                    imageData: data, ownerUserID: ownerUserID, fileKey: recipe.id.uuidString
+                ).absoluteString
+            } catch {
+                NSLog("[PersonalCookbookSync] hero photo upload failed for recipe \(recipe.id): \(error)")
+            }
         }
         var galleryURLs: [String] = []
         for (index, filename) in recipe.galleryPhotoFilenames.enumerated() {
             guard let data = PhotoStore.data(for: filename) else { continue }
-            if let url = try? await photoUploadService.upload(
-                imageData: data, ownerUserID: ownerUserID, fileKey: "\(recipe.id.uuidString)_gallery\(index)"
-            ) {
+            do {
+                let url = try await photoUploadService.upload(
+                    imageData: data, ownerUserID: ownerUserID, fileKey: "\(recipe.id.uuidString)_gallery\(index)"
+                )
                 galleryURLs.append(url.absoluteString)
+            } catch {
+                NSLog("[PersonalCookbookSync] gallery photo upload failed for recipe \(recipe.id): \(error)")
             }
         }
 
@@ -178,8 +193,8 @@ enum PersonalCookbookSyncCoordinator {
         cookbook.isCloudSynced = true
         cookbook.lastSyncedAt = Date()
 
-        if let coverImageURLString = cookbookDoc.coverImageURL, let url = URL(string: coverImageURLString),
-           let (data, _) = try? await URLSession.shared.data(from: url) {
+        if let coverImageURLString = cookbookDoc.coverImageURL,
+           let data = await downloadImageData(from: coverImageURLString) {
             if let existingFilename = cookbook.coverImageFilename {
                 PhotoStore.delete(existingFilename)
             }
@@ -218,6 +233,7 @@ enum PersonalCookbookSyncCoordinator {
             }()
             section.title = chapterDoc.title
             section.sortOrder = chapterDoc.sortOrder
+            section.iconAssetName = chapterDoc.iconAssetName
             sections.append(section)
         }
         let keptChapterIDs = Set(chapterDocs.map(\.id))
@@ -267,8 +283,8 @@ enum PersonalCookbookSyncCoordinator {
         recipe.summary = doc.summary
         recipe.story = doc.story
 
-        if let heroURLString = doc.heroPhotoURL, let url = URL(string: heroURLString),
-           let (data, _) = try? await URLSession.shared.data(from: url) {
+        if let heroURLString = doc.heroPhotoURL,
+           let data = await downloadImageData(from: heroURLString) {
             if let existingFilename = recipe.heroPhotoFilename {
                 PhotoStore.delete(existingFilename)
             }
@@ -276,7 +292,7 @@ enum PersonalCookbookSyncCoordinator {
         }
         var galleryFilenames: [String] = []
         for urlString in doc.galleryPhotoURLs {
-            guard let url = URL(string: urlString), let (data, _) = try? await URLSession.shared.data(from: url) else { continue }
+            guard let data = await downloadImageData(from: urlString) else { continue }
             if let filename = try? PhotoStore.save(data) {
                 galleryFilenames.append(filename)
             }
@@ -352,5 +368,65 @@ enum PersonalCookbookSyncCoordinator {
         recipe.inspirationCredit = doc.inspirationCredit
         recipe.videoURLs = doc.videoURLs
         recipe.prepSummary = doc.prepSummary
+    }
+
+    /// storage.rules' personalCookbooks/{ownerUserID}/{fileName} read rule
+    /// requires request.auth != null — a plain URLSession GET on the
+    /// downloadURL string carries no Firebase credential at all (the
+    /// ?token= in that URL is just an anti-enumeration secret, not an
+    /// auth bypass), so it was being denied by Storage on every single
+    /// pull, silently, via this call's own try?. Going through the
+    /// FirebaseStorage SDK instead — reference(forURL:) on the same
+    /// downloadURL string — rides the app's already-signed-in session,
+    /// which the rule actually requires.
+    private static func downloadImageData(from urlString: String) async -> Data? {
+        do {
+            return try await Storage.storage().reference(forURL: urlString).data(maxSize: 25 * 1024 * 1024)
+        } catch {
+            NSLog("[PersonalCookbookSync] image download failed for \(urlString): \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - Delete
+
+    /// Removes this cookbook's cloud footprint entirely — every photo it
+    /// uploaded to Storage (cover, each recipe's hero, each gallery item —
+    /// re-derived from the same deterministic fileKey scheme push() uses
+    /// to upload them, since deleting doesn't need the actual bytes) plus
+    /// the Firestore doc/recipes subcollection. Used by
+    /// CookbookDeletionCoordinator (one cookbook) and
+    /// AccountDeletionCoordinator (every cloud-synced cookbook an account
+    /// owns) so neither leaves cloud photos/documents behind forever —
+    /// previously nothing called this at all.
+    ///
+    /// Best-effort and silent on a cookbook that was never actually
+    /// synced (pull() throwing .notFound here just means there's nothing
+    /// to clean up) — matches the non-fatal-photo-failure precedent used
+    /// throughout this file; callers don't need to check storageMode
+    /// first, though CookbookDeletionCoordinator does anyway to avoid an
+    /// always-doomed network round trip for a cookbook that was never
+    /// cloud-synced in the first place.
+    static func deleteFromCloud(
+        cookbookID: UUID,
+        ownerUserID: String,
+        syncService: PersonalCookbookSyncServicing,
+        photoUploadService: PersonalCookbookPhotoUploadServicing
+    ) async {
+        guard let (_, recipeDocs) = try? await syncService.pull(cookbookID: cookbookID, ownerUserID: ownerUserID) else { return }
+
+        try? await photoUploadService.delete(ownerUserID: ownerUserID, fileKey: "cover_\(cookbookID.uuidString)")
+        for recipeDoc in recipeDocs {
+            try? await photoUploadService.delete(ownerUserID: ownerUserID, fileKey: recipeDoc.id.uuidString)
+            for index in recipeDoc.galleryPhotoURLs.indices {
+                try? await photoUploadService.delete(ownerUserID: ownerUserID, fileKey: "\(recipeDoc.id.uuidString)_gallery\(index)")
+            }
+        }
+
+        do {
+            try await syncService.delete(cookbookID: cookbookID, ownerUserID: ownerUserID)
+        } catch {
+            NSLog("[PersonalCookbookSync] cloud cookbook doc delete failed for \(cookbookID): \(error)")
+        }
     }
 }

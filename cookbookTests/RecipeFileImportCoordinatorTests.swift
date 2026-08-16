@@ -66,6 +66,69 @@ struct RecipeFileImportCoordinatorTests {
         #expect(chunks.isEmpty)
     }
 
+    // MARK: - extractVideoURLs (VIDEOS section, pulled out before the AI ever sees the chunk)
+
+    @Test func extractsUpToThreeVideoURLsAndRemovesTheSectionFromTheRemainingText() {
+        let chunk = """
+        Name: Cornbread
+        Notes: Best served warm.
+
+        VIDEOS
+        https://youtube.com/watch?v=dQw4w9WgXcQ
+        https://youtu.be/dQw4w9WgXcQ
+
+        2 cups cornmeal
+        """
+
+        let (remaining, videoURLs) = RecipeFileImportCoordinator.extractVideoURLs(from: chunk)
+
+        #expect(videoURLs == ["https://youtube.com/watch?v=dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ"])
+        #expect(!remaining.contains("VIDEOS"))
+        #expect(!remaining.contains("youtube.com"))
+        #expect(remaining.contains("2 cups cornmeal"))
+        #expect(remaining.contains("Notes: Best served warm."))
+    }
+
+    @Test func stopsAtThreeVideoURLsEvenWhenMoreLinesFollow() {
+        let chunk = """
+        Name: Cornbread
+
+        VIDEOS
+        https://youtu.be/aaaaaaaaaaa
+        https://youtu.be/bbbbbbbbbbb
+        https://youtu.be/ccccccccccc
+        https://youtu.be/ddddddddddd
+        """
+
+        let (_, videoURLs) = RecipeFileImportCoordinator.extractVideoURLs(from: chunk)
+
+        #expect(videoURLs.count == 3)
+        #expect(!videoURLs.contains("https://youtu.be/ddddddddddd"))
+    }
+
+    @Test func skipsALineUnderVideosThatIsNotARealYouTubeLink() {
+        let chunk = """
+        Name: Cornbread
+
+        VIDEOS
+        not a link
+        https://youtu.be/aaaaaaaaaaa
+        """
+
+        let (_, videoURLs) = RecipeFileImportCoordinator.extractVideoURLs(from: chunk)
+
+        #expect(videoURLs == ["https://youtu.be/aaaaaaaaaaa"])
+    }
+
+    @Test func returnsNoVideoURLsAndTheOriginalTextWhenThereIsNoVideosSection() {
+        let chunk = "Name: Cornbread\n\n2 cups cornmeal"
+
+        let (remaining, videoURLs) = RecipeFileImportCoordinator.extractVideoURLs(from: chunk)
+
+        #expect(videoURLs.isEmpty)
+        #expect(remaining == chunk)
+    }
+
     // MARK: - parseRecipes (stage 1 — read-only)
 
     @Test func parsesMultipleRecipesIntoDraftsWithoutTouchingModelContext() async throws {
@@ -210,5 +273,21 @@ struct RecipeFileImportCoordinatorTests {
 
         let recipe = try #require(try context.fetch(FetchDescriptor<Recipe>()).first)
         #expect(recipe.authorLineage == "Cheryl Fox of Lithonia, GA")
+    }
+
+    @Test func commitPopulatesVideoURLsFromTheDraft() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
+        context.insert(cookbook)
+        try context.save()
+
+        let draft = DraftRecipe(
+            title: "Cornbread", chapterName: nil, notes: "", authorLineage: nil, ingredients: [], steps: [],
+            videoURLs: ["https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"]
+        )
+        _ = RecipeFileImportCoordinator.commit([draft], into: cookbook, ownerID: "alice", modelContext: context)
+
+        let recipe = try #require(try context.fetch(FetchDescriptor<Recipe>()).first)
+        #expect(recipe.videoURLs == ["https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"])
     }
 }

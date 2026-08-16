@@ -46,7 +46,7 @@ struct FavoriteRecipesView: View {
                         }
                     }
                 }
-                .scrollContentBackground(.hidden)
+                .potluckHiddenScrollBackground()
                 .background(Color.potluckCream)
             }
         }

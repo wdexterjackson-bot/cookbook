@@ -134,7 +134,7 @@ struct AccountView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Account")
             .toolbar {

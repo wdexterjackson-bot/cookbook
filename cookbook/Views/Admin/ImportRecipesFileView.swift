@@ -15,6 +15,13 @@ import UniformTypeIdentifiers
 import UIKit
 #endif
 
+// Bulk file import needs both .fileImporter (unavailable on tvOS) and
+// on-device AI parsing (FoundationModels, also unavailable on tvOS — see
+// FoundationModelsLineImportService) — there's no partial version of this
+// screen that would actually work there, so tvOS gets a stub below instead
+// of patching individual unavailable APIs into a flow that could never
+// complete anyway.
+#if os(iOS) || os(macOS)
 struct ImportRecipesFileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -84,7 +91,7 @@ struct ImportRecipesFileView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Import Recipes")
             #if os(iOS)
@@ -263,3 +270,24 @@ struct ImportRecipesFileView: View {
         .modelContainer(for: Recipe.self, inMemory: true)
         .environment(AccountState(authService: FakeAuthService()))
 }
+#else
+struct ImportRecipesFileView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Not Available on tvOS",
+                systemImage: "tv.slash",
+                description: Text("Importing recipes from a file isn't supported on this device — use your iPhone, iPad, or Mac instead.")
+            )
+            .navigationTitle("Import Recipes")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+#endif

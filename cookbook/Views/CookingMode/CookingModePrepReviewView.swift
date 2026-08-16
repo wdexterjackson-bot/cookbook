@@ -50,7 +50,7 @@ struct CookingModePrepReviewView: View {
                         Text("Ingredients")
                             .font(.title3.weight(.semibold))
                         Spacer()
-                        Stepper(value: $servingMultiplier, in: 0.25...4, step: 0.25) {
+                        PotluckStepper(value: $servingMultiplier, range: 0.25...4, step: 0.25) {
                             Text("Scale: \(servingMultiplier.formatted(.number.precision(.fractionLength(0...2))))×")
                                 .font(.subheadline)
                         }
@@ -132,12 +132,14 @@ struct CookingModePrepReviewView: View {
         return entries
     }
 
+    /// Fraction, never a decimal, same as IngredientQuickView/
+    /// IngredientReferenceListView's copies of this (2026-08-15 feedback).
     private func scaledText(for ingredient: Ingredient) -> String {
         guard let value = ingredient.quantityValue, servingMultiplier != 1 else {
             return ingredient.displayText
         }
         let scaled = value * servingMultiplier
-        let formattedValue = scaled.formatted(.number.precision(.fractionLength(0...2)))
+        let formattedValue = WheelQuantity.nearest(to: scaled).displayText
         let unit = ingredient.unit.map { " \($0)" } ?? ""
         return "\(formattedValue)\(unit) \(ingredient.name)"
     }

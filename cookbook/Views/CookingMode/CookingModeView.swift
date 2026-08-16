@@ -309,7 +309,7 @@ struct CookingModeView: View {
             .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
             .padding()
         }
-        .scrollContentBackground(.hidden)
+        .potluckHiddenScrollBackground()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Step \(index + 1) of \(flattenedSteps.count): \(step.text)")
     }
@@ -351,6 +351,7 @@ private struct CookingModeVideoSheet: View {
                     .padding(.horizontal)
                 }
 
+                #if os(iOS)
                 if let videoID = YouTubeURL.videoID(from: videoURLs[selectedIndex]) {
                     YouTubePlayerView(videoID: videoID)
                         .id(videoID)
@@ -365,6 +366,17 @@ private struct CookingModeVideoSheet: View {
                         description: Text("This link doesn't look like a valid YouTube video anymore.")
                     )
                 }
+                #else
+                // YouTubeiOSPlayerHelper (a WKWebView-based embed) is iOS-only
+                // — no tvOS build of the underlying package exists (see its
+                // Package.swift), so this platform gets a plain "open
+                // elsewhere" message instead of an embedded player.
+                ContentUnavailableView(
+                    "Video Not Available Here",
+                    systemImage: "tv.slash",
+                    description: Text("Watch this recipe's video on your iPhone or iPad — video playback isn't supported on this device.")
+                )
+                #endif
 
                 Spacer()
             }

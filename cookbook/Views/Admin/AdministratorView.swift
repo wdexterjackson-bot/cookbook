@@ -44,7 +44,7 @@ struct AdministratorView: View {
                     Label("Export Cookbook to PDF", systemImage: "doc.richtext")
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Administrator")
             #if os(iOS)

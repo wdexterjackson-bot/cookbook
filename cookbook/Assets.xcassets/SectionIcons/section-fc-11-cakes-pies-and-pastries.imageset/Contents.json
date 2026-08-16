@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "section-fc-11-cakes-pies-and-pastries.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -19,8 +19,8 @@
 
 import SwiftUI
 import SwiftData
-import PhotosUI
 #if os(iOS)
+import PhotosUI
 import UIKit
 #endif
 
@@ -161,15 +161,17 @@ private struct IngredientsListSection: View {
         }
     }
 
+    /// Quantity + unit lead, ingredient name trails — matches the order
+    /// every read-only rendering of an ingredient line already uses
+    /// (`composeDisplayText`/`RecipeFileImportCoordinator.displayText(for:)`
+    /// both put amount and unit first), so the editor no longer reads
+    /// backwards relative to how the line actually displays everywhere
+    /// else (2026-08-15 feedback).
     private func ingredientRow(_ row: Binding<DraftIngredientRow>) -> some View {
         HStack(spacing: 8) {
             CreateEditRecipeView.removeRowButton(accessibilityLabel: "Remove ingredient") {
                 ingredientRows.removeAll { $0.id == row.wrappedValue.id }
             }
-
-            TextField("Ingredient", text: row.name)
-                .focused($focusedIngredientRowID, equals: row.wrappedValue.id)
-                .accessibilityLabel("Ingredient name")
 
             Button {
                 // Resigning focus and presenting the sheet in the same
@@ -186,7 +188,7 @@ private struct IngredientsListSection: View {
             } label: {
                 Text(row.wrappedValue.quantity.displayText.isEmpty ? "Amount" : row.wrappedValue.quantity.displayText)
                     .foregroundStyle(row.wrappedValue.quantity.displayText.isEmpty ? .secondary : .primary)
-                    .frame(width: 64, alignment: .trailing)
+                    .frame(width: 64, alignment: .leading)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Amount")
@@ -206,6 +208,10 @@ private struct IngredientsListSection: View {
                 }
                 .accessibilityLabel("Choose a unit")
             }
+
+            TextField("Ingredient", text: row.name)
+                .focused($focusedIngredientRowID, equals: row.wrappedValue.id)
+                .accessibilityLabel("Ingredient name")
         }
         .padding(.vertical, 2)
     }
@@ -222,9 +228,17 @@ struct CreateEditRecipeView: View {
         case importing(DiscoveredRecipe)
     }
 
+    /// The canonical unit vocabulary — every value IngredientLineParser's
+    /// unitAliases table normalizes onto, so a recognized abbreviation
+    /// (however it was spelled in a source file) always lands on
+    /// something also offered here in the picker (2026-08-15 feedback).
     static let commonUnits = [
-        "cup", "tbsp", "tsp", "oz", "fl oz", "lb", "g", "kg", "ml", "L",
-        "pinch", "clove", "slice", "can", "package", "whole",
+        "cup", "tbsp", "tsp", "oz", "fl oz", "lb", "g", "mg", "kg", "mL", "liter", "gal",
+        "pinch", "dash", "drop", "handful",
+        "clove", "slice", "piece", "stick", "whole",
+        "bag", "bottle", "box", "bunch", "can", "carton", "container", "jar", "package",
+        "dozen", "pint", "qt",
+        "small", "medium", "large",
     ]
 
     let mode: Mode
@@ -279,7 +293,9 @@ struct CreateEditRecipeView: View {
     @State private var inspirationCreditStateCode = ""
     @State private var inspirationCreditCountry = ""
 
+    #if os(iOS)
     @State private var selectedPhotoItem: PhotosPickerItem?
+    #endif
     @State private var heroImageData: Data?
     @State private var removesExistingPhoto = false
 
@@ -330,7 +346,23 @@ struct CreateEditRecipeView: View {
             _tags = State(initialValue: [])
             _videoURLs = State(initialValue: [])
 
-            let ingredientDrafts = discovered.ingredients.map { DraftIngredientRow(name: $0.displayText) }
+            // A Discover result only ever hands over one raw string per
+            // ingredient (see DiscoveredIngredient.displayText) — never
+            // pre-split into quantity/unit/name the way this editor's
+            // fields expect. Parsing it here (rather than dumping the
+            // whole line into `name`, as this used to do) is what makes
+            // the amount wheel actually show the right value instead of
+            // staying at zero — see IngredientLineParser's header for why
+            // this is the same parser Standardize Recipes now reuses.
+            let ingredientDrafts = discovered.ingredients.map { discovered -> DraftIngredientRow in
+                let parsed = IngredientLineParser.parse(discovered.displayText, knownUnits: CreateEditRecipeView.commonUnits)
+                let name = parsed.rangeUpperText.map { "- \($0) \(parsed.name)" } ?? parsed.name
+                return DraftIngredientRow(
+                    name: name.trimmingCharacters(in: .whitespaces),
+                    quantity: .nearest(to: parsed.quantity),
+                    unit: parsed.unit ?? ""
+                )
+            }
             _ingredientRows = State(initialValue: ingredientDrafts.isEmpty ? [DraftIngredientRow()] : ingredientDrafts)
 
             let stepDrafts = discovered.steps.map { DraftStepRow(text: $0) }
@@ -418,7 +450,7 @@ struct CreateEditRecipeView: View {
                 }
             }
             .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .onChange(of: selectedCookbookID) { _, _ in
                 // A chapter picked under the old cookbook won't exist in
@@ -554,6 +586,12 @@ struct CreateEditRecipeView: View {
 
     private var importSection: some View {
         Section {
+            // lineImportService.isAvailable is always false on tvOS (see
+            // FoundationModelsLineImportService), so this branch is never
+            // dynamically reached there — but TextEditor below is
+            // unavailable on tvOS at compile time regardless of runtime
+            // reachability, so the whole section still needs the guard.
+            #if !os(tvOS)
             if lineImportService.isAvailable {
                 #if os(iOS)
                 HStack {
@@ -584,7 +622,7 @@ struct CreateEditRecipeView: View {
                         .frame(minHeight: 120)
                         .padding(6)
                         #if os(iOS)
-                        .scrollContentBackground(.hidden)
+                        .potluckHiddenScrollBackground()
                         #endif
                         .accessibilityLabel("Paste ingredients and steps to import")
                         .accessibilityIdentifier("importTextEditor")
@@ -624,6 +662,11 @@ struct CreateEditRecipeView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            #else
+            Text("On-device AI import needs Apple Intelligence enabled on this device.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            #endif
         } header: {
             Text("Import")
         } footer: {
@@ -975,6 +1018,17 @@ struct CreateEditRecipeView: View {
         guard hasIngredientContent || hasStepContent else {
             validationMessage = "Add at least one ingredient or instruction."
             return
+        }
+        // A brand-new account has no cookbook until the user creates or
+        // restores one (see the Getting Started dashboard card) — without
+        // this, a .create/.importing save with nowhere to file into
+        // still "succeeds" but the recipe is orphaned: cookbookID nil,
+        // permanently unreachable from any recipe list in the app.
+        if case .edit = mode {} else {
+            guard effectiveCookbookID != nil else {
+                validationMessage = "Create a cookbook first, then add this recipe to it."
+                return
+            }
         }
         validationMessage = nil
 

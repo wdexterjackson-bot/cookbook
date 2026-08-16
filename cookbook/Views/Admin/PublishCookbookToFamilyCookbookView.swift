@@ -50,7 +50,7 @@ struct PublishCookbookToFamilyCookbookView: View {
             Form {
                 if isComplete {
                     Section("Results") {
-                        Text("\(publishedCount) recipe\(publishedCount == 1 ? "" : "s") published.")
+                        Text("\(publishedCount) recipe\(publishedCount == 1 ? "" : "s") published. You may close this window now.")
                         if !failedTitles.isEmpty {
                             Text("\(failedTitles.count) couldn't be published:")
                                 .foregroundStyle(.secondary)
@@ -121,7 +121,7 @@ struct PublishCookbookToFamilyCookbookView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Publish a Cookbook")
             #if os(iOS)

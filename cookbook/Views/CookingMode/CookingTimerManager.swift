@@ -93,7 +93,10 @@ final class CookingTimerManager {
     /// entirely (there was previously no signal at all on completion).
     private func announceCompletion(of timer: CookingTimer) {
         AudioServicesPlaySystemSound(1005)
+        // No haptic engine exposed to UIKit on tvOS (Siri Remote or not).
+        #if os(iOS)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
         UIAccessibility.post(notification: .announcement, argument: "\(timer.name) timer is done")
     }
 }

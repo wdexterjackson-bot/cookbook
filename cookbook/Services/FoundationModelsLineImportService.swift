@@ -17,8 +17,17 @@
 //
 
 import Foundation
+// FoundationModels (Apple Intelligence) has no tvOS build at all — see
+// FoundationModelsPrepSummaryService's matching comment. isAvailable is
+// simply always false here, which the existing "AI recipe import isn't
+// available on this device" messaging (ImportRecipesFileView) and
+// IngredientLineParser fallback (CreateEditRecipeView's Discover import)
+// already cover with no call-site changes.
+#if os(iOS)
 import FoundationModels
+#endif
 
+#if os(iOS)
 final class FoundationModelsLineImportService: RecipeLineImportServicing {
     var isAvailable: Bool {
         SystemLanguageModel.default.isAvailable
@@ -54,11 +63,27 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
               label — never infer authorship from the recipe's content.
             - ingredients and steps: classify each remaining line as either
               an ingredient or an instruction step, preserving original
-              order within each list. For ingredients, separate the
-              quantity (a plain number — convert fractions like "1/2" to
-              0.5) and unit (e.g. cup, tbsp, oz, g) from the ingredient name
-              whenever possible; omit quantity or unit for a line that
-              doesn't clearly have one (e.g. "salt to taste").
+              order within each list. Ignore any leading bullet or list
+              marker on a line (•, -, *, a middle dot, etc.) — it is never
+              part of the quantity, even if it visually resembles a
+              decimal point sitting right against the number that follows
+              it.
+
+              For ingredients, separate the quantity (a plain number —
+              convert fractions like "1/2" to 0.5) and unit (e.g. cup,
+              tbsp, oz, g) from the ingredient name whenever possible; omit
+              quantity or unit for a line that doesn't clearly have one
+              (e.g. "salt to taste"). When an ingredient gives a range
+              instead of one amount ("1/4 to 1/2 tsp salt", "7 Bananas to 8
+              Bananas", "2-3 potatoes"), use the SMALLER amount as
+              quantity/unit, and set rangeUpperText to the larger amount's
+              number ONLY, written exactly as the source text wrote it
+              (fraction or whole number, never converted to a decimal) —
+              e.g. for "1/4 to 1/2 tsp salt": name "salt", quantity 0.25,
+              unit "tsp", rangeUpperText "1/2". For "7 Bananas to 8
+              Bananas": name "Bananas", quantity 7, unit omitted,
+              rangeUpperText "8". Leave rangeUpperText blank for a plain,
+              non-range amount.
             - notes: trailing commentary that isn't itself a cooking
               instruction — serving size, substitution tips, storage
               advice, etc. Look for a "Notes:" label first; otherwise, if
@@ -73,7 +98,7 @@ final class FoundationModelsLineImportService: RecipeLineImportServicing {
             let response = try await session.respond(to: trimmed, generating: GeneratedRecipeLines.self)
             let content = response.content
             let ingredients = content.ingredients.map {
-                ParsedIngredientLine(name: $0.name, quantity: $0.quantity, unit: $0.unit)
+                ParsedIngredientLine(name: $0.name, quantity: $0.quantity, unit: $0.unit, rangeUpperText: $0.rangeUpperText)
             }
             return ParsedRecipeLines(
                 title: Self.nonBlank(content.title),
@@ -117,6 +142,7 @@ private struct GeneratedRecipeLines {
         var name: String
         var quantity: Double?
         var unit: String?
+        var rangeUpperText: String?
     }
 
     var title: String?
@@ -126,3 +152,12 @@ private struct GeneratedRecipeLines {
     var steps: [String]
     var notes: String?
 }
+#else
+final class FoundationModelsLineImportService: RecipeLineImportServicing {
+    var isAvailable: Bool { false }
+
+    func parseLines(from text: String) async throws -> ParsedRecipeLines {
+        throw RecipeLineImportError.unavailable
+    }
+}
+#endif

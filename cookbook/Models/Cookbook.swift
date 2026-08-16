@@ -36,8 +36,8 @@ final class Cookbook {
     var updatedAt: Date
 
     /// True once the user has been through CookbookConfigurationView at
-    /// least once for this cookbook — distinguishes "freshly
-    /// auto-created by CookbookMigrator, never seen by the user" from
+    /// least once for this cookbook — distinguishes "created via Restore
+    /// from Cloud/Backup, never actually seen by the user" from
     /// "deliberately left at defaults," which is what the first-run
     /// welcome-sheet trigger (4E) checks.
     var hasBeenConfigured: Bool

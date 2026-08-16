@@ -114,7 +114,7 @@ struct PublicGroupSearchContent: View {
                 Text(errorMessage).foregroundStyle(.red)
             }
         }
-        .scrollContentBackground(.hidden)
+        .potluckHiddenScrollBackground()
         .background(Color.potluckCream)
         .task {
             await search()

@@ -27,6 +27,7 @@ struct DraftRecipe: Identifiable {
     var authorLineage: String?
     var ingredients: [ParsedIngredientLine]
     var steps: [String]
+    var videoURLs: [String] = []
 }
 
 struct RecipeFileImportPreview {
@@ -59,6 +60,51 @@ enum RecipeFileImportCoordinator {
             .filter { !$0.isEmpty }
     }
 
+    /// Matches CreateEditRecipeView.maxVideoURLs — kept as its own literal
+    /// rather than a cross-layer reference since this is a Services file
+    /// and that constant lives on a View.
+    private static let maxVideoURLs = 3
+
+    /// A "VIDEOS" section — its own line (case-insensitive, an optional
+    /// trailing colon), after Notes, with up to 3 URL lines following it,
+    /// one per line, ending at the next blank line or the end of the
+    /// chunk. Pulled out here, deterministically, before the chunk ever
+    /// reaches the AI parser — same reasoning as stripping bare
+    /// "Ingredients"/"Directions" headers in
+    /// FoundationModelsLineImportService: a URL is exact, copy-verbatim
+    /// data, not something to trust a language model to transcribe
+    /// without altering. A line that isn't a real YouTube link is dropped
+    /// rather than failing the whole recipe, same as an ingredient line
+    /// with no recognizable quantity is kept as-is instead of rejected.
+    static func extractVideoURLs(from chunk: String) -> (remainingText: String, videoURLs: [String]) {
+        let lines = chunk.components(separatedBy: .newlines)
+        guard let headerIndex = lines.firstIndex(where: isVideosHeader) else {
+            return (chunk, [])
+        }
+
+        var videoURLs: [String] = []
+        var consumedThrough = headerIndex
+        for index in (headerIndex + 1)..<lines.count {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { break }
+            consumedThrough = index
+            if videoURLs.count < maxVideoURLs, YouTubeURL.isValidYouTubeURL(trimmed) {
+                videoURLs.append(trimmed)
+            }
+        }
+
+        var remainingLines = lines
+        remainingLines.removeSubrange(headerIndex...consumedThrough)
+        let remainingText = remainingLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (remainingText, videoURLs)
+    }
+
+    private static func isVideosHeader(_ line: String) -> Bool {
+        var trimmed = line.trimmingCharacters(in: .whitespaces).lowercased()
+        if trimmed.hasSuffix(":") { trimmed.removeLast() }
+        return trimmed == "videos"
+    }
+
     /// Stage 1 — parse only. Read-only: no Cookbook, no ModelContext,
     /// nothing persisted. `defaultAuthorLineage` is resolved once for the
     /// whole file by the caller (before parsing starts); a chunk's own
@@ -81,8 +127,9 @@ enum RecipeFileImportCoordinator {
         await onChunkProgress(0, total)
 
         for (index, chunk) in chunks.enumerated() {
+            let (textForAI, videoURLs) = extractVideoURLs(from: chunk)
             do {
-                let parsed = try await lineImportService.parseLines(from: chunk)
+                let parsed = try await lineImportService.parseLines(from: textForAI)
                 if let title = parsed.title, !title.isEmpty {
                     preview.drafts.append(DraftRecipe(
                         title: title,
@@ -90,7 +137,8 @@ enum RecipeFileImportCoordinator {
                         notes: parsed.notes ?? "",
                         authorLineage: parsed.authorLineageText ?? defaultAuthorLineage,
                         ingredients: parsed.ingredients,
-                        steps: parsed.steps
+                        steps: parsed.steps,
+                        videoURLs: videoURLs
                     ))
                 } else {
                     preview.failedChunks.append(String(chunk.prefix(60)))
@@ -122,6 +170,7 @@ enum RecipeFileImportCoordinator {
             recipe.sectionID = resolveChapter(named: draft.chapterName, in: cookbook)?.id
             recipe.notes = draft.notes
             recipe.authorLineage = draft.authorLineage
+            recipe.videoURLs = draft.videoURLs
             recipe.ingredientSections = buildIngredientSection(from: draft.ingredients).map { [$0] } ?? []
             recipe.stepSections = buildStepSection(from: draft.steps).map { [$0] } ?? []
             modelContext.insert(recipe)
@@ -175,11 +224,19 @@ enum RecipeFileImportCoordinator {
     }
 
     /// Also used by the review screen so the preview shows ingredients
-    /// formatted exactly as they'll be saved.
+    /// formatted exactly as they'll be saved. A range ("7 - 8 Bananas",
+    /// "1/4 - 1/2 tsp Cinnamon") puts both numbers first, dash-joined,
+    /// then the (single, shared) unit, then the name — `quantity` itself
+    /// stays the smaller side, since that's what actually drives the
+    /// wheel picker/scaling.
     static func displayText(for ingredient: ParsedIngredientLine) -> String {
         var parts: [String] = []
         if let quantity = ingredient.quantity {
             parts.append(quantity.formatted(.number.precision(.fractionLength(0...2))))
+        }
+        if let rangeUpperText = ingredient.rangeUpperText, !rangeUpperText.isEmpty {
+            parts.append("-")
+            parts.append(rangeUpperText)
         }
         if let unit = ingredient.unit, !unit.isEmpty {
             parts.append(unit)

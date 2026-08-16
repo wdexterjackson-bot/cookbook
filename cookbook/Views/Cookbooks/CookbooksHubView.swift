@@ -32,8 +32,14 @@ struct CookbooksHubView: View {
 
     // MARK: - Backup / Restore
     @State private var cookbookPendingBackup: Cookbook?
+    // FileDocument (and therefore .fileExporter/CookbookBackupDocument) is
+    // unavailable on tvOS — no user-facing document/file system there. A
+    // local-file backup of a non-cloud-synced cookbook simply isn't
+    // offered on this platform; see beginBackup's tvOS branch below.
+    #if os(iOS) || os(macOS)
     @State private var backupDocument: CookbookBackupDocument?
     @State private var isPresentingBackupExporter = false
+    #endif
     @State private var isPresentingRestoreImporter = false
     @State private var backupErrorMessage: String?
     @State private var restoreErrorMessage: String?
@@ -103,6 +109,10 @@ struct CookbooksHubView: View {
                                 }
                             }
                         }
+                            // swipeActions itself is unavailable on tvOS —
+                            // Delete/Edit/Back Up for a cookbook aren't
+                            // offered on this platform.
+                            #if !os(tvOS)
                             .swipeActions {
                                 Button("Delete", role: .destructive) {
                                     cookbookPendingDeletion = cookbook
@@ -117,6 +127,7 @@ struct CookbooksHubView: View {
                                 .tint(.orange)
                                 .disabled(syncingCookbookID == cookbook.persistentModelID)
                             }
+                            #endif
                     }
                 }
 
@@ -137,8 +148,8 @@ struct CookbooksHubView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Color.potluckCream)
+            .potluckHiddenScrollBackground()
+            .potluckHubBackground()
             .navigationTitle("Cookbooks")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -153,11 +164,13 @@ struct CookbooksHubView: View {
                         } label: {
                             Label("New Family Cookbook", systemImage: "person.3")
                         }
+                        #if !os(tvOS)
                         Button {
                             isPresentingRestoreImporter = true
                         } label: {
                             Label("Restore from Backup", systemImage: "arrow.counterclockwise")
                         }
+                        #endif
                         Button {
                             isPresentingCloudRestore = true
                         } label: {
@@ -203,7 +216,7 @@ struct CookbooksHubView: View {
             ) {
                 if let cookbookPendingDeletion {
                     Button("Delete", role: .destructive) {
-                        delete(cookbookPendingDeletion)
+                        Task { await delete(cookbookPendingDeletion) }
                         self.cookbookPendingDeletion = nil
                     }
                 }
@@ -211,6 +224,7 @@ struct CookbooksHubView: View {
                     cookbookPendingDeletion = nil
                 }
             }
+            #if os(iOS) || os(macOS)
             .fileExporter(
                 isPresented: $isPresentingBackupExporter,
                 document: backupDocument,
@@ -223,6 +237,11 @@ struct CookbooksHubView: View {
                 backupDocument = nil
                 cookbookPendingBackup = nil
             }
+            #endif
+            // .fileImporter itself is unavailable on tvOS — "Restore from
+            // Backup" (a local JSON file) isn't offered on this platform;
+            // "Restore from Cloud" is unaffected.
+            #if !os(tvOS)
             .fileImporter(
                 isPresented: $isPresentingRestoreImporter,
                 allowedContentTypes: [.json]
@@ -234,6 +253,7 @@ struct CookbooksHubView: View {
                     restoreErrorMessage = error.localizedDescription
                 }
             }
+            #endif
             .confirmationDialog(
                 restoreChoiceDialogTitle,
                 isPresented: Binding(
@@ -318,7 +338,7 @@ struct CookbooksHubView: View {
     /// No fallback cookbook is required even when deleting the active (or
     /// only) one — CookbookMigrator recreates an empty "Personal Cookbook"
     /// next time one is needed, same as CookbooksListView's equivalent.
-    private func delete(_ cookbook: Cookbook) {
+    private func delete(_ cookbook: Cookbook) async {
         if activeCookbookState.activeCookbookID == cookbook.id {
             if let fallback = ownedCookbooks.first(where: { $0.id != cookbook.id }) {
                 activeCookbookState.setActive(fallback.id)
@@ -326,7 +346,7 @@ struct CookbooksHubView: View {
                 activeCookbookState.reset()
             }
         }
-        CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, in: modelContext)
+        await CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, ownerUserID: cookbook.ownerID, in: modelContext)
     }
 
     private func loadJoinedGroups() async {
@@ -362,6 +382,7 @@ struct CookbooksHubView: View {
         }
 
         guard cookbook.storageMode == .cloudSynced else {
+            #if os(iOS) || os(macOS)
             do {
                 let data = try CookbookBackupService.exportData(for: cookbook, recipes: recipesInCookbook)
                 cookbookPendingBackup = cookbook
@@ -370,6 +391,14 @@ struct CookbooksHubView: View {
             } catch {
                 backupErrorMessage = error.localizedDescription
             }
+            #else
+            // No local-file backup path on tvOS (FileDocument/.fileExporter
+            // aren't available there) — the swipe action itself is already
+            // hidden for a non-cloud-synced cookbook on this platform, so
+            // reaching here would only happen via a stale call path; still
+            // fails soft rather than silently doing nothing.
+            backupErrorMessage = "Local backup isn't available on tvOS. Turn on cloud sync for this cookbook, or back it up from your iPhone or iPad."
+            #endif
             return
         }
 
@@ -469,6 +498,7 @@ struct CookbooksHubView: View {
 /// through .fileImporter + CookbookBackupService.restore instead, since
 /// that side needs no document type, just the picked file's Data), but
 /// FileDocument requires read conformance too.
+#if os(iOS) || os(macOS)
 private struct CookbookBackupDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.json] }
 
@@ -489,6 +519,7 @@ private struct CookbookBackupDocument: FileDocument {
         FileWrapper(regularFileWithContents: data)
     }
 }
+#endif
 
 #Preview {
     CookbooksHubView()

@@ -142,7 +142,7 @@ enum CookbookBackupService {
 
         var sectionIDRemap: [UUID: UUID] = [:]
         cookbook.sections = archive.cookbook.chapters.map { chapterPayload in
-            let section = CookbookSection(title: chapterPayload.title, sortOrder: chapterPayload.sortOrder)
+            let section = CookbookSection(title: chapterPayload.title, sortOrder: chapterPayload.sortOrder, iconAssetName: chapterPayload.iconAssetName)
             sectionIDRemap[chapterPayload.id] = section.id
             return section
         }

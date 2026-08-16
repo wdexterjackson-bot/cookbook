@@ -155,25 +155,23 @@ struct RootTabView: View {
         }
     }
 
-    /// Ensures a Cookbook exists for whoever the current owner is (guest or
-    /// signed-in), and makes it active if nothing else is. Runs on every
-    /// launch and every owner change (sign-in/out), same as
-    /// RecipeOwnershipMigrator's idempotent-by-design shape.
-    ///
-    /// Used to also auto-present CookbookConfigurationView for a
-    /// freshly-created, never-configured cookbook (4E's first-run sheet) —
-    /// removed because this runs in a `.task`, which fires after the tab
-    /// view is already interactive, so it could pop up moments after the
-    /// user had already started navigating on their own (e.g. tapping into
-    /// Personal Cookbook), reading as a random interruption that "undid"
-    /// their tap. Configuring a cookbook is still reachable any time via
-    /// the Cookbooks switcher's swipe-to-Edit (CookbooksListView).
+    /// Activates the current owner's first Cookbook if one already exists
+    /// and nothing is active yet (e.g. right after sign-in, or cookbooks
+    /// restored/synced from another device) — deliberately does NOT
+    /// create one anymore. A brand-new account has zero cookbooks until
+    /// the user explicitly creates or restores one, via the Home
+    /// dashboard's "Getting Started" card; CreateEditRecipeView's own
+    /// save-time guard blocks adding a recipe with nowhere to file it.
     private func bootstrapActiveCookbook() {
+        guard activeCookbookState.activeCookbookID == nil else { return }
         let ownerID = accountState.currentOwnerID
+        let descriptor = FetchDescriptor<Cookbook>(
+            predicate: #Predicate<Cookbook> { $0.ownerID == ownerID },
+            sortBy: [SortDescriptor(\.sortOrder)]
+        )
         do {
-            let cookbook = try CookbookMigrator.ensureDefaultCookbookExists(in: modelContext, ownerID: ownerID)
-            if activeCookbookState.activeCookbookID == nil {
-                activeCookbookState.setActive(cookbook.id)
+            if let firstCookbook = try modelContext.fetch(descriptor).first {
+                activeCookbookState.setActive(firstCookbook.id)
             }
         } catch {
             bootstrapErrorMessage = error.localizedDescription

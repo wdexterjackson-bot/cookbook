@@ -113,6 +113,7 @@ struct SignInView: View {
                     Button(authIntent.rawValue) {
                         Task { await performEmailAuth(isSignUp: authIntent == .signUp) }
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(!canSubmit || isBusy)
                     .accessibilityIdentifier("signInSubmitButton")
                 }
@@ -150,7 +151,7 @@ struct SignInView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle(isDismissable ? "Sign In" : "Welcome")
             .toolbar {
@@ -176,13 +177,23 @@ struct SignInView: View {
         defer { isBusy = false }
         do {
             let result = isSignUp
-                ? try await accountState.signUp(email: email, password: password, displayName: fullName)
-                : try await accountState.signIn(email: email, password: password)
+                ? try await accountState.signUp(email: trimmedEmail, password: password, displayName: fullName)
+                : try await accountState.signIn(email: trimmedEmail, password: password)
             try PostSignInCoordinator.handle(result, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
-            errorMessage = await resolveErrorMessage(error, attemptedEmail: email, context: isSignUp ? .signUp : .signIn)
+            errorMessage = await resolveErrorMessage(error, attemptedEmail: trimmedEmail, context: isSignUp ? .signUp : .signIn)
         }
+    }
+
+    /// Untrimmed `email` is what canSubmit/the TextField binding use, but
+    /// the value actually sent to Firebase needs whitespace stripped —
+    /// autocomplete/autofill (e.g. the iOS QuickType/Passwords bar this
+    /// field triggers) can leave a trailing space that renders invisibly
+    /// but fails Firebase's own email-format check, same reasoning
+    /// firstName/lastName/fullName already apply below.
+    private var trimmedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var fullName: String {

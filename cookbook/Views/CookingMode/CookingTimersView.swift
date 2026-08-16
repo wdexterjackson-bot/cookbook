@@ -17,7 +17,9 @@ struct CookingTimersView: View {
                 Section("New Timer") {
                     if manager.canAddTimer {
                         TextField("Name (e.g. Rice)", text: $newTimerName)
-                        Stepper("Duration: \(newTimerMinutes) min", value: $newTimerMinutes, in: 1...180)
+                        PotluckStepper(value: $newTimerMinutes, range: 1...180, step: 1) {
+                            Text("Duration: \(newTimerMinutes) min")
+                        }
                         Button("Start Timer") {
                             manager.addTimer(name: newTimerName, totalSeconds: newTimerMinutes * 60)
                             newTimerName = ""

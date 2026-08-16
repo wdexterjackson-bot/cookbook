@@ -79,11 +79,13 @@ struct CookbookSectionBackup: Codable {
     var id: UUID
     var title: String
     var sortOrder: Int
+    var iconAssetName: String?
 
     init(section: CookbookSection) {
         id = section.id
         title = section.title
         sortOrder = section.sortOrder
+        iconAssetName = section.iconAssetName
     }
 }
 

@@ -17,6 +17,13 @@ Each recipe is parsed by the same on-device AI used for single-recipe paste-impo
 
   If a recipe has no `By:` line, it's credited to whoever is doing the import instead (your own name and location, if you've set them in Settings — otherwise you'll be asked once, before the whole file starts importing, whether to add your name or import everything as Anonymous).
 - **`Notes:`** — anything that isn't itself a cooking instruction: serving size, substitution ideas, storage tips, and so on. If you don't include this label, trailing commentary after the last real step is still usually recognized as notes rather than folded into the steps.
+- **`VIDEOS`** — up to 3 YouTube links for this recipe (playable from Cooking Mode), one per line, in order (first line becomes the first video, and so on). Goes in its own section, after `Notes:`. A line that isn't a real YouTube link is skipped rather than failing the whole recipe. This section is read exactly as written, not by the AI — unlike everything else in the file, so a URL is never altered in transcription.
+
+  ```
+  VIDEOS
+  https://youtube.com/watch?v=dQw4w9WgXcQ
+  https://youtu.be/dQw4w9WgXcQ
+  ```
 
 ## Ingredients and steps
 

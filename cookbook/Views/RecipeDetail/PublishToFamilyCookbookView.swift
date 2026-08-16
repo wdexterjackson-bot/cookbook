@@ -63,7 +63,7 @@ struct PublishToFamilyCookbookView: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Publish to a Family Cookbook")
             #if os(iOS)

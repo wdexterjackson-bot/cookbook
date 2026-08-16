@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "section-bw-35-cookies.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

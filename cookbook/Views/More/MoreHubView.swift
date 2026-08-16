@@ -31,6 +31,7 @@ struct MoreHubView: View {
     @State private var isPresentingAdministrator = false
     @State private var isPresentingCommunities = false
     @State private var isPresentingDiscover = false
+    @State private var isPresentingConversionTool = false
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
 
@@ -40,6 +41,7 @@ struct MoreHubView: View {
         MoreMenuItem(title: "Administrator", subtitle: "Bulk recipe import", systemImage: "wrench.and.screwdriver.fill", tint: .potluckSunflower),
         MoreMenuItem(title: "Discover New Cookbook Communities", subtitle: "Search & join public Family Cookbooks", systemImage: "person.3.fill", tint: .potluckTomato),
         MoreMenuItem(title: "Discover", subtitle: "Find recipes to import from the web", systemImage: "sparkle.magnifyingglass", tint: .potluckSage),
+        MoreMenuItem(title: "Conversion Tool", subtitle: "Convert cooking measurements", systemImage: "arrow.left.arrow.right.circle.fill", tint: .potluckSunflower),
     ]
 
     private let columns = [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
@@ -59,7 +61,7 @@ struct MoreHubView: View {
                 }
                 .padding()
             }
-            .background(Color.potluckCream)
+            .potluckHubBackground()
             .navigationTitle("More")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -80,6 +82,9 @@ struct MoreHubView: View {
         .sheet(isPresented: $isPresentingDiscover) {
             DiscoverView()
         }
+        .sheet(isPresented: $isPresentingConversionTool) {
+            ConversionToolView()
+        }
     }
 
     private func select(_ item: MoreMenuItem) {
@@ -89,6 +94,7 @@ struct MoreHubView: View {
         case "Administrator": isPresentingAdministrator = true
         case "Discover New Cookbook Communities": isPresentingCommunities = true
         case "Discover": isPresentingDiscover = true
+        case "Conversion Tool": isPresentingConversionTool = true
         default: break
         }
     }

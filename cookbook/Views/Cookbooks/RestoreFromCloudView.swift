@@ -70,7 +70,7 @@ struct RestoreFromCloudView: View {
                         }
                         .disabled(isPulling)
                     }
-                    .scrollContentBackground(.hidden)
+                    .potluckHiddenScrollBackground()
                 }
             }
             .background(Color.potluckCream)

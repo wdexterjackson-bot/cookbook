@@ -197,7 +197,11 @@ describe('entitlements', () => {
   // tier1ExpirationTimestamp()/tier2ExpirationTimestamp() in firestore.rules
   // and LaunchCreditPromo in EntitlementGranting.swift exactly).
   const PAST = Timestamp.fromDate(new Date('2020-01-01T00:00:00Z'));
-  const FUTURE_TIER1 = Timestamp.fromDate(new Date('2026-06-01T00:00:00Z'));
+  // Relative to "now" rather than a fixed date — a hardcoded near-term
+  // date silently becomes a PAST date (and starts failing this test) once
+  // real time catches up to it, which is exactly what happened to the
+  // fixed '2026-06-01' this replaced.
+  const FUTURE_TIER1 = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 90));
   const FUTURE_TIER2 = Timestamp.fromDate(new Date('2028-06-01T00:00:00Z'));
 
   it('allows spending a tier-2 credit that has not expired yet', async () => {

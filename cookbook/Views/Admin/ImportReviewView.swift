@@ -13,6 +13,11 @@
 import SwiftUI
 import SwiftData
 
+// Only ever reached from ImportRecipesFileView, which is itself iOS/macOS
+// -only (see its header comment) — DisclosureGroup below is unavailable on
+// tvOS anyway, so this whole file follows the same platform split rather
+// than needing its own tvOS stub (nothing on tvOS references this type).
+#if os(iOS) || os(macOS)
 struct ImportReviewView: View {
     let preview: RecipeFileImportPreview
     let cookbook: Cookbook
@@ -105,7 +110,7 @@ struct ImportReviewView: View {
                 }
             }
         }
-        .scrollContentBackground(.hidden)
+        .potluckHiddenScrollBackground()
         .background(Color.potluckCream)
     }
 
@@ -125,6 +130,9 @@ struct ImportReviewView: View {
         }
         parts.append("\(draft.ingredients.count) ingredient\(draft.ingredients.count == 1 ? "" : "s")")
         parts.append("\(draft.steps.count) step\(draft.steps.count == 1 ? "" : "s")")
+        if !draft.videoURLs.isEmpty {
+            parts.append("\(draft.videoURLs.count) video\(draft.videoURLs.count == 1 ? "" : "s")")
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -145,6 +153,9 @@ struct ImportReviewView: View {
                 )
             }
             labeledBlock("Notes", draft.notes.isEmpty ? "No notes." : draft.notes)
+            if !draft.videoURLs.isEmpty {
+                labeledBlock("Videos", draft.videoURLs.joined(separator: "\n"))
+            }
         }
         .font(.caption)
         .padding(.vertical, 4)
@@ -174,6 +185,8 @@ struct ImportReviewView: View {
                     .font(.largeTitle)
                     .foregroundStyle(.green)
                 Text("\(count) recipe\(count == 1 ? "" : "s") saved to \(cookbook.title).")
+                Text("You may close this window now.")
+                    .foregroundStyle(.secondary)
             case .failed(let message):
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.largeTitle)
@@ -235,3 +248,4 @@ struct ImportReviewView: View {
     )
     .modelContainer(for: Recipe.self, inMemory: true)
 }
+#endif

@@ -20,7 +20,7 @@ struct CookbookDeletionCoordinatorTests {
         return ModelContext(container)
     }
 
-    @Test func deletingACookbookDeletesItsRecipes() throws {
+    @Test func deletingACookbookDeletesItsRecipes() async throws {
         let context = try makeInMemoryContext()
         let cookbook = Cookbook(ownerID: "alice", title: "Weeknight Dinners", sortOrder: 0)
         let recipe = Recipe(ownerID: "alice", title: "Cornbread")
@@ -29,13 +29,13 @@ struct CookbookDeletionCoordinatorTests {
         context.insert(recipe)
         try context.save()
 
-        CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, in: context)
+        await CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, ownerUserID: "alice", in: context)
 
         #expect(try context.fetch(FetchDescriptor<Recipe>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<Cookbook>()).isEmpty)
     }
 
-    @Test func leavesOtherCookbooksRecipesUntouched() throws {
+    @Test func leavesOtherCookbooksRecipesUntouched() async throws {
         let context = try makeInMemoryContext()
         let toDelete = Cookbook(ownerID: "alice", title: "Weeknight Dinners", sortOrder: 0)
         let toKeep = Cookbook(ownerID: "alice", title: "Holiday Favorites", sortOrder: 1)
@@ -49,7 +49,7 @@ struct CookbookDeletionCoordinatorTests {
         context.insert(keptRecipe)
         try context.save()
 
-        CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(toDelete, in: context)
+        await CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(toDelete, ownerUserID: "alice", in: context)
 
         let remainingRecipes = try context.fetch(FetchDescriptor<Recipe>())
         #expect(remainingRecipes.map(\.title) == ["Pumpkin Pie"])
@@ -57,13 +57,13 @@ struct CookbookDeletionCoordinatorTests {
         #expect(remainingCookbooks.map(\.title) == ["Holiday Favorites"])
     }
 
-    @Test func worksWhenItIsTheOnlyCookbook() throws {
+    @Test func worksWhenItIsTheOnlyCookbook() async throws {
         let context = try makeInMemoryContext()
         let cookbook = Cookbook(ownerID: "alice", title: "Personal Cookbook", sortOrder: 0)
         context.insert(cookbook)
         try context.save()
 
-        CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, in: context)
+        await CookbookDeletionCoordinator.deleteCookbookAndItsRecipes(cookbook, ownerUserID: "alice", in: context)
 
         #expect(try context.fetch(FetchDescriptor<Cookbook>()).isEmpty)
     }

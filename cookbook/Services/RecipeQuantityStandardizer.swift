@@ -50,13 +50,52 @@ enum RecipeQuantityStandardizer {
     private static func standardize(_ ingredient: Ingredient) -> Bool {
         var changed = false
 
+        // Broken-import signature: an amount/unit sitting inside `name`
+        // itself, e.g. name == "7 Bananas to 8 Bananas" — what a recipe
+        // imported directly from Discover used to leave behind (see
+        // CreateEditRecipeView's .importing case), since nothing had ever
+        // split it into separate fields. Standardize should "always
+        // incorporate the rule from import" (2026-08-15 feedback), so
+        // this reuses the exact same IngredientLineParser real imports
+        // now use, rather than a second, divergent rule. Only fires when
+        // the parse actually changed something — a normal, already-clean
+        // name ("Flour, sifted") round-trips unchanged and is left alone,
+        // so this can never clobber legitimate trailing text.
+        let parsedName = IngredientLineParser.parse(ingredient.name, knownUnits: CreateEditRecipeView.commonUnits)
+        if parsedName.name != ingredient.name {
+            if parsedName.quantity != nil {
+                // A real amount was hiding in the name — move it out and
+                // rebuild the whole line from the parts, the same way
+                // RecipeFileImportCoordinator composes a freshly-imported
+                // one, instead of leaving the old raw text duplicated
+                // alongside the now-correct wheel value.
+                let snapped = WheelQuantity.nearest(to: parsedName.quantity)
+                ingredient.name = parsedName.name
+                ingredient.quantityValue = snapped.quantityValue
+                if let unit = parsedName.unit { ingredient.unit = unit }
+                ingredient.displayText = RecipeFileImportCoordinator.displayText(for: ParsedIngredientLine(
+                    name: parsedName.name,
+                    quantity: snapped.quantityValue,
+                    unit: parsedName.unit ?? ingredient.unit,
+                    rangeUpperText: parsedName.rangeUpperText
+                ))
+            } else {
+                // No amount, just a stray leading bullet character.
+                ingredient.name = parsedName.name
+            }
+            changed = true
+        }
+
         // Quantity: recover/snap from whatever's already there, rewriting
         // only the leading quantity portion of displayText — never the
         // rest of the line (unit, name, any trailing author notes like
         // ", sifted") — and only when that leading portion is exactly
         // what LeadingQuantityToken found (a defensive check against
-        // displayText not actually starting the way we expect).
-        if let parsed = LeadingQuantityToken.parse(from: ingredient.displayText) {
+        // displayText not actually starting the way we expect). Skipped
+        // when the name-based rebuild above already fired for this
+        // ingredient — it already rebuilt displayText from scratch, so
+        // re-processing it here would just be redundant.
+        if parsedName.name == ingredient.name, let parsed = LeadingQuantityToken.parse(from: ingredient.displayText) {
             let snapped = WheelQuantity.nearest(to: parsed.value)
             if ingredient.quantityValue != snapped.quantityValue {
                 ingredient.quantityValue = snapped.quantityValue

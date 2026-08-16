@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "section-bw-30-side-dishes.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -2,17 +2,12 @@
   "images" : [
     {
       "idiom" : "iphone",
-      "filename" : "cookbook-background-06-iphone.png",
+      "filename" : "cookbook-background-06-iphone.jpg",
       "scale" : "3x"
     },
     {
-      "idiom" : "ipad",
-      "filename" : "cookbook-background-06-ipad.png",
-      "scale" : "2x"
-    },
-    {
       "idiom" : "tv",
-      "filename" : "cookbook-background-06-tvos.png",
+      "filename" : "cookbook-background-06-tvos.jpg",
       "scale" : "2x"
     }
   ],

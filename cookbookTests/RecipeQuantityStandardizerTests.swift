@@ -140,6 +140,67 @@ struct RecipeQuantityStandardizerTests {
         #expect(ingredient.quantityValue == quantityAfterFirstRun)
     }
 
+    /// The exact 2026-08-15 bug report: a recipe imported directly from
+    /// Discover left the whole raw line ("2 cups flour") jammed into
+    /// `name`, with quantityValue/unit never populated. Standardize used
+    /// to only fix the wheel value, leaving the raw text duplicated in
+    /// name right alongside it. It should now move the amount out
+    /// entirely, not copy it.
+    @Test func movesAmountOutOfNameInsteadOfDuplicatingIt() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = makeCookbook(in: context)
+        let recipe = makeRecipe(in: cookbook, context: context)
+        let section = IngredientSection()
+        let ingredient = Ingredient(displayText: "2 cups flour", name: "2 cups flour", quantityValue: nil, unit: nil)
+        section.ingredients = [ingredient]
+        recipe.ingredientSections = [section]
+        try context.save()
+
+        let changed = RecipeQuantityStandardizer.standardize(cookbook, modelContext: context)
+
+        #expect(changed == 1)
+        #expect(ingredient.name == "Flour")
+        // "cups" -> "cup": per the 2026-08-15 unit-alias table, a plural
+        // now normalizes to its canonical singular rather than staying
+        // as typed.
+        #expect(ingredient.unit == "cup")
+        #expect(ingredient.quantityValue == 2)
+        #expect(ingredient.displayText == "2 cup Flour")
+    }
+
+    @Test func normalizesARangeHiddenInsideNameIntoADashRange() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = makeCookbook(in: context)
+        let recipe = makeRecipe(in: cookbook, context: context)
+        let section = IngredientSection()
+        let ingredient = Ingredient(displayText: "7 Bananas to 8 Bananas", name: "7 Bananas to 8 Bananas")
+        section.ingredients = [ingredient]
+        recipe.ingredientSections = [section]
+        try context.save()
+
+        RecipeQuantityStandardizer.standardize(cookbook, modelContext: context)
+
+        #expect(ingredient.name == "Bananas")
+        #expect(ingredient.quantityValue == 7)
+        #expect(ingredient.displayText == "7 - 8 Bananas")
+    }
+
+    @Test func stripsAStrayLeadingBulletFromName() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = makeCookbook(in: context)
+        let recipe = makeRecipe(in: cookbook, context: context)
+        let section = IngredientSection()
+        let ingredient = Ingredient(displayText: "vanilla extract", name: "• vanilla extract")
+        section.ingredients = [ingredient]
+        recipe.ingredientSections = [section]
+        try context.save()
+
+        let changed = RecipeQuantityStandardizer.standardize(cookbook, modelContext: context)
+
+        #expect(changed == 1)
+        #expect(ingredient.name == "Vanilla Extract")
+    }
+
     @Test func onlyTouchesRecipesInTheSpecifiedCookbook() throws {
         let context = try makeInMemoryContext()
         let cookbook = makeCookbook(in: context)

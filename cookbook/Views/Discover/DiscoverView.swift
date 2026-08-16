@@ -14,8 +14,8 @@ import SwiftData
 
 struct DiscoverView: View {
     enum SourceMode: String, CaseIterable, Identifiable {
-        case search = "Search"
         case browse = "Browse"
+        case search = "Search"
         var id: String { rawValue }
     }
 
@@ -128,7 +128,9 @@ struct DiscoverView: View {
                     .textInputAutocapitalization(.never)
                     #endif
                     .autocorrectionDisabled()
+                    #if !os(tvOS)
                     .textFieldStyle(.roundedBorder)
+                    #endif
                     .onSubmit { Task { await performSearch() } }
                 Button("Search") { Task { await performSearch() } }
                     .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)

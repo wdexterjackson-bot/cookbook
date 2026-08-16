@@ -66,7 +66,7 @@ struct CreateHubView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Create")
             #if os(iOS)

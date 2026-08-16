@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "section-fc-38-martinis.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

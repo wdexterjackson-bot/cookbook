@@ -16,8 +16,18 @@
 //
 
 import Foundation
+// FoundationModels (Apple Intelligence) has no tvOS build — Apple TV
+// hardware doesn't run on-device models at all, unlike the Simulator-vs-
+// Neural-Engine inference gap noted below, which is a availability detail
+// on platforms that DO ship the framework. isAvailable is simply always
+// false here so RecipePrepSummaryServicing's existing "no summary section
+// shown at all" fallback (see CookingModePrepReviewView's header comment)
+// covers tvOS for free, with no call-site changes.
+#if os(iOS)
 import FoundationModels
+#endif
 
+#if os(iOS)
 final class FoundationModelsPrepSummaryService: RecipePrepSummaryServicing {
     var isAvailable: Bool {
         SystemLanguageModel.default.isAvailable
@@ -82,3 +92,12 @@ final class FoundationModelsPrepSummaryService: RecipePrepSummaryServicing {
         }
     }
 }
+#else
+final class FoundationModelsPrepSummaryService: RecipePrepSummaryServicing {
+    var isAvailable: Bool { false }
+
+    func generateSummary(for input: RecipePrepSummaryInput) async throws -> String {
+        throw RecipePrepSummaryError.unavailable
+    }
+}
+#endif

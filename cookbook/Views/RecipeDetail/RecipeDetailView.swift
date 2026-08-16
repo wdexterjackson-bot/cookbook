@@ -104,9 +104,11 @@ struct RecipeDetailView: View {
                         Label("Edit", systemImage: "pencil")
                     }
 
+                    #if !os(tvOS)
                     ShareLink(item: RecipeTextFormatter.plainText(for: recipe)) {
                         Label("Share Recipe", systemImage: "square.and.arrow.up")
                     }
+                    #endif
 
                     Button {
                         isPresentingPublish = true
@@ -254,7 +256,6 @@ struct RecipeDetailView: View {
             }
             ForEach(section.ingredients.sorted(by: { $0.sortOrder < $1.sortOrder })) { ingredient in
                 HStack(alignment: .top) {
-                    Text("•")
                     Text(ingredient.displayText)
                     if ingredient.isOptional {
                         Text("(optional)")

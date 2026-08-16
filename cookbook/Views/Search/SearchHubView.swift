@@ -63,7 +63,7 @@ struct SearchHubView: View {
                     PublicGroupSearchContent(groupsService: groupsService)
                 }
             }
-            .background(Color.potluckCream)
+            .potluckHubBackground()
             .safeAreaInset(edge: .top) {
                 Picker("Search Scope", selection: $scope) {
                     ForEach(SearchScope.allCases) { scope in
@@ -133,7 +133,7 @@ struct SearchHubView: View {
                 }
             }
             .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+            .potluckHiddenScrollBackground()
         }
     }
 
