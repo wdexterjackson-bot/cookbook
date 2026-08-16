@@ -36,7 +36,7 @@ Per the standing "we will commit later" instruction noted in the 08-15 recap, al
 
 # Later same day — second session, August 16, 2026
 
-Blaze plan upgrade confirmed done by the user (was the last open item from 08-15). Personal Cookbook Sync (including photos) independently re-verified end-to-end this session. One commit (`bba0293`), committed and pushed to `main`.
+Blaze plan upgrade confirmed done by the user (was the last open item from 08-15). Personal Cookbook Sync (including photos) independently re-verified end-to-end this session. Two commits (`bba0293`, `fadc360`), committed and pushed to `main`.
 
 ## What got built
 
@@ -73,7 +73,7 @@ User-reported: "AppleTV app icon doesn't show correctly" and "Background images 
 - 62/62 `firestore.rules` tests passing against the real Firestore emulator (`firebase emulators:exec`), including new coverage for the discount-code and annual-credit transitions.
 - Full iPhone-, iPad-, and tvOS-destination builds all succeeded clean (tvOS needed two iterations — the asset catalog compiler initially rejected the new icon for having only 1 layer instead of the required minimum of 2).
 - One pre-existing, unrelated UI test failure (`FreshInstallCookbookNavigationUITests`, a live-network sign-up flow test) — matches this environment's documented XCUITest flakiness, not a regression from this session's changes.
-- `git push origin main` succeeded.
+- `git push origin main` succeeded; `main` is up to date with `origin/main` at `fadc360`.
 - Confirmed no secret files staged before committing; reverted an unrelated local `.firebaserc` change (a side effect of an earlier diagnostic `firebase target:apply` command) before committing so it didn't get swept in.
 
 ## Open for next session
