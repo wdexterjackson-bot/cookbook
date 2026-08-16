@@ -32,6 +32,15 @@ struct AccountView: View {
     @State private var isSavingLocation = false
     @State private var saveLocationErrorMessage: String?
     @State private var entitlement: Entitlement?
+    @State private var isPresentingCreateFamilyCookbook = false
+    @State private var isRedeemingTier1Credit = false
+    @State private var isRedeemingAnnualCredit = false
+    @State private var membershipActionMessage: String?
+    @State private var membershipActionErrorMessage: String?
+    @State private var discountCodeInput = ""
+    @State private var isApplyingDiscountCode = false
+    @State private var discountCodeMessage: String?
+    @State private var discountCodeErrorMessage: String?
 
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
@@ -95,10 +104,88 @@ struct AccountView: View {
                     }
 
                     Section("Membership") {
-                        MembershipSummaryView(entitlement: entitlement)
-                        Button(entitlement?.isProUser == true ? "Purchases" : "Upgrade") {
-                            isPresentingMembership = true
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(entitlement?.isProUser == true ? "Pro User" : "Standard User")
+                                .font(.subheadline.weight(.semibold))
+                            Button(entitlement?.isProUser == true ? "Purchases" : "Upgrade") {
+                                isPresentingMembership = true
+                            }
+                            .buttonStyle(.bordered)
                         }
+                        .padding(.vertical, 2)
+
+                        // Hidden entirely at zero — an absent row reads
+                        // cleaner than a credit count nobody can act on,
+                        // same reasoning MembershipSummaryView already
+                        // uses elsewhere. Not shown once already Pro —
+                        // nothing left to spend it on.
+                        if let tier1Credits = entitlement?.tier1Credits, tier1Credits > 0, entitlement?.isProUser != true {
+                            membershipCreditRow(
+                                title: "Pro User Credit",
+                                count: tier1Credits,
+                                expiresAt: entitlement?.tier1ExpiresAt,
+                                isBusy: isRedeemingTier1Credit
+                            ) {
+                                Task { await useTier1Credit() }
+                            }
+                        }
+
+                        // Hidden unless there's an awarded/available credit
+                        // to use — this row says nothing about an already-
+                        // active membership, only about an unspent credit.
+                        if let annualCredits = entitlement?.annualProMembershipCredits, annualCredits > 0 {
+                            membershipCreditRow(
+                                title: "Annual Pro Membership",
+                                count: annualCredits,
+                                expiresAt: nil,
+                                isBusy: isRedeemingAnnualCredit
+                            ) {
+                                Task { await useAnnualCredit() }
+                            }
+                        }
+
+                        if let tier2Credits = entitlement?.tier2Credits, tier2Credits > 0 {
+                            membershipCreditRow(
+                                title: "Family Cookbook Credits",
+                                count: tier2Credits,
+                                expiresAt: entitlement?.tier2ExpiresAt,
+                                isBusy: false
+                            ) {
+                                isPresentingCreateFamilyCookbook = true
+                            }
+                        }
+
+                        if let membershipActionMessage {
+                            Text(membershipActionMessage).foregroundStyle(.secondary).font(.caption)
+                        }
+                        if let membershipActionErrorMessage {
+                            Text(membershipActionErrorMessage).foregroundStyle(.red).font(.caption)
+                        }
+                    }
+
+                    Section {
+                        TextField("Discount Code", text: $discountCodeInput)
+                            #if os(iOS)
+                            .textInputAutocapitalization(.characters)
+                            #endif
+                            .autocorrectionDisabled()
+                        Button("Submit") {
+                            Task { await applyDiscountCode() }
+                        }
+                        .disabled(isApplyingDiscountCode || discountCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if isApplyingDiscountCode {
+                            ProgressView()
+                        }
+                        if let discountCodeMessage {
+                            Text(discountCodeMessage).foregroundStyle(.green)
+                        }
+                        if let discountCodeErrorMessage {
+                            Text(discountCodeErrorMessage).foregroundStyle(.red)
+                        }
+                    } header: {
+                        Text("Discount Code")
+                    } footer: {
+                        Text("Have a code? Apply it here — an awarded credit shows up under Membership above.")
                     }
 
                     Section {
@@ -161,6 +248,9 @@ struct AccountView: View {
                     Task { await deleteAccount() }
                 }
             }
+            .sheet(isPresented: $isPresentingCreateFamilyCookbook) {
+                CreateFamilyCookbookView(groupsService: groupsService)
+            }
             .task(id: accountState.currentUserID) {
                 fullNameDraft = accountState.currentUserDisplayName ?? ""
                 await loadLocation()
@@ -173,12 +263,95 @@ struct AccountView: View {
                     Task { await loadEntitlement() }
                 }
             }
+            .onChange(of: isPresentingCreateFamilyCookbook) { wasPresenting, isPresenting in
+                // A tier-2 credit is only actually spent once the group is
+                // successfully created (FirestoreGroupsService.createGroup's
+                // own atomic transaction) — aborting the sheet without
+                // saving leaves the credit untouched. Refreshing on close
+                // either way just picks up whichever happened.
+                if wasPresenting, !isPresenting {
+                    Task { await loadEntitlement() }
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func membershipCreditRow(title: String, count: Int, expiresAt: Date?, isBusy: Bool, action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            LabeledContent(title) {
+                if let expiresAt {
+                    if expiresAt > .now {
+                        Text("\(count) (expires \(expiresAt.formatted(date: .abbreviated, time: .omitted)))")
+                    } else {
+                        Text("\(count) (expired)")
+                    }
+                } else {
+                    Text("\(count)")
+                }
+            }
+            Button("Use Credit", action: action)
+                .buttonStyle(.bordered)
+                .disabled(isBusy)
+        }
+        .padding(.vertical, 2)
     }
 
     private func loadEntitlement() async {
         guard let userID = accountState.currentUserID else { return }
         entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+    }
+
+    private func useTier1Credit() async {
+        guard let userID = accountState.currentUserID else { return }
+        isRedeemingTier1Credit = true
+        membershipActionMessage = nil
+        membershipActionErrorMessage = nil
+        defer { isRedeemingTier1Credit = false }
+        do {
+            let redeemed = try await entitlementService.redeemTier1CreditForProUser(userID: userID)
+            membershipActionMessage = redeemed ? "You're now a Pro User." : nil
+            if !redeemed { membershipActionErrorMessage = "That credit isn't available anymore." }
+            await loadEntitlement()
+        } catch {
+            membershipActionErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func useAnnualCredit() async {
+        guard let userID = accountState.currentUserID else { return }
+        isRedeemingAnnualCredit = true
+        membershipActionMessage = nil
+        membershipActionErrorMessage = nil
+        defer { isRedeemingAnnualCredit = false }
+        do {
+            let redeemed = try await entitlementService.redeemAnnualProMembershipCredit(userID: userID)
+            membershipActionMessage = redeemed ? "Your Annual Pro Membership is now active." : nil
+            if !redeemed { membershipActionErrorMessage = "That credit isn't available anymore." }
+            await loadEntitlement()
+        } catch {
+            membershipActionErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyDiscountCode() async {
+        guard let userID = accountState.currentUserID else { return }
+        isApplyingDiscountCode = true
+        discountCodeMessage = nil
+        discountCodeErrorMessage = nil
+        defer { isApplyingDiscountCode = false }
+        do {
+            try await entitlementService.applyDiscountCode(discountCodeInput, userID: userID)
+            discountCodeMessage = "Code applied — you have a new Annual Pro Membership credit."
+            discountCodeInput = ""
+            await loadEntitlement()
+        } catch EntitlementServiceError.invalidDiscountCode {
+            discountCodeErrorMessage = "That code isn't valid."
+        } catch EntitlementServiceError.discountCodeAlreadyRedeemed {
+            discountCodeErrorMessage = "You've already used that code."
+        } catch {
+            discountCodeErrorMessage = error.localizedDescription
+        }
     }
 
     /// The single source of truth for "what would saving right now write" —

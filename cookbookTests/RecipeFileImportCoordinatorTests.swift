@@ -243,6 +243,33 @@ struct RecipeFileImportCoordinatorTests {
         #expect(recipe.sectionID == cookbook.sections.first?.id)
     }
 
+    @Test func commitAssignsTheCatalogDefaultIconToANewlyCreatedChapter() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
+        context.insert(cookbook)
+        try context.save()
+
+        let draft = DraftRecipe(title: "Pumpkin Pie", chapterName: "Desserts", notes: "", authorLineage: nil, ingredients: [], steps: [])
+        _ = RecipeFileImportCoordinator.commit([draft], into: cookbook, ownerID: "alice", modelContext: context)
+
+        let section = try #require(cookbook.sections.first)
+        #expect(section.iconAssetName == CookbookSectionIconCatalog.defaultIcon(forChapterTitled: "Desserts")?.assetName)
+        #expect(section.iconAssetName != nil)
+    }
+
+    @Test func commitLeavesANonMatchingNewChapterWithNoIcon() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)
+        context.insert(cookbook)
+        try context.save()
+
+        let draft = DraftRecipe(title: "Grandma's Special", chapterName: "Grandma's Recipes", notes: "", authorLineage: nil, ingredients: [], steps: [])
+        _ = RecipeFileImportCoordinator.commit([draft], into: cookbook, ownerID: "alice", modelContext: context)
+
+        let section = try #require(cookbook.sections.first)
+        #expect(section.iconAssetName == nil)
+    }
+
     @Test func commitReusesOneNewChapterForMultipleDraftsInTheSameBatch() throws {
         let context = try makeInMemoryContext()
         let cookbook = Cookbook(ownerID: "alice", title: "Family Favorites", sortOrder: 0)

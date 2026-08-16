@@ -237,6 +237,65 @@ describe('entitlements', () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
   });
+
+  // Annual Pro Membership credits — awarded via discount code
+  // (DiscountCodePromo.swift), spent via redeemAnnualProMembershipCredit.
+  it('rejects a create that tries to seed annual-membership fields directly', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ annualProMembershipCredits: 1 })));
+  });
+
+  it('allows redeeming the one valid discount code for a first-time credit', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      redeemedDiscountCodes: ['7595SLEDGERD'], annualProMembershipCredits: 1,
+    })));
+  });
+
+  it('rejects redeeming an unknown code', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      redeemedDiscountCodes: ['NOT-A-REAL-CODE'], annualProMembershipCredits: 1,
+    })));
+  });
+
+  it('rejects redeeming the same code a second time', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({
+      redeemedDiscountCodes: ['7595SLEDGERD'], annualProMembershipCredits: 1,
+    })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      redeemedDiscountCodes: ['7595SLEDGERD', '7595SLEDGERD'], annualProMembershipCredits: 2,
+    })));
+  });
+
+  it('allows spending an annual-membership credit with an expiration within the ~1-year bound', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ annualProMembershipCredits: 1 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const oneYearOut = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 365));
+    await assertSucceeds(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      annualProMembershipCredits: 0, annualProMembershipExpiresAt: oneYearOut,
+    })));
+  });
+
+  it('rejects spending an annual-membership credit with an expiration far beyond the ~1-year bound', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ annualProMembershipCredits: 1 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const tenYearsOut = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 365 * 10));
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      annualProMembershipCredits: 0, annualProMembershipExpiresAt: tenYearsOut,
+    })));
+  });
+
+  it('rejects smuggling an annual-membership credit change into a tier-2-spend write', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ annualProMembershipCredits: 0 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+      tier2Credits: 1, annualProMembershipCredits: 1,
+    })));
+  });
 });
 
 describe('group creation', () => {

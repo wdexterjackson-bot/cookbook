@@ -32,6 +32,26 @@ struct Entitlement: Decodable, Equatable {
     /// firestore.rules (the actual enforcement).
     var tier1ExpiresAt: Date?
     var tier2ExpiresAt: Date?
+    /// Awarded-but-unused Annual Pro Membership credits — same shape as
+    /// tier1Credits/tier2Credits (a count to spend, not a status), granted
+    /// today only via a discount code (see redeemedDiscountCodes below).
+    /// This is a stepping stone ahead of the full Annual Pro Member
+    /// subscription build (StoreKit product, App Store Server
+    /// Notifications, the 90-day photo-deletion sweep) — see the
+    /// #4 implementation plan; a credit-granted membership sets
+    /// annualProMembershipExpiresAt exactly the same as a future real
+    /// purchase would, so the rest of the app never needs to know which
+    /// path granted it.
+    var annualProMembershipCredits: Int
+    /// When the account's Annual Pro Membership is active through — nil
+    /// means never activated. Whoever reads this to gate a feature should
+    /// compare against .now, not just nil-check it.
+    var annualProMembershipExpiresAt: Date?
+    /// Exact discount code strings already applied to this account, kept
+    /// so the same code can't be redeemed twice by the same user — the
+    /// valid code(s) themselves and their deadline are enforced in
+    /// firestore.rules, not just here.
+    var redeemedDiscountCodes: [String]
 
     init(
         userID: String,
@@ -42,7 +62,10 @@ struct Entitlement: Decodable, Equatable {
         receivedTier2PromoCredits: Bool,
         createdAt: Date,
         tier1ExpiresAt: Date? = nil,
-        tier2ExpiresAt: Date? = nil
+        tier2ExpiresAt: Date? = nil,
+        annualProMembershipCredits: Int = 0,
+        annualProMembershipExpiresAt: Date? = nil,
+        redeemedDiscountCodes: [String] = []
     ) {
         self.userID = userID
         self.tier1Credits = tier1Credits
@@ -53,6 +76,9 @@ struct Entitlement: Decodable, Equatable {
         self.createdAt = createdAt
         self.tier1ExpiresAt = tier1ExpiresAt
         self.tier2ExpiresAt = tier2ExpiresAt
+        self.annualProMembershipCredits = annualProMembershipCredits
+        self.annualProMembershipExpiresAt = annualProMembershipExpiresAt
+        self.redeemedDiscountCodes = redeemedDiscountCodes
     }
 
     /// Tolerant of documents written under the single-tier scheme this
@@ -92,12 +118,16 @@ struct Entitlement: Decodable, Equatable {
 
         tier1ExpiresAt = try container.decodeIfPresent(Date.self, forKey: .tier1ExpiresAt)
         tier2ExpiresAt = try container.decodeIfPresent(Date.self, forKey: .tier2ExpiresAt)
+        annualProMembershipCredits = try container.decodeIfPresent(Int.self, forKey: .annualProMembershipCredits) ?? 0
+        annualProMembershipExpiresAt = try container.decodeIfPresent(Date.self, forKey: .annualProMembershipExpiresAt)
+        redeemedDiscountCodes = try container.decodeIfPresent([String].self, forKey: .redeemedDiscountCodes) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
         case userID, tier1Credits, tier2Credits, isProUser
         case receivedTier1PromoCredit, receivedTier2PromoCredits, createdAt
         case tier1ExpiresAt, tier2ExpiresAt
+        case annualProMembershipCredits, annualProMembershipExpiresAt, redeemedDiscountCodes
         case legacyCreationCredits = "creationCredits"
         case legacyHasFamilyUser = "hasFamilyUser"
         case legacyFamilyUserPromoCreditAvailable = "familyUserPromoCreditAvailable"

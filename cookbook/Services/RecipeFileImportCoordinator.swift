@@ -186,7 +186,11 @@ enum RecipeFileImportCoordinator {
 
     /// Case-insensitive match against the target cookbook's existing
     /// chapters; creates a new one (appended to `cookbook.sections`, same
-    /// pattern CookbookConfigurationView uses) when nothing matches.
+    /// pattern CookbookConfigurationView uses — including its default-icon
+    /// assignment via CookbookSectionIconCatalog, so a chapter created by
+    /// import looks the same as one added by hand: a manifest-matching name
+    /// gets its catalog icon, anything else is a plain custom chapter with
+    /// no icon until the user picks one).
     private static func resolveChapter(named chapterName: String?, in cookbook: Cookbook) -> CookbookSection? {
         guard let chapterName else { return nil }
         let trimmed = chapterName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -195,6 +199,7 @@ enum RecipeFileImportCoordinator {
             return existing
         }
         let newSection = CookbookSection(title: trimmed, sortOrder: cookbook.sections.count)
+        newSection.iconAssetName = CookbookSectionIconCatalog.defaultIcon(forChapterTitled: trimmed)?.assetName
         cookbook.sections.append(newSection)
         return newSection
     }

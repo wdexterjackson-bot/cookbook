@@ -97,6 +97,89 @@ struct EntitlementServicingTests {
         #expect(try await service.redeemTier1CreditForProUser(userID: "alice"))
     }
 
+    // MARK: - Discount codes / Annual Pro Membership credit
+
+    @Test func applyDiscountCodeGrantsOneAnnualCreditAndRecordsTheCode() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now
+        )
+
+        try await service.applyDiscountCode("7595SLEDGERD", userID: "alice")
+
+        #expect(service.entitlementsByUserID["alice"]?.annualProMembershipCredits == 1)
+        #expect(service.entitlementsByUserID["alice"]?.redeemedDiscountCodes == ["7595SLEDGERD"])
+    }
+
+    @Test func applyDiscountCodeIsCaseInsensitiveAndTrimsWhitespace() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now
+        )
+
+        try await service.applyDiscountCode("  7595sledgerd  ", userID: "alice")
+
+        #expect(service.entitlementsByUserID["alice"]?.annualProMembershipCredits == 1)
+    }
+
+    @Test func applyDiscountCodeThrowsInvalidForAnUnknownCode() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now
+        )
+
+        await #expect(throws: EntitlementServiceError.invalidDiscountCode) {
+            try await service.applyDiscountCode("NOT-A-REAL-CODE", userID: "alice")
+        }
+        #expect(service.entitlementsByUserID["alice"]?.annualProMembershipCredits == 0)
+    }
+
+    @Test func applyDiscountCodeThrowsAlreadyRedeemedOnSecondAttempt() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+            redeemedDiscountCodes: ["7595SLEDGERD"]
+        )
+
+        await #expect(throws: EntitlementServiceError.discountCodeAlreadyRedeemed) {
+            try await service.applyDiscountCode("7595SLEDGERD", userID: "alice")
+        }
+        // Untouched — still exactly one credit's worth of history, not a
+        // second grant sneaking through under a thrown error.
+        #expect(service.entitlementsByUserID["alice"]?.annualProMembershipCredits == 0)
+    }
+
+    @Test func redeemAnnualProMembershipCreditActivatesRoughlyOneYearOut() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+            annualProMembershipCredits: 1
+        )
+
+        let redeemed = try await service.redeemAnnualProMembershipCredit(userID: "alice")
+
+        #expect(redeemed)
+        #expect(service.entitlementsByUserID["alice"]?.annualProMembershipCredits == 0)
+        let expiresAt = try #require(service.entitlementsByUserID["alice"]?.annualProMembershipExpiresAt)
+        let daysOut = expiresAt.timeIntervalSinceNow / 86400
+        #expect(daysOut > 364 && daysOut < 366)
+    }
+
+    @Test func redeemAnnualProMembershipCreditFailsWhenNoneAvailable() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now
+        )
+
+        #expect(try await service.redeemAnnualProMembershipCredit(userID: "alice") == false)
+    }
+
     // MARK: - EntitlementGate decision logic
 
     @Test func groupCreationGateNeedsConfirmationWhenCreditsAvailable() {

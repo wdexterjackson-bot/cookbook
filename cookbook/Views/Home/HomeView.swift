@@ -65,6 +65,7 @@ struct HomeView: View {
     @State private var isPresentingRestoreImporter = false
     @State private var isPresentingCloudRestore = false
     @State private var isPresentingRestoreChoice = false
+    @State private var isPresentingFileImport = false
     @State private var isPresentingCommunitySearch = false
     @State private var isPresentingGettingStartedVideo = false
 
@@ -435,7 +436,7 @@ struct HomeView: View {
                 }
 
                 gettingStartedRow(
-                    message: "Bring a cookbook back from a backup file or the cloud.",
+                    message: "Bring a cookbook back from a backup file, the cloud, or import recipes from a file.",
                     buttonTitle: "Restore a Cookbook"
                 ) {
                     isPresentingRestoreChoice = true
@@ -480,6 +481,9 @@ struct HomeView: View {
         .sheet(isPresented: $isPresentingCommunitySearch) {
             PublicGroupSearchView(groupsService: groupsService)
         }
+        .sheet(isPresented: $isPresentingFileImport) {
+            ImportRecipesFileView()
+        }
         .fullScreenCover(isPresented: $isPresentingGettingStartedVideo) {
             GettingStartedTutorialPlayerView()
         }
@@ -505,6 +509,7 @@ struct HomeView: View {
             Button("From a Backup File") { isPresentingRestoreImporter = true }
             #endif
             Button("From the Cloud") { isPresentingCloudRestore = true }
+            Button("Import from a File") { isPresentingFileImport = true }
             Button("Cancel", role: .cancel) {}
         }
     }

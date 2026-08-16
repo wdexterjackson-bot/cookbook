@@ -79,6 +79,19 @@ service cloud.firestore {
     function priorTier2Credits(entitlementData) {
       return ('tier2Credits' in entitlementData) ? entitlementData.tier2Credits : 0;
     }
+    function priorAnnualCredits(entitlementData) {
+      return ('annualProMembershipCredits' in entitlementData) ? entitlementData.annualProMembershipCredits : 0;
+    }
+    function priorRedeemedDiscountCodes(entitlementData) {
+      return ('redeemedDiscountCodes' in entitlementData) ? entitlementData.redeemedDiscountCodes : [];
+    }
+    // Tolerant "unchanged" comparison for a field that may be entirely
+    // absent on either side (never-activated membership) — same "field
+    // absent means a sentinel default" tolerance as the credit counts
+    // above, just applied to an equality check instead of an increment.
+    function annualExpiresAtOrEpoch(entitlementData) {
+      return ('annualProMembershipExpiresAt' in entitlementData) ? entitlementData.annualProMembershipExpiresAt : timestamp.date(1970, 1, 1);
+    }
     // Generic: works on either resource.data (the doc's prior state) or
     // request.resource.data (the write's resulting state) — both need the
     // same "field absent means false" tolerance, since a merge-style
@@ -110,6 +123,11 @@ service cloud.firestore {
     function tier2NotExpired(entitlementData) {
       return !('tier2ExpiresAt' in entitlementData) || request.time < entitlementData.tier2ExpiresAt;
     }
+    // Must match DiscountCodePromo.redemptionDeadline in
+    // DiscountCodePromo.swift exactly (valid through 2028-12-31).
+    function discountCodeRedemptionDeadline() {
+      return timestamp.date(2029, 1, 1);
+    }
 
     // The Pro User paywall's join gate: MFB is the one cookbook exempt
     // from requiring Pro User status. isMFB is never client-settable (see
@@ -134,6 +152,12 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.auth.uid == userID
         && request.resource.data.userID == userID
         && request.resource.data.isProUser == false
+        // The launch-credit grant (the only thing that ever creates this
+        // doc) never sets any of these three — an account only ever
+        // acquires them later, via one of the update transitions below.
+        && !('annualProMembershipCredits' in request.resource.data)
+        && !('annualProMembershipExpiresAt' in request.resource.data)
+        && !('redeemedDiscountCodes' in request.resource.data)
         && (
           (request.time < tier1ExpirationTimestamp()
             && request.resource.data.tier1Credits == 1
@@ -176,7 +200,10 @@ service cloud.firestore {
             && request.resource.data.tier1Credits == priorTier1Credits(resource.data)
             && isProUserFlag(request.resource.data) == isProUserFlag(resource.data)
             && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
-            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data)
+            && priorAnnualCredits(request.resource.data) == priorAnnualCredits(resource.data)
+            && annualExpiresAtOrEpoch(request.resource.data) == annualExpiresAtOrEpoch(resource.data)
+            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data))
           ||
           // Spending a tier-1 credit to become a Pro User — flips both
           // together, exactly once, nothing else moves. Same expiration
@@ -189,7 +216,10 @@ service cloud.firestore {
             && tier1NotExpired(resource.data)
             && request.resource.data.tier2Credits == priorTier2Credits(resource.data)
             && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
-            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data)
+            && priorAnnualCredits(request.resource.data) == priorAnnualCredits(resource.data)
+            && annualExpiresAtOrEpoch(request.resource.data) == annualExpiresAtOrEpoch(resource.data)
+            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data))
           ||
           // Backfilling a free launch credit this account hasn't received
           // yet (an entitlement doc that predates one/both tiers, possibly
@@ -232,7 +262,48 @@ service cloud.firestore {
                 && request.resource.data.tier2Credits == priorTier2Credits(resource.data))
             )
             && (!hasReceivedTier1(resource.data) || !hasReceivedTier2(resource.data))
+            && priorAnnualCredits(request.resource.data) == priorAnnualCredits(resource.data)
+            && annualExpiresAtOrEpoch(request.resource.data) == annualExpiresAtOrEpoch(resource.data)
+            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data)
           )
+          ||
+          // Spending an Annual Pro Membership credit — decrements by 1,
+          // sets the active expiration to roughly one year out. Bounded
+          // rather than checked for exact equality to "request.time + 365
+          // days": request.time is the server's own commit timestamp, not
+          // whatever instant the client computed locally when it built the
+          // write, so an exact-equality check would fail on ordinary
+          // clock/network latency skew. Accepts anything strictly after
+          // now and no more than ~370 days out (370, not 365, for a leap
+          // year plus slack) instead.
+          (request.resource.data.annualProMembershipCredits == priorAnnualCredits(resource.data) - 1
+            && request.resource.data.annualProMembershipCredits >= 0
+            && request.resource.data.annualProMembershipExpiresAt > request.time
+            && request.resource.data.annualProMembershipExpiresAt <= request.time + duration.value(370, 'd')
+            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data)
+            && request.resource.data.tier1Credits == priorTier1Credits(resource.data)
+            && request.resource.data.tier2Credits == priorTier2Credits(resource.data)
+            && isProUserFlag(request.resource.data) == isProUserFlag(resource.data)
+            && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
+          ||
+          // Redeeming the one active discount code for one Annual Pro
+          // Membership credit. The code and its deadline are enforced
+          // here, not just client-side (DiscountCodePromo.swift) — this
+          // grants a real credit, so a compromised client must not be able
+          // to fabricate a code string or backdate the deadline. One
+          // hardcoded code today; a second would just be another || arm
+          // here, not a lookup table nobody's asked for yet.
+          (request.resource.data.redeemedDiscountCodes == priorRedeemedDiscountCodes(resource.data).concat(['7595SLEDGERD'])
+            && !('7595SLEDGERD' in priorRedeemedDiscountCodes(resource.data))
+            && request.time < discountCodeRedemptionDeadline()
+            && request.resource.data.annualProMembershipCredits == priorAnnualCredits(resource.data) + 1
+            && annualExpiresAtOrEpoch(request.resource.data) == annualExpiresAtOrEpoch(resource.data)
+            && request.resource.data.tier1Credits == priorTier1Credits(resource.data)
+            && request.resource.data.tier2Credits == priorTier2Credits(resource.data)
+            && isProUserFlag(request.resource.data) == isProUserFlag(resource.data)
+            && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
         );
 
       allow delete: if false;

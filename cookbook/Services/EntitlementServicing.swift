@@ -27,6 +27,14 @@ enum EntitlementServiceError: Error, Equatable {
     /// this surfaces as a clean, catchable error instead of an opaque
     /// Firestore permission-denied from the rules-side enforcement.
     case creditExpired
+    /// The entered code doesn't match any currently-valid discount code —
+    /// checked client-side first for a clean, specific error message; the
+    /// code itself and its deadline are also enforced in firestore.rules,
+    /// which is the real authorization (a client-side check alone could be
+    /// bypassed by a modified client).
+    case invalidDiscountCode
+    /// This account has already redeemed this exact code before.
+    case discountCodeAlreadyRedeemed
 }
 
 protocol EntitlementServicing {
@@ -41,6 +49,20 @@ protocol EntitlementServicing {
     /// "already handled" from "went wrong."
     @discardableResult
     func redeemTier1CreditForProUser(userID: String) async throws -> Bool
+
+    /// Validates and applies a discount code, granting one Annual Pro
+    /// Membership credit on success. Throws EntitlementServiceError for an
+    /// unknown or already-used code rather than returning a bool — unlike
+    /// the credit-spend methods below, "which specific reason" matters
+    /// here for the message shown next to the input field.
+    func applyDiscountCode(_ code: String, userID: String) async throws
+
+    /// Spends one Annual Pro Membership credit, activating (or extending
+    /// — see the implementation's own note on this) the membership for one
+    /// year from the moment this is called. Returns false (no throw) when
+    /// there's no credit available to spend.
+    @discardableResult
+    func redeemAnnualProMembershipCredit(userID: String) async throws -> Bool
 
     /// Account deletion cleanup — best-effort by design (callers should
     /// treat failure here as non-fatal, same as Storage cleanup elsewhere).

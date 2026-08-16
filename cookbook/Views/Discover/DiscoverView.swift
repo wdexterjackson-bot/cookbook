@@ -19,7 +19,7 @@ struct DiscoverView: View {
         var id: String { rawValue }
     }
 
-    @State private var sourceMode: SourceMode = .search
+    @State private var sourceMode: SourceMode = .browse
     @State private var query = ""
     @State private var diet: DietPreference = DietaryPreferencesStore.current().defaultDiet
     @State private var excludedAllergens: Set<AllergenPreference> = DietaryPreferencesStore.current().excludedAllergens

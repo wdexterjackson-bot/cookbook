@@ -705,8 +705,12 @@ struct CreateEditRecipeView: View {
             if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let parsedTitle = result.title {
                 title = parsedTitle
             }
-            if let chapterName = result.chapterName, let matchedChapter = matchingChapter(named: chapterName) {
-                selectedChapterID = matchedChapter.id
+            if let chapterName = result.chapterName {
+                if let matchedChapter = matchingChapter(named: chapterName) {
+                    selectedChapterID = matchedChapter.id
+                } else if let newChapter = createChapter(named: chapterName) {
+                    selectedChapterID = newChapter.id
+                }
             }
             if let parsedNotes = result.notes {
                 notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -991,13 +995,30 @@ struct CreateEditRecipeView: View {
     }
 
     /// Matches an AI-parsed chapter name (from an import's "Section:"
-    /// label) against the target cookbook's existing chapters — never
-    /// creates a new one, per the "leave it blank rather than guess" rule
-    /// for anything that can't be confidently resolved.
+    /// label) against the target cookbook's existing chapters.
     private func matchingChapter(named chapterName: String) -> CookbookSection? {
         effectiveCookbook?.sections.first {
             $0.title.caseInsensitiveCompare(chapterName) == .orderedSame
         }
+    }
+
+    /// A chapter name from AI-parsed import text with no existing match is
+    /// created and activated on the target cookbook, same as bulk file
+    /// import already does (RecipeFileImportCoordinator.resolveChapter) —
+    /// single-recipe paste-import used to just leave it unfiled instead,
+    /// which meant the exact same "Section:" label behaved differently
+    /// depending on which import path picked it up. Gets the catalog's
+    /// default icon when the name matches a manifest category, same as
+    /// every other chapter-creation path in the app; otherwise it's a
+    /// plain custom chapter with no icon until picked manually.
+    private func createChapter(named chapterName: String) -> CookbookSection? {
+        guard let cookbook = effectiveCookbook else { return nil }
+        let trimmed = chapterName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let newChapter = CookbookSection(title: trimmed, sortOrder: cookbook.sections.count)
+        newChapter.iconAssetName = CookbookSectionIconCatalog.defaultIcon(forChapterTitled: trimmed)?.assetName
+        cookbook.sections.append(newChapter)
+        return newChapter
     }
 
     /// Validates, then resolves this recipe's author lineage (immutable
