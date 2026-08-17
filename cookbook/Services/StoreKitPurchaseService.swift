@@ -60,12 +60,21 @@ final class StoreKitPurchaseService: PurchaseServicing {
     }
 
     private static func purchasableProduct(from product: Product) -> PurchasableProduct {
-        PurchasableProduct(
+        let kind: PurchaseKind
+        switch product.type {
+        case .nonConsumable:
+            kind = .nonConsumable
+        case .autoRenewable:
+            kind = .autoRenewable
+        default:
+            kind = .consumable
+        }
+        return PurchasableProduct(
             id: product.id,
             displayName: product.displayName,
             description: product.description,
             displayPrice: product.displayPrice,
-            kind: product.type == .nonConsumable ? .nonConsumable : .consumable
+            kind: kind
         )
     }
 }

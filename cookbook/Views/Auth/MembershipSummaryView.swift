@@ -30,6 +30,11 @@ struct MembershipSummaryView: View {
                 creditValueText(count: tier2Credits, expiresAt: entitlement?.tier2ExpiresAt)
             }
         }
+        if entitlement?.isActiveAnnualProMember == true, let expiresAt = entitlement?.annualProMembershipExpiresAt {
+            LabeledContent("Annual Pro Membership") {
+                Text("Active until \(expiresAt.formatted(date: .abbreviated, time: .omitted))")
+            }
+        }
         if !isProUser, let tier1Credits = entitlement?.tier1Credits, tier1Credits > 0,
            let tier1ExpiresAt = entitlement?.tier1ExpiresAt, tier1ExpiresAt > .now {
             Text("Upgrading to Pro User is free until \(tier1ExpiresAt.formatted(date: .abbreviated, time: .omitted)) using your existing credit.")
@@ -79,6 +84,13 @@ struct MembershipSummaryView: View {
                 userID: "preview", tier1Credits: 0, tier2Credits: 1, isProUser: true,
                 receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
                 tier2ExpiresAt: LaunchCreditPromo.tier2ExpirationDate
+            ))
+        }
+        Section("Active Annual Pro Membership, not otherwise Pro") {
+            MembershipSummaryView(entitlement: Entitlement(
+                userID: "preview", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+                receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+                annualProMembershipExpiresAt: .now.addingTimeInterval(60 * 60 * 24 * 200)
             ))
         }
     }

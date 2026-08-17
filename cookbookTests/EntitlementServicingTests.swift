@@ -226,6 +226,36 @@ struct EntitlementServicingTests {
         let group = FamilyGroup.previewStub(isMFB: false)
         #expect(EntitlementGate.forGroupJoin(nil, group: group) == .needsPurchase)
     }
+
+    @Test func groupJoinGateExemptForActiveAnnualProMembershipEvenWhenNotFlaggedPro() {
+        let group = FamilyGroup.previewStub(isMFB: false)
+        let entitlement = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+            annualProMembershipExpiresAt: .now.addingTimeInterval(60 * 60 * 24 * 30)
+        )
+        #expect(EntitlementGate.forGroupJoin(entitlement, group: group) == .exempt)
+    }
+
+    @Test func groupJoinGateNotExemptForExpiredAnnualProMembership() {
+        let group = FamilyGroup.previewStub(isMFB: false)
+        let entitlement = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+            annualProMembershipExpiresAt: .now.addingTimeInterval(-1)
+        )
+        #expect(EntitlementGate.forGroupJoin(entitlement, group: group) == .needsPurchase)
+    }
+
+    @Test func isProUserReflectsAnActiveAnnualProMembershipEvenWhenNotFlaggedPro() async throws {
+        let service = InMemoryEntitlementService()
+        service.entitlementsByUserID["alice"] = Entitlement(
+            userID: "alice", tier1Credits: 0, tier2Credits: 0, isProUser: false,
+            receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: .now,
+            annualProMembershipExpiresAt: .now.addingTimeInterval(60 * 60 * 24 * 30)
+        )
+        #expect(try await service.isProUser(userID: "alice") == true)
+    }
 }
 
 private extension FamilyGroup {

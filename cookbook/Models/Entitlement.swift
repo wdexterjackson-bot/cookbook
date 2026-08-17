@@ -52,6 +52,31 @@ struct Entitlement: Decodable, Equatable {
     /// valid code(s) themselves and their deadline are enforced in
     /// firestore.rules, not just here.
     var redeemedDiscountCodes: [String]
+    /// Set by the 90-day sweep once a lapsed member's cloud photos have
+    /// been deleted — nil means either still active, still within the
+    /// 90-day grace window, or never had photos removed. Cleared on
+    /// re-subscribe so a future lapse sweeps again.
+    var annualProMembershipImagesRemovedAt: Date?
+    /// StoreKit's originalTransactionId for the current/most recent real
+    /// subscription purchase — how appStoreServerNotifications resolves an
+    /// incoming Apple notification back to this account. Nil for an
+    /// account that has only ever redeemed a discount-code credit, never
+    /// made a real purchase.
+    var annualProMembershipOriginalTransactionID: String?
+    /// Set from Apple's own gracePeriodExpiresDate while a renewal is
+    /// failing but Apple is still retrying billing — the sweep must not
+    /// treat the member as lapsed while this is still in the future, even
+    /// past the normal 90-day mark.
+    var annualProMembershipBillingRetryUntil: Date?
+    /// Last-known autoRenewStatus from Apple — informational only, used to
+    /// show a quiet "won't renew" badge while the membership is still
+    /// otherwise active. Not used for any access decision.
+    var annualProMembershipWillRenew: Bool?
+    /// Dedup markers so the daily sweep's day-75/day-85 warning emails
+    /// fire once each, not on every run while a lapsed member sits
+    /// unswept.
+    var annualProMembershipWarnedAtDay75: Bool?
+    var annualProMembershipWarnedAtDay85: Bool?
 
     init(
         userID: String,
@@ -65,7 +90,13 @@ struct Entitlement: Decodable, Equatable {
         tier2ExpiresAt: Date? = nil,
         annualProMembershipCredits: Int = 0,
         annualProMembershipExpiresAt: Date? = nil,
-        redeemedDiscountCodes: [String] = []
+        redeemedDiscountCodes: [String] = [],
+        annualProMembershipImagesRemovedAt: Date? = nil,
+        annualProMembershipOriginalTransactionID: String? = nil,
+        annualProMembershipBillingRetryUntil: Date? = nil,
+        annualProMembershipWillRenew: Bool? = nil,
+        annualProMembershipWarnedAtDay75: Bool? = nil,
+        annualProMembershipWarnedAtDay85: Bool? = nil
     ) {
         self.userID = userID
         self.tier1Credits = tier1Credits
@@ -79,6 +110,12 @@ struct Entitlement: Decodable, Equatable {
         self.annualProMembershipCredits = annualProMembershipCredits
         self.annualProMembershipExpiresAt = annualProMembershipExpiresAt
         self.redeemedDiscountCodes = redeemedDiscountCodes
+        self.annualProMembershipImagesRemovedAt = annualProMembershipImagesRemovedAt
+        self.annualProMembershipOriginalTransactionID = annualProMembershipOriginalTransactionID
+        self.annualProMembershipBillingRetryUntil = annualProMembershipBillingRetryUntil
+        self.annualProMembershipWillRenew = annualProMembershipWillRenew
+        self.annualProMembershipWarnedAtDay75 = annualProMembershipWarnedAtDay75
+        self.annualProMembershipWarnedAtDay85 = annualProMembershipWarnedAtDay85
     }
 
     /// Tolerant of documents written under the single-tier scheme this
@@ -121,6 +158,21 @@ struct Entitlement: Decodable, Equatable {
         annualProMembershipCredits = try container.decodeIfPresent(Int.self, forKey: .annualProMembershipCredits) ?? 0
         annualProMembershipExpiresAt = try container.decodeIfPresent(Date.self, forKey: .annualProMembershipExpiresAt)
         redeemedDiscountCodes = try container.decodeIfPresent([String].self, forKey: .redeemedDiscountCodes) ?? []
+        annualProMembershipImagesRemovedAt = try container.decodeIfPresent(Date.self, forKey: .annualProMembershipImagesRemovedAt)
+        annualProMembershipOriginalTransactionID = try container.decodeIfPresent(String.self, forKey: .annualProMembershipOriginalTransactionID)
+        annualProMembershipBillingRetryUntil = try container.decodeIfPresent(Date.self, forKey: .annualProMembershipBillingRetryUntil)
+        annualProMembershipWillRenew = try container.decodeIfPresent(Bool.self, forKey: .annualProMembershipWillRenew)
+        annualProMembershipWarnedAtDay75 = try container.decodeIfPresent(Bool.self, forKey: .annualProMembershipWarnedAtDay75)
+        annualProMembershipWarnedAtDay85 = try container.decodeIfPresent(Bool.self, forKey: .annualProMembershipWarnedAtDay85)
+    }
+
+    /// True while a real purchase or a redeemed discount-code credit has
+    /// this account's Annual Pro Membership active — the single source of
+    /// truth every Pro-gated check should read instead of `isProUser`
+    /// alone, so an active annual membership actually grants the access
+    /// the redemption flow implies. See EntitlementGate.forGroupJoin.
+    var isActiveAnnualProMember: Bool {
+        (annualProMembershipExpiresAt ?? .distantPast) > .now
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -128,6 +180,9 @@ struct Entitlement: Decodable, Equatable {
         case receivedTier1PromoCredit, receivedTier2PromoCredits, createdAt
         case tier1ExpiresAt, tier2ExpiresAt
         case annualProMembershipCredits, annualProMembershipExpiresAt, redeemedDiscountCodes
+        case annualProMembershipImagesRemovedAt, annualProMembershipOriginalTransactionID
+        case annualProMembershipBillingRetryUntil, annualProMembershipWillRenew
+        case annualProMembershipWarnedAtDay75, annualProMembershipWarnedAtDay85
         case legacyCreationCredits = "creationCredits"
         case legacyHasFamilyUser = "hasFamilyUser"
         case legacyFamilyUserPromoCreditAvailable = "familyUserPromoCreditAvailable"

@@ -26,13 +26,19 @@ enum StoreProductID {
     /// One-time purchase that redeems as one tier-2 (Family Cookbook
     /// creation) credit. Same "product ID string unchanged" reasoning.
     static let familyCookbookCredit = "VibeApp.cookbook.groupCreationCredit"
+    /// Auto-renewing yearly subscription — an alternative path to the same
+    /// group-join/publish access `proUserLifetime` grants, for members who
+    /// prefer year-to-year billing over a lifetime purchase. See
+    /// Entitlement.isActiveAnnualProMember for how this is checked.
+    static let annualProMembership = "VibeApp.cookbook.annualProMembership"
 
-    static let all = [proUserLifetime, familyCookbookCredit]
+    static let all = [proUserLifetime, familyCookbookCredit, annualProMembership]
 }
 
 enum PurchaseKind: Equatable {
     case nonConsumable
     case consumable
+    case autoRenewable
 }
 
 struct PurchasableProduct: Identifiable, Equatable {

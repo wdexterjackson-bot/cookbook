@@ -42,7 +42,37 @@
     "_storefront" : "USA",
     "_storeKitErrors" : []
   },
-  "subscriptionGroups" : [],
+  "subscriptionGroups" : [
+    {
+      "id" : "08710E65-E729-4028-A259-6EBDFA38C18F",
+      "localizations" : [],
+      "name" : "Pro Membership",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "19.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "8D1330A6-35FC-4916-B7C2-67623F85409B",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "A year of the same ability to join and connect with unlimited family/friends' cookbooks that the lifetime Pro User purchase grants. Auto-renews yearly unless cancelled.",
+              "displayName" : "Annual Pro Membership",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "VibeApp.cookbook.annualProMembership",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Annual Pro Membership",
+          "subscriptionGroupID" : "08710E65-E729-4028-A259-6EBDFA38C18F",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : []
+        }
+      ]
+    }
+  ],
   "version" : {
     "major" : 3,
     "minor" : 0

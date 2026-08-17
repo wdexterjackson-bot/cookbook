@@ -31,6 +31,7 @@ enum EntitlementGate {
     static func forGroupJoin(_ entitlement: Entitlement?, group: FamilyGroup) -> EntitlementGateOutcome {
         if group.isMFB == true { return .exempt }
         if entitlement?.isProUser == true { return .exempt }
+        if entitlement?.isActiveAnnualProMember == true { return .exempt }
         let credits = entitlement?.tier1Credits ?? 0
         return credits > 0 ? .needsConfirmation(creditsAvailable: credits) : .needsPurchase
     }

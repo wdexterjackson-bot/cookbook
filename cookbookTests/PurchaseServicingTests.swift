@@ -60,6 +60,27 @@ struct PurchaseServicingTests {
         #expect(await service.currentEntitlementProductIDs().isEmpty)
     }
 
+    /// StoreKitPurchaseService.purchasableProduct(from:)'s real .autoRenewable
+    /// mapping needs a live StoreKit `Product` and isn't unit-testable here —
+    /// FakePurchaseService deliberately doesn't import StoreKit at all. This
+    /// covers everything above that seam: the DTO/coordinator plumbing
+    /// behaves identically for an auto-renewable product as for the existing
+    /// kinds. The mapping itself is verified manually via Configuration.storekit
+    /// in the Simulator.
+    @Test func autoRenewableProductPurchasesAndSubmitsAClaimLikeAnyOtherKind() async throws {
+        let service = FakePurchaseService()
+        service.stubbedProducts = [makeProduct(id: StoreProductID.annualProMembership, kind: .autoRenewable)]
+        let receipt = PurchaseReceipt(transactionID: "t1", productID: StoreProductID.annualProMembership, jwsRepresentation: "jws")
+        service.outcomeForProductID[StoreProductID.annualProMembership] = .success(receipt)
+
+        let products = try await service.fetchProducts()
+        #expect(products.first?.kind == .autoRenewable)
+
+        let outcome = try await service.purchase(productID: StoreProductID.annualProMembership)
+        #expect(outcome == .success(receipt))
+        #expect(await service.currentEntitlementProductIDs() == [StoreProductID.annualProMembership])
+    }
+
     @Test func restorePurchasesTracksCallCount() async throws {
         let service = FakePurchaseService()
 
