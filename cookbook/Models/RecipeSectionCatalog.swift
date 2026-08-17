@@ -21,7 +21,7 @@ enum RecipeSectionCatalog {
         "Appetizers",
         "Bakery",
         "Bakery (Breads & Rolls)",
-        "Beverage",
+        "Beverages",
         "Breakfast",
         "Brunch",
         "Cakes",

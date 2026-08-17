@@ -30,7 +30,7 @@ enum CookbookSectionIconCatalog {
         ("Appetizers", "01-appetizers"),
         ("Bakery", "33-bakery"),
         ("Bakery (Breads & Rolls)", "09-bakery-breads-and-rolls"),
-        ("Beverage", "13-beverage"),
+        ("Beverages", "13-beverage"),
         ("Breakfast", "10-breakfast"),
         ("Brunch", "20-brunch"),
         ("Cakes", "34-cakes"),
