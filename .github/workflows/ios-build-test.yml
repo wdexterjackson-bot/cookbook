@@ -1,0 +1,68 @@
+name: iOS build & test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # This project targets a very recent Xcode/iOS SDK (IPHONEOS_DEPLOYMENT_TARGET
+      # 26.5 as of 2026-08-17). macos-latest's default Xcode may lag behind that.
+      # If the build step below fails with an SDK/deployment-target error, list what
+      # this runner actually has (`ls /Applications | grep Xcode`) and pin an exact
+      # version with an explicit `sudo xcode-select -s /Applications/Xcode_<ver>.app`
+      # step, or switch to a `maxim-lobanov/setup-xcode` action once you know which
+      # version to pin.
+      - name: Show available Xcode versions
+        run: ls /Applications | grep Xcode
+
+      # GoogleService-Info.plist and Secrets.plist are gitignored (contain API
+      # keys) and are never committed. Reconstruct them here from base64-encoded
+      # repo secrets. Add these two secrets once in GitHub: Settings → Secrets and
+      # variables → Actions → New repository secret:
+      #   GOOGLE_SERVICE_INFO_PLIST_BASE64 — `base64 -i cookbook/GoogleService-Info.plist | pbcopy`
+      #   SECRETS_PLIST_BASE64             — `base64 -i cookbook/Secrets.plist | pbcopy`
+      # Until both secrets are added, this step writes empty files and the build
+      # will fail at the Firebase-config-missing point rather than silently using
+      # stale/wrong credentials.
+      - name: Restore Firebase config
+        env:
+          GOOGLE_SERVICE_INFO_PLIST_BASE64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+          SECRETS_PLIST_BASE64: ${{ secrets.SECRETS_PLIST_BASE64 }}
+        run: |
+          echo "$GOOGLE_SERVICE_INFO_PLIST_BASE64" | base64 --decode > cookbook/GoogleService-Info.plist
+          echo "$SECRETS_PLIST_BASE64" | base64 --decode > cookbook/Secrets.plist
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project cookbook.xcodeproj -scheme cookbook
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project cookbook.xcodeproj \
+            -scheme cookbook \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -configuration Debug
+
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project cookbook.xcodeproj \
+            -scheme cookbook \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -only-testing:cookbookTests
+
+      # UI tests (cookbookUITests) are deliberately not run here — the project's
+      # own recaps document them as flaky in this environment (no idb, XCUITest
+      # instability). Revisit once that's addressed rather than making CI red
+      # on a known-flaky suite.

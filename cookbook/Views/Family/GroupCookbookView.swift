@@ -202,6 +202,7 @@ struct GroupCookbookView: View {
                         .foregroundStyle(star <= (myRating ?? 0) ? Color.potluckSunflower : .secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Rate \(star) star\(star == 1 ? "" : "s")")
             }
             Text(averageRatingText(for: publication))
                 .font(.caption)

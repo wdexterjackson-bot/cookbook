@@ -27,12 +27,14 @@ struct PotluckStepper<Value: Strideable, Label: View>: View {
                 Image(systemName: "minus.circle")
             }
             .disabled(value <= range.lowerBound)
+            .accessibilityLabel("Decrease")
             Button {
                 value = min(range.upperBound, value.advanced(by: step))
             } label: {
                 Image(systemName: "plus.circle")
             }
             .disabled(value >= range.upperBound)
+            .accessibilityLabel("Increase")
         }
         #else
         Stepper(value: $value, in: range, step: step, label: label)
