@@ -40,6 +40,7 @@ struct CookbookConfigurationView: View {
 
     private let syncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService()
     private let photoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
 
     @State private var title: String
     @State private var coverColorHex: String
@@ -464,9 +465,11 @@ struct CookbookConfigurationView: View {
             let cookbookID = cookbook.id
             let recipeDescriptor = FetchDescriptor<Recipe>(predicate: #Predicate<Recipe> { $0.cookbookID == cookbookID })
             let recipes = try modelContext.fetch(recipeDescriptor)
+            let entitlement = try? await entitlementService.fetchEntitlement(userID: ownerUserID)
             try await PersonalCookbookSyncCoordinator.push(
                 cookbook, recipes: recipes, ownerUserID: ownerUserID,
-                syncService: syncService, photoUploadService: photoUploadService
+                syncService: syncService, photoUploadService: photoUploadService,
+                isActiveProMember: entitlement?.isEffectivelyProUser ?? false
             )
             try? modelContext.save()
             dismiss()

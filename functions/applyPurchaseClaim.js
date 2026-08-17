@@ -10,6 +10,7 @@
 // kept as-is since renaming would mean a new App Store Connect product.
 const PRO_USER_LIFETIME_PRODUCT_ID = 'VibeApp.cookbook.familyUser.lifetime';
 const FAMILY_COOKBOOK_CREDIT_PRODUCT_ID = 'VibeApp.cookbook.groupCreationCredit';
+const ANNUAL_PRO_MEMBERSHIP_PRODUCT_ID = 'VibeApp.cookbook.annualProMembership';
 
 async function applyPurchaseClaim({ db, claimID, claimData, verifyTransaction }) {
   const decoded = await verifyTransaction(claimData.jwsRepresentation);
@@ -46,6 +47,16 @@ async function applyPurchaseClaim({ db, claimID, claimData, verifyTransaction })
       updates = { isProUser: true };
     } else if (decoded.productId === FAMILY_COOKBOOK_CREDIT_PRODUCT_ID) {
       updates = { tier2Credits: (current.tier2Credits || 0) + 1 };
+    } else if (decoded.productId === ANNUAL_PRO_MEMBERSHIP_PRODUCT_ID) {
+      // expiresDate is Apple's own epoch-millis field on a subscription
+      // transaction — the real source of truth for when this purchase's
+      // term ends. Clearing annualProMembershipImagesRemovedAt covers a
+      // re-subscribe after a prior 90-day sweep already removed photos.
+      updates = {
+        annualProMembershipExpiresAt: new Date(decoded.expiresDate),
+        annualProMembershipOriginalTransactionID: decoded.originalTransactionId,
+        annualProMembershipImagesRemovedAt: null,
+      };
     } else {
       throw new Error(`Unknown productID on claim ${claimID}: ${decoded.productId}`);
     }
@@ -65,4 +76,5 @@ module.exports = {
   applyPurchaseClaim,
   PRO_USER_LIFETIME_PRODUCT_ID,
   FAMILY_COOKBOOK_CREDIT_PRODUCT_ID,
+  ANNUAL_PRO_MEMBERSHIP_PRODUCT_ID,
 };

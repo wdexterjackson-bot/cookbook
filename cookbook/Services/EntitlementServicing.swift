@@ -71,8 +71,7 @@ protocol EntitlementServicing {
 
 extension EntitlementServicing {
     func isProUser(userID: String) async throws -> Bool {
-        guard let entitlement = try await fetchEntitlement(userID: userID) else { return false }
-        return entitlement.isProUser || entitlement.isActiveAnnualProMember
+        try await fetchEntitlement(userID: userID)?.isEffectivelyProUser ?? false
     }
 
     func availableTier1Credits(userID: String) async throws -> Int {

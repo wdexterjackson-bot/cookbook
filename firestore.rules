@@ -85,6 +85,40 @@ service cloud.firestore {
     function priorRedeemedDiscountCodes(entitlementData) {
       return ('redeemedDiscountCodes' in entitlementData) ? entitlementData.redeemedDiscountCodes : [];
     }
+    // The six fields the Annual Pro Member sweep/webhook (Cloud Functions,
+    // via the Admin SDK, which bypasses these rules entirely) writes —
+    // never client-writable through any of the transitions below. Same
+    // 'in'-guarded-default tolerance as the helpers above, using null as
+    // the sentinel (works uniformly across the mixed String?/Timestamp?/
+    // Bool? types here, unlike a type-specific default).
+    function priorImagesRemovedAt(entitlementData) {
+      return ('annualProMembershipImagesRemovedAt' in entitlementData) ? entitlementData.annualProMembershipImagesRemovedAt : null;
+    }
+    function priorOriginalTransactionID(entitlementData) {
+      return ('annualProMembershipOriginalTransactionID' in entitlementData) ? entitlementData.annualProMembershipOriginalTransactionID : null;
+    }
+    function priorBillingRetryUntil(entitlementData) {
+      return ('annualProMembershipBillingRetryUntil' in entitlementData) ? entitlementData.annualProMembershipBillingRetryUntil : null;
+    }
+    function priorWillRenew(entitlementData) {
+      return ('annualProMembershipWillRenew' in entitlementData) ? entitlementData.annualProMembershipWillRenew : null;
+    }
+    function priorWarnedAtDay75(entitlementData) {
+      return ('annualProMembershipWarnedAtDay75' in entitlementData) ? entitlementData.annualProMembershipWarnedAtDay75 : null;
+    }
+    function priorWarnedAtDay85(entitlementData) {
+      return ('annualProMembershipWarnedAtDay85' in entitlementData) ? entitlementData.annualProMembershipWarnedAtDay85 : null;
+    }
+    // Bundles all six pins into one call so each update branch below reads
+    // as one line instead of six repeated ones.
+    function subscriptionServerFieldsUnchanged(before, after) {
+      return priorImagesRemovedAt(after) == priorImagesRemovedAt(before)
+        && priorOriginalTransactionID(after) == priorOriginalTransactionID(before)
+        && priorBillingRetryUntil(after) == priorBillingRetryUntil(before)
+        && priorWillRenew(after) == priorWillRenew(before)
+        && priorWarnedAtDay75(after) == priorWarnedAtDay75(before)
+        && priorWarnedAtDay85(after) == priorWarnedAtDay85(before);
+    }
     // Tolerant "unchanged" comparison for a field that may be entirely
     // absent on either side (never-activated membership) — same "field
     // absent means a sentinel default" tolerance as the credit counts
@@ -158,6 +192,12 @@ service cloud.firestore {
         && !('annualProMembershipCredits' in request.resource.data)
         && !('annualProMembershipExpiresAt' in request.resource.data)
         && !('redeemedDiscountCodes' in request.resource.data)
+        && !('annualProMembershipImagesRemovedAt' in request.resource.data)
+        && !('annualProMembershipOriginalTransactionID' in request.resource.data)
+        && !('annualProMembershipBillingRetryUntil' in request.resource.data)
+        && !('annualProMembershipWillRenew' in request.resource.data)
+        && !('annualProMembershipWarnedAtDay75' in request.resource.data)
+        && !('annualProMembershipWarnedAtDay85' in request.resource.data)
         && (
           (request.time < tier1ExpirationTimestamp()
             && request.resource.data.tier1Credits == 1
@@ -203,7 +243,8 @@ service cloud.firestore {
             && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data)
             && priorAnnualCredits(request.resource.data) == priorAnnualCredits(resource.data)
             && annualExpiresAtOrEpoch(request.resource.data) == annualExpiresAtOrEpoch(resource.data)
-            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data))
+            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data)
+            && subscriptionServerFieldsUnchanged(resource.data, request.resource.data))
           ||
           // Spending a tier-1 credit to become a Pro User — flips both
           // together, exactly once, nothing else moves. Same expiration
@@ -219,7 +260,8 @@ service cloud.firestore {
             && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data)
             && priorAnnualCredits(request.resource.data) == priorAnnualCredits(resource.data)
             && annualExpiresAtOrEpoch(request.resource.data) == annualExpiresAtOrEpoch(resource.data)
-            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data))
+            && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data)
+            && subscriptionServerFieldsUnchanged(resource.data, request.resource.data))
           ||
           // Backfilling a free launch credit this account hasn't received
           // yet (an entitlement doc that predates one/both tiers, possibly
@@ -265,6 +307,7 @@ service cloud.firestore {
             && priorAnnualCredits(request.resource.data) == priorAnnualCredits(resource.data)
             && annualExpiresAtOrEpoch(request.resource.data) == annualExpiresAtOrEpoch(resource.data)
             && priorRedeemedDiscountCodes(request.resource.data) == priorRedeemedDiscountCodes(resource.data)
+            && subscriptionServerFieldsUnchanged(resource.data, request.resource.data)
           )
           ||
           // Spending an Annual Pro Membership credit — decrements by 1,
@@ -285,7 +328,8 @@ service cloud.firestore {
             && request.resource.data.tier2Credits == priorTier2Credits(resource.data)
             && isProUserFlag(request.resource.data) == isProUserFlag(resource.data)
             && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
-            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data)
+            && subscriptionServerFieldsUnchanged(resource.data, request.resource.data))
           ||
           // Redeeming the one active discount code for one Annual Pro
           // Membership credit. The code and its deadline are enforced
@@ -303,7 +347,8 @@ service cloud.firestore {
             && request.resource.data.tier2Credits == priorTier2Credits(resource.data)
             && isProUserFlag(request.resource.data) == isProUserFlag(resource.data)
             && request.resource.data.receivedTier1PromoCredit == hasReceivedTier1(resource.data)
-            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data))
+            && request.resource.data.receivedTier2PromoCredits == hasReceivedTier2(resource.data)
+            && subscriptionServerFieldsUnchanged(resource.data, request.resource.data))
         );
 
       allow delete: if false;

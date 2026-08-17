@@ -110,7 +110,7 @@ struct PersonalCookbookSyncServicingTests {
 
         try await PersonalCookbookSyncCoordinator.push(
             cookbook, recipes: [recipe], ownerUserID: "alice",
-            syncService: syncService, photoUploadService: photoService
+            syncService: syncService, photoUploadService: photoService, isActiveProMember: true
         )
 
         // Simulate a second device: fresh in-memory context, nothing local yet.
@@ -129,6 +129,69 @@ struct PersonalCookbookSyncServicingTests {
         #expect(pulledRecipes.map(\.title) == ["Cornbread"])
     }
 
+    @Test func pushingAsANonProMemberSkipsPhotoUploadEntirely() async throws {
+        let context = try makeInMemoryContext()
+        let syncService = InMemoryPersonalCookbookSyncService()
+        let photoService = FakePersonalCookbookPhotoUploadService()
+
+        let cookbook = Cookbook(ownerID: "alice", title: "Weeknight Dinners")
+        let recipe = Recipe(ownerID: "alice", title: "Cornbread")
+        recipe.cookbookID = cookbook.id
+        recipe.heroPhotoFilename = try PhotoStore.save(Data([0xFF, 0xD8, 0xFF]))
+        context.insert(cookbook)
+        context.insert(recipe)
+        try context.save()
+
+        try await PersonalCookbookSyncCoordinator.push(
+            cookbook, recipes: [recipe], ownerUserID: "alice",
+            syncService: syncService, photoUploadService: photoService, isActiveProMember: false
+        )
+
+        #expect(photoService.uploadedFileKeys.isEmpty)
+        let (_, pulledRecipes) = try await syncService.pull(cookbookID: cookbook.id, ownerUserID: "alice")
+        #expect(pulledRecipes.first?.heroPhotoURL == nil)
+
+        PhotoStore.delete(recipe.heroPhotoFilename!)
+    }
+
+    /// The gate must not silently blank out a photo already synced from
+    /// when the account was an active Pro Member — only new uploads are
+    /// Pro-exclusive, not already-synced state.
+    @Test func lapsingAfterAPreviousProPushPreservesTheAlreadySyncedPhotoURL() async throws {
+        let context = try makeInMemoryContext()
+        let syncService = InMemoryPersonalCookbookSyncService()
+        let photoService = FakePersonalCookbookPhotoUploadService()
+
+        let cookbook = Cookbook(ownerID: "alice", title: "Weeknight Dinners")
+        let recipe = Recipe(ownerID: "alice", title: "Cornbread")
+        recipe.cookbookID = cookbook.id
+        recipe.heroPhotoFilename = try PhotoStore.save(Data([0xFF, 0xD8, 0xFF]))
+        context.insert(cookbook)
+        context.insert(recipe)
+        try context.save()
+
+        try await PersonalCookbookSyncCoordinator.push(
+            cookbook, recipes: [recipe], ownerUserID: "alice",
+            syncService: syncService, photoUploadService: photoService, isActiveProMember: true
+        )
+        let (_, firstPullRecipes) = try await syncService.pull(cookbookID: cookbook.id, ownerUserID: "alice")
+        let originalURL = firstPullRecipes.first?.heroPhotoURL
+        #expect(originalURL != nil)
+        #expect(photoService.uploadedFileKeys.count == 1)
+
+        // Membership lapses; re-push with no local photo change.
+        try await PersonalCookbookSyncCoordinator.push(
+            cookbook, recipes: [recipe], ownerUserID: "alice",
+            syncService: syncService, photoUploadService: photoService, isActiveProMember: false
+        )
+
+        #expect(photoService.uploadedFileKeys.count == 1, "a lapsed push must not upload again")
+        let (_, secondPullRecipes) = try await syncService.pull(cookbookID: cookbook.id, ownerUserID: "alice")
+        #expect(secondPullRecipes.first?.heroPhotoURL == originalURL, "the previously-synced URL must survive a lapsed re-push")
+
+        PhotoStore.delete(recipe.heroPhotoFilename!)
+    }
+
     @Test func pullingATwiceSyncedCookbookOverwritesTheLocalCopyInPlace() async throws {
         let context = try makeInMemoryContext()
         let syncService = InMemoryPersonalCookbookSyncService()
@@ -140,7 +203,7 @@ struct PersonalCookbookSyncServicingTests {
 
         try await PersonalCookbookSyncCoordinator.push(
             cookbook, recipes: [], ownerUserID: "alice",
-            syncService: syncService, photoUploadService: photoService
+            syncService: syncService, photoUploadService: photoService, isActiveProMember: true
         )
         _ = try await PersonalCookbookSyncCoordinator.pull(
             cookbookID: cookbook.id, ownerUserID: "alice",
@@ -179,7 +242,7 @@ struct PersonalCookbookSyncServicingTests {
 
         try await PersonalCookbookSyncCoordinator.push(
             cookbook, recipes: [keptRecipe], ownerUserID: "alice",
-            syncService: syncService, photoUploadService: photoService
+            syncService: syncService, photoUploadService: photoService, isActiveProMember: true
         )
         _ = try await PersonalCookbookSyncCoordinator.pull(
             cookbookID: cookbook.id, ownerUserID: "alice",

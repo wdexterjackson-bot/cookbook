@@ -175,6 +175,14 @@ struct Entitlement: Decodable, Equatable {
         (annualProMembershipExpiresAt ?? .distantPast) > .now
     }
 
+    /// True for a lifetime Family User purchase OR an active Annual Pro
+    /// Membership — the one property every Pro-gated check (group join,
+    /// Pro-exclusive photo sync) should read instead of checking isProUser
+    /// and isActiveAnnualProMember separately at each call site.
+    var isEffectivelyProUser: Bool {
+        isProUser || isActiveAnnualProMember
+    }
+
     private enum CodingKeys: String, CodingKey {
         case userID, tier1Credits, tier2Credits, isProUser
         case receivedTier1PromoCredit, receivedTier2PromoCredits, createdAt

@@ -296,6 +296,37 @@ describe('entitlements', () => {
       tier2Credits: 1, annualProMembershipCredits: 1,
     })));
   });
+
+  // The six fields the Annual Pro Member sweep/webhook (Cloud Functions,
+  // via the Admin SDK) writes — must never be settable by any client write,
+  // including smuggled alongside an otherwise-legitimate transition. Each
+  // one is tried on both create and every one of the five update branches;
+  // one representative branch (tier-2 spend) per field keeps this from
+  // being 30 near-identical cases, since all five branches now share the
+  // same subscriptionServerFieldsUnchanged(...) guard.
+  const SUBSCRIPTION_SERVER_ONLY_FIELDS = {
+    annualProMembershipImagesRemovedAt: Timestamp.now(),
+    annualProMembershipOriginalTransactionID: 'txn-123',
+    annualProMembershipBillingRetryUntil: Timestamp.now(),
+    annualProMembershipWillRenew: true,
+    annualProMembershipWarnedAtDay75: true,
+    annualProMembershipWarnedAtDay85: true,
+  };
+
+  for (const [field, value] of Object.entries(SUBSCRIPTION_SERVER_ONLY_FIELDS)) {
+    it(`rejects seeding ${field} directly at create time`, async () => {
+      const alice = testEnv.authenticatedContext('alice').firestore();
+      await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({ [field]: value })));
+    });
+
+    it(`rejects smuggling ${field} into a tier-2-spend write`, async () => {
+      await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData()));
+      const alice = testEnv.authenticatedContext('alice').firestore();
+      await assertFails(setDoc(doc(alice, 'entitlements/alice'), entitlementData({
+        tier2Credits: 1, [field]: value,
+      })));
+    });
+  }
 });
 
 describe('group creation', () => {

@@ -94,6 +94,32 @@ test('is idempotent for the same Apple transaction ID', async () => {
   assert.equal(entitlement.tier2Credits, 1);
 });
 
+test('sets annualProMembershipExpiresAt/OriginalTransactionID and clears a prior sweep marker for the subscription product', async () => {
+  await db.collection('entitlements').doc('erin').set({
+    userID: 'erin', tier1Credits: 0, tier2Credits: 0, isProUser: false,
+    receivedTier1PromoCredit: true, receivedTier2PromoCredits: true, createdAt: Timestamp.now(),
+    annualProMembershipImagesRemovedAt: Timestamp.fromDate(new Date('2026-01-01')),
+  });
+
+  const expiresDateMs = Date.parse('2027-08-17T00:00:00.000Z');
+  await applyPurchaseClaim({
+    db,
+    claimID: 'txn6',
+    claimData: { userID: 'erin', productID: 'VibeApp.cookbook.annualProMembership', transactionID: 'txn6', jwsRepresentation: 'stub' },
+    verifyTransaction: fakeVerifier({
+      transactionId: 'txn6',
+      productId: 'VibeApp.cookbook.annualProMembership',
+      originalTransactionId: 'orig-txn6',
+      expiresDate: expiresDateMs,
+    }),
+  });
+
+  const entitlement = (await db.collection('entitlements').doc('erin').get()).data();
+  assert.equal(entitlement.annualProMembershipExpiresAt.toMillis(), expiresDateMs);
+  assert.equal(entitlement.annualProMembershipOriginalTransactionID, 'orig-txn6');
+  assert.equal(entitlement.annualProMembershipImagesRemovedAt, null);
+});
+
 test('rejects a claim whose decoded transaction does not match the submitted fields', async () => {
   await assert.rejects(() => applyPurchaseClaim({
     db,

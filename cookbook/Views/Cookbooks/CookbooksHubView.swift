@@ -66,6 +66,7 @@ struct CookbooksHubView: View {
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let syncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService()
     private let photoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
 
     private var ownedCookbooks: [Cookbook] {
         allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
@@ -406,9 +407,11 @@ struct CookbooksHubView: View {
         syncingCookbookID = cookbook.persistentModelID
         defer { syncingCookbookID = nil }
         do {
+            let entitlement = try? await entitlementService.fetchEntitlement(userID: ownerUserID)
             try await PersonalCookbookSyncCoordinator.push(
                 cookbook, recipes: recipesInCookbook, ownerUserID: ownerUserID,
-                syncService: syncService, photoUploadService: photoUploadService
+                syncService: syncService, photoUploadService: photoUploadService,
+                isActiveProMember: entitlement?.isEffectivelyProUser ?? false
             )
             try? modelContext.save()
         } catch {

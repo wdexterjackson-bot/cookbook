@@ -68,6 +68,7 @@ struct HomeView: View {
     @State private var isPresentingFileImport = false
     @State private var isPresentingCommunitySearch = false
     @State private var isPresentingGettingStartedVideo = false
+    @State private var entitlement: Entitlement?
 
     /// Synthetic id for the MFB placeholder — it has no real Invitation
     /// record to key InvitationCardState off of.
@@ -146,6 +147,10 @@ struct HomeView: View {
                     continueCookingCard
 
                     gettingStartedCard
+
+                    annualMembershipWarningBanner
+
+                    annualMembershipWontRenewBadge
 
                     if hasAnyMessagesContent && (!communityCookbooksAreLive || hasActivePendingInvitation) {
                         messagesStrip
@@ -264,10 +269,12 @@ struct HomeView: View {
                 loadInvitationCardState()
                 await loadGroupData()
                 await loadCloudSummaries()
+                await loadEntitlement()
             }
             .refreshable {
                 await loadGroupData()
                 await loadCloudSummaries()
+                await loadEntitlement()
             }
         }
         .entitlementGate(
@@ -830,6 +837,59 @@ struct HomeView: View {
 
     // MARK: - Cloud Sync
 
+    /// Two severities: a calmer notice starting at day 75 past
+    /// annualProMembershipExpiresAt, an urgent one from day 85 — both
+    /// still well before the 90-day photo-deletion sweep, so there's a
+    /// real window to act. Absent entirely once the member has renewed or
+    /// never subscribed at all (daysPastAnnualMembershipExpiration is nil).
+    @ViewBuilder
+    private var annualMembershipWarningBanner: some View {
+        if let daysPast = daysPastAnnualMembershipExpiration, daysPast >= 75, let expiresAt = entitlement?.annualProMembershipExpiresAt {
+            let isUrgent = daysPast >= 85
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: isUrgent ? "exclamationmark.triangle.fill" : "clock.badge.exclamationmark")
+                    .foregroundStyle(isUrgent ? .red : .orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(isUrgent ? "Your Cloud Photos Will Be Removed Soon" : "Your Pro Membership Expired")
+                        .font(.potluckSemiboldBody(15))
+                    Text("Your Annual Pro Membership expired on \(expiresAt.formatted(date: .abbreviated, time: .omitted)). Renew within 90 days of that date to keep your cloud-synced photos.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Renew Membership") {
+                        isPresentingAccount = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Spacer()
+            }
+            .padding()
+            .background(Color.white.opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+            .padding(.horizontal)
+        }
+    }
+
+    /// Quiet, non-urgent — the membership is still active, this is purely
+    /// informational so a member who turned off auto-renew isn't caught
+    /// off guard weeks later with no earlier signal (annualProMembershipWillRenew,
+    /// last known from an appStoreServerNotifications DID_CHANGE_RENEWAL_STATUS).
+    @ViewBuilder
+    private var annualMembershipWontRenewBadge: some View {
+        if entitlement?.isActiveAnnualProMember == true,
+           entitlement?.annualProMembershipWillRenew == false,
+           let expiresAt = entitlement?.annualProMembershipExpiresAt {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.2.circlepath.circle")
+                    .foregroundStyle(.secondary)
+                Text("Your Annual Pro Membership won't renew — active through \(expiresAt.formatted(date: .abbreviated, time: .omitted)).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+        }
+    }
+
     /// One card per cookbook this account has ever synced to the cloud
     /// (FirestorePersonalCookbookSyncService.fetchSyncedCookbooks), not
     /// just ones already on this device — the whole point is surfacing a
@@ -939,6 +999,24 @@ struct HomeView: View {
         cloudSummaries = (try? await syncService.fetchSyncedCookbooks(forUser: userID)) ?? []
     }
 
+    private func loadEntitlement() async {
+        guard let userID = accountState.currentUserID else {
+            entitlement = nil
+            return
+        }
+        entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+    }
+
+    /// Days past annualProMembershipExpiresAt — nil while still active or
+    /// never activated. Computed client-side from the same date the sweep
+    /// itself reads; the two warning touchpoints (day 75/85) are purely a
+    /// display threshold here, independent of the sweep's own
+    /// once-per-lapse email dedup markers.
+    private var daysPastAnnualMembershipExpiration: Int? {
+        guard let expiresAt = entitlement?.annualProMembershipExpiresAt, expiresAt < .now else { return nil }
+        return Calendar.current.dateComponents([.day], from: expiresAt, to: .now).day
+    }
+
     private func loadFromCloud(_ summary: PersonalCookbookSummary) async {
         guard let ownerUserID = accountState.currentUserID else { return }
         busyCloudCookbookID = summary.id
@@ -961,7 +1039,8 @@ struct HomeView: View {
         do {
             try await PersonalCookbookSyncCoordinator.push(
                 cookbook, recipes: recipesInCookbook, ownerUserID: ownerUserID,
-                syncService: syncService, photoUploadService: photoUploadService
+                syncService: syncService, photoUploadService: photoUploadService,
+                isActiveProMember: entitlement?.isEffectivelyProUser ?? false
             )
             try? modelContext.save()
             await loadCloudSummaries()

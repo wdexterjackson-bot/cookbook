@@ -1,5 +1,7 @@
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onRequest } = require('firebase-functions/v2/https');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
@@ -8,6 +10,9 @@ const { applyPurchaseClaim } = require('./applyPurchaseClaim');
 const { verifyTransaction } = require('./purchaseClaimVerifier');
 const { resolveSignInProviders, RateLimitExceededError } = require('./resolveSignInProviders');
 const { deleteGroupPermanently } = require('./deleteGroupPermanently');
+const { handleAppStoreServerNotification } = require('./appStoreServerNotifications');
+const { decodeAndVerifyNotification } = require('./appStoreServerNotificationVerifier');
+const { sweepLapsedAnnualProMembers } = require('./sweepLapsedAnnualProMembers');
 
 initializeApp();
 
@@ -66,4 +71,41 @@ exports.deleteGroupPermanently = onCall(async (request) => {
     console.error('deleteGroupPermanently failed:', error);
     throw new HttpsError('internal', error.message || 'Could not delete this cookbook right now.');
   }
+});
+
+// Apple calls this directly — there is no Firebase auth context here at
+// all. All security is the JWS signature check inside
+// decodeAndVerifyNotification (appStoreServerNotificationVerifier.js). The
+// App Store Server Notifications V2 endpoint URL, once deployed, must be
+// configured in App Store Connect and verified via Apple's sandbox
+// "Request a Test Notification" tool before any real purchase flow ships.
+exports.appStoreServerNotifications = onRequest(async (req, res) => {
+  const signedPayload = req.body && req.body.signedPayload;
+  if (!signedPayload) {
+    // Malformed request, not an Apple notification at all — 400, not 200,
+    // so this doesn't get silently marked as "handled" in Apple's logs.
+    res.status(400).send('Missing signedPayload');
+    return;
+  }
+  try {
+    await handleAppStoreServerNotification({ db: getFirestore(), decodeAndVerifyNotification, signedPayload });
+    res.status(200).send('OK');
+  } catch (error) {
+    // Apple retries on non-2xx — deliberate here, since a thrown error at
+    // this level (verification failure, unexpected shape) is exactly the
+    // case where a retry might succeed once whatever's wrong is fixed.
+    console.error('appStoreServerNotifications failed:', error);
+    res.status(500).send('Internal error');
+  }
+});
+
+// Daily sweep for lapsed Annual Pro Memberships — deletes a lapsed member's
+// personal-cookbook photos 90 days past annualProMembershipExpiresAt (never
+// their Firestore recipe/cookbook data), plus day-75/day-85 warning
+// markers ahead of that. Requires the Cloud Scheduler API enabled on the
+// real GCP project before this actually runs in production (one-time
+// console step).
+exports.annualProMembershipSweep = onSchedule('every day 03:00', async () => {
+  const result = await sweepLapsedAnnualProMembers({ db: getFirestore(), bucket: getStorage().bucket() });
+  console.log(`annualProMembershipSweep: swept ${result.swept}, warned75 ${result.warned75}, warned85 ${result.warned85}.`);
 });

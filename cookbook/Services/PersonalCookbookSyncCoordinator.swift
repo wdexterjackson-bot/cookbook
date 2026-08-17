@@ -30,22 +30,36 @@ enum PersonalCookbookSyncCoordinator {
         recipes: [Recipe],
         ownerUserID: String,
         syncService: PersonalCookbookSyncServicing,
-        photoUploadService: PersonalCookbookPhotoUploadServicing
+        photoUploadService: PersonalCookbookPhotoUploadServicing,
+        isActiveProMember: Bool
     ) async throws {
-        var coverImageURL: String?
+        // A lapsed member's push must never upload a new/changed photo
+        // (Pro-exclusive), but also must not silently blank out a photo
+        // URL already synced from when they were active — fetch whatever
+        // is already remote, once, up front, to fall back to instead of
+        // nil. Active members skip this extra round-trip entirely, since
+        // they always attempt a fresh upload regardless.
+        let existingRemote = isActiveProMember ? nil : try? await syncService.pull(cookbookID: cookbook.id, ownerUserID: ownerUserID)
+        let existingRecipeDocsByID = Dictionary(uniqueKeysWithValues: (existingRemote?.recipes ?? []).map { ($0.id, $0) })
+
+        var coverImageURL: String? = existingRemote?.cookbook.coverImageURL
         if let filename = cookbook.coverImageFilename, let data = PhotoStore.data(for: filename) {
-            // Best-effort, matching RecipePublishingCoordinator's own
-            // reasoning: a cover-photo upload hiccup shouldn't block
-            // syncing the cookbook's actual content — but it's logged
-            // (not just swallowed) so a persistent failure is diagnosable
-            // instead of just "the photo never shows up," same lesson as
-            // the credit-backfill silent-try? bug.
-            do {
-                coverImageURL = try await photoUploadService.upload(
-                    imageData: data, ownerUserID: ownerUserID, fileKey: "cover_\(cookbook.id.uuidString)"
-                ).absoluteString
-            } catch {
-                NSLog("[PersonalCookbookSync] cover image upload failed: \(error)")
+            if isActiveProMember {
+                // Best-effort, matching RecipePublishingCoordinator's own
+                // reasoning: a cover-photo upload hiccup shouldn't block
+                // syncing the cookbook's actual content — but it's logged
+                // (not just swallowed) so a persistent failure is diagnosable
+                // instead of just "the photo never shows up," same lesson as
+                // the credit-backfill silent-try? bug.
+                do {
+                    coverImageURL = try await photoUploadService.upload(
+                        imageData: data, ownerUserID: ownerUserID, fileKey: "cover_\(cookbook.id.uuidString)"
+                    ).absoluteString
+                } catch {
+                    NSLog("[PersonalCookbookSync] cover image upload failed: \(error)")
+                }
+            } else {
+                NSLog("[PersonalCookbookSync] skipping cover image upload — not an active Pro Member")
             }
         }
 
@@ -69,7 +83,11 @@ enum PersonalCookbookSyncCoordinator {
 
         var recipeDocs: [PersonalCookbookRecipeDoc] = []
         for recipe in recipes {
-            let doc = try await makeRecipeDoc(from: recipe, cookbookID: cookbook.id, ownerUserID: ownerUserID, photoUploadService: photoUploadService)
+            let doc = try await makeRecipeDoc(
+                from: recipe, cookbookID: cookbook.id, ownerUserID: ownerUserID,
+                photoUploadService: photoUploadService, isActiveProMember: isActiveProMember,
+                existingRemoteDoc: existingRecipeDocsByID[recipe.id]
+            )
             recipeDocs.append(doc)
         }
 
@@ -81,29 +99,40 @@ enum PersonalCookbookSyncCoordinator {
         from recipe: Recipe,
         cookbookID: UUID,
         ownerUserID: String,
-        photoUploadService: PersonalCookbookPhotoUploadServicing
+        photoUploadService: PersonalCookbookPhotoUploadServicing,
+        isActiveProMember: Bool,
+        existingRemoteDoc: PersonalCookbookRecipeDoc?
     ) async throws -> PersonalCookbookRecipeDoc {
-        var heroPhotoURL: String?
+        var heroPhotoURL: String? = existingRemoteDoc?.heroPhotoURL
         if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename) {
-            do {
-                heroPhotoURL = try await photoUploadService.upload(
-                    imageData: data, ownerUserID: ownerUserID, fileKey: recipe.id.uuidString
-                ).absoluteString
-            } catch {
-                NSLog("[PersonalCookbookSync] hero photo upload failed for recipe \(recipe.id): \(error)")
+            if isActiveProMember {
+                do {
+                    heroPhotoURL = try await photoUploadService.upload(
+                        imageData: data, ownerUserID: ownerUserID, fileKey: recipe.id.uuidString
+                    ).absoluteString
+                } catch {
+                    NSLog("[PersonalCookbookSync] hero photo upload failed for recipe \(recipe.id): \(error)")
+                }
+            } else {
+                NSLog("[PersonalCookbookSync] skipping hero photo upload for recipe \(recipe.id) — not an active Pro Member")
             }
         }
-        var galleryURLs: [String] = []
-        for (index, filename) in recipe.galleryPhotoFilenames.enumerated() {
-            guard let data = PhotoStore.data(for: filename) else { continue }
-            do {
-                let url = try await photoUploadService.upload(
-                    imageData: data, ownerUserID: ownerUserID, fileKey: "\(recipe.id.uuidString)_gallery\(index)"
-                )
-                galleryURLs.append(url.absoluteString)
-            } catch {
-                NSLog("[PersonalCookbookSync] gallery photo upload failed for recipe \(recipe.id): \(error)")
+        var galleryURLs: [String] = existingRemoteDoc?.galleryPhotoURLs ?? []
+        if isActiveProMember {
+            galleryURLs = []
+            for (index, filename) in recipe.galleryPhotoFilenames.enumerated() {
+                guard let data = PhotoStore.data(for: filename) else { continue }
+                do {
+                    let url = try await photoUploadService.upload(
+                        imageData: data, ownerUserID: ownerUserID, fileKey: "\(recipe.id.uuidString)_gallery\(index)"
+                    )
+                    galleryURLs.append(url.absoluteString)
+                } catch {
+                    NSLog("[PersonalCookbookSync] gallery photo upload failed for recipe \(recipe.id): \(error)")
+                }
             }
+        } else if !recipe.galleryPhotoFilenames.isEmpty {
+            NSLog("[PersonalCookbookSync] skipping gallery photo upload for recipe \(recipe.id) — not an active Pro Member")
         }
 
         return PersonalCookbookRecipeDoc(
