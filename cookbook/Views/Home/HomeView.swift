@@ -10,9 +10,9 @@
 //
 //  Scope notes, stated plainly:
 //  - MFB (Memphis Family Barrentine) doesn't have its own hardcoded
-//    section — instead, any public FamilyGroup with
-//    autoApproveJoinRequests set (MFB or otherwise) surfaces generically
-//    in "Featured cookbooks," which itself is omitted, same as any other
+//    section — instead, any public FamilyGroup with approvalPolicy ==
+//    .noApprovalNeeded (MFB or otherwise) surfaces generically in
+//    "Featured cookbooks," which itself is omitted, same as any other
 //    empty section, until one exists.
 //  - "Recently Added" is scoped to the user's own local recipes for now,
 //    not merged with Firestore Publications from joined groups — a real
@@ -48,7 +48,7 @@ struct HomeView: View {
     /// Invitation's id once Delete has committed its backend decline.
     @State private var deletedInvitationIDs: Set<String> = []
     @State private var invitationActionErrorMessage: String?
-    @State private var joinedGroups: [(membership: Membership, group: FamilyGroup)] = []
+    @State private var joinedGroups: [(membership: Membership, group: FamilyGroup, cookbook: GroupCookbook)] = []
     @State private var featuredGroups: [FamilyGroup] = []
     @State private var busyFeaturedGroupIDs: Set<String> = []
     @State private var featuredGroupErrorMessage: String?
@@ -587,7 +587,7 @@ struct HomeView: View {
             ForEach(activeCardInvitations, id: \.invitation.id) { entry in
                 invitationCard(
                     id: entry.invitation.id,
-                    title: "You've been invited to \(entry.group.cookbookName)",
+                    title: "You've been invited to \(entry.group.name)",
                     onJoin: { Task { await respondToInvitation(entry.invitation, accept: true) } },
                     invitation: entry.invitation
                 )
@@ -599,7 +599,7 @@ struct HomeView: View {
                         ForEach(adminPendingJoinRequests, id: \.request.id) { entry in
                             attentionCard(
                                 kind: "Join Request",
-                                title: "Someone wants to join \(entry.group.cookbookName)",
+                                title: "Someone wants to join \(entry.group.name)",
                                 primaryTitle: "Review"
                             ) {
                                 isPresentingMessages = true
@@ -816,12 +816,12 @@ struct HomeView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    ForEach(joinedGroups, id: \.group.id) { entry in
+                    ForEach(joinedGroups, id: \.cookbook.id) { entry in
                         NavigationLink {
-                            GroupCookbookView(group: entry.group, membership: entry.membership, groupsService: groupsService)
+                            GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
                         } label: {
                             cookbookCover(
-                                title: entry.group.cookbookName,
+                                title: entry.cookbook.cookbookName,
                                 subtitle: "\(entry.group.name)"
                             ) {
                                 joinedGroupCoverImage(entry.group)
@@ -1052,7 +1052,7 @@ struct HomeView: View {
     // MARK: - Featured Cookbooks
 
     /// Public cookbooks the user hasn't joined that let anyone in
-    /// instantly (FamilyGroup.autoApproveJoinRequests) — a small,
+    /// instantly (FamilyGroup.approvalPolicy == .noApprovalNeeded) — a small,
     /// deliberately open set, not a general "browse all public
     /// cookbooks" surface (that's PublicGroupSearchView). Tapping Join
     /// grants membership right away since these opted into that.
@@ -1065,11 +1065,11 @@ struct HomeView: View {
                     ForEach(featuredGroups) { group in
                         VStack(alignment: .leading, spacing: 4) {
                             Spacer()
-                            Text(group.cookbookName)
+                            Text(group.name)
                                 .font(.potluckSemiboldBody(15))
                                 .foregroundStyle(.white)
                                 .lineLimit(2)
-                            Text(group.name)
+                            Text(group.locationText)
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.85))
                             Button("Join") {
@@ -1428,16 +1428,19 @@ struct HomeView: View {
         do {
             let memberships = try await groupsService.fetchMemberships(forUser: userID).filter { $0.status == .active }
             var groups: [(Membership, FamilyGroup)] = []
+            var cookbookEntries: [(Membership, FamilyGroup, GroupCookbook)] = []
             var pendingRequests: [(JoinRequest, FamilyGroup)] = []
             for membership in memberships {
                 guard let group = try await groupsService.fetchGroup(id: membership.groupID) else { continue }
                 groups.append((membership, group))
+                let cookbooks = try await groupsService.fetchGroupCookbooks(forGroup: membership.groupID)
+                cookbookEntries.append(contentsOf: cookbooks.map { (membership, group, $0) })
                 if membership.role == .admin {
                     let pending = try await groupsService.fetchJoinRequests(forGroup: membership.groupID)
                     pendingRequests.append(contentsOf: pending.map { ($0, group) })
                 }
             }
-            joinedGroups = groups
+            joinedGroups = cookbookEntries
             adminPendingJoinRequests = pendingRequests
 
             if let email = accountState.currentUserEmail {
@@ -1455,7 +1458,7 @@ struct HomeView: View {
 
             let joinedIDs = Set(groups.map { $0.1.id })
             let publicGroups = try await groupsService.fetchPublicGroups(matching: PublicGroupSearchFilter(text: nil, locationText: nil))
-            featuredGroups = publicGroups.filter { $0.autoApproveJoinRequests && !joinedIDs.contains($0.id) }
+            featuredGroups = publicGroups.filter { $0.approvalPolicy == .noApprovalNeeded && !joinedIDs.contains($0.id) }
         } catch {
             // Home degrades gracefully — sections requiring this data
             // just don't render rather than showing an error banner.

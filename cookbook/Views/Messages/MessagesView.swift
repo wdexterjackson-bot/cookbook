@@ -56,7 +56,7 @@ struct MessagesView: View {
                     Section("Your Requests") {
                         ForEach(ownJoinRequests, id: \.request.id) { entry in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.group.cookbookName)
+                                Text(entry.group.name)
                                     .font(.headline)
                                 Text(statusText(entry.request.state))
                                     .font(.caption)
@@ -115,7 +115,7 @@ struct MessagesView: View {
     @ViewBuilder
     private func joinRequestRow(_ entry: (request: JoinRequest, group: FamilyGroup)) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(entry.group.cookbookName)
+            Text(entry.group.name)
                 .font(.headline)
             Text("Someone requested to join")
                 .font(.caption)
@@ -136,7 +136,7 @@ struct MessagesView: View {
     @ViewBuilder
     private func invitationRow(_ entry: (invitation: Invitation, group: FamilyGroup)) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(entry.group.cookbookName)
+            Text(entry.group.name)
                 .font(.headline)
             Text("You've been invited to join")
                 .font(.caption)

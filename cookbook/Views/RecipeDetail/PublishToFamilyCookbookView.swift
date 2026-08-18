@@ -20,37 +20,44 @@ struct PublishToFamilyCookbookView: View {
     @Environment(AccountState.self) private var accountState
     @Environment(\.dismiss) private var dismiss
 
-    @State private var eligibleGroups: [FamilyGroup] = []
-    @State private var publishedGroupIDs: Set<String> = []
+    @State private var eligibleCookbooks: [(group: FamilyGroup, cookbook: GroupCookbook)] = []
+    @State private var publishedCookbookIDs: Set<String> = []
     @State private var isLoading = false
-    @State private var busyGroupIDs: Set<String> = []
+    @State private var busyCookbookIDs: Set<String> = []
     @State private var errorMessage: String?
     @State private var statusMessage: String?
+    @State private var allowComments = false
 
     var body: some View {
         NavigationStack {
             List {
-                if eligibleGroups.isEmpty && !isLoading {
+                if eligibleCookbooks.isEmpty && !isLoading {
                     ContentUnavailableView(
                         "No Family Cookbooks to Publish To",
                         systemImage: "person.3",
                         description: Text("Join or create a Family Cookbook first, or ask an admin to allow member publishing.")
                     )
                 } else {
-                    ForEach(eligibleGroups) { group in
+                    Section {
+                        Toggle("Allow Comments?", isOn: $allowComments)
+                    } footer: {
+                        Text("Lets other members comment on this recipe once published. Applies to every cookbook you publish to below.")
+                    }
+
+                    ForEach(eligibleCookbooks, id: \.cookbook.id) { entry in
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(group.cookbookName)
+                                Text(entry.cookbook.cookbookName)
                                     .font(.headline)
-                                Text("\(group.name) · \(group.locationText)")
+                                Text("\(entry.group.name) · \(entry.group.locationText)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button(publishedGroupIDs.contains(group.id) ? "Republish" : "Publish") {
-                                Task { await publish(to: group) }
+                            Button(publishedCookbookIDs.contains(entry.cookbook.id) ? "Republish" : "Publish") {
+                                Task { await publish(entry) }
                             }
-                            .disabled(busyGroupIDs.contains(group.id))
+                            .disabled(busyCookbookIDs.contains(entry.cookbook.id))
                         }
                         .padding(.vertical, 4)
                     }
@@ -75,53 +82,60 @@ struct PublishToFamilyCookbookView: View {
                 }
             }
             .task {
-                await loadEligibleGroups()
+                await loadEligibleCookbooks()
             }
         }
     }
 
-    private func loadEligibleGroups() async {
+    private func loadEligibleCookbooks() async {
         guard let userID = accountState.currentUserID else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
             let memberships = try await groupsService.fetchMemberships(forUser: userID).filter { $0.status == .active }
-            var groups: [FamilyGroup] = []
+            var eligible: [(FamilyGroup, GroupCookbook)] = []
             var published: Set<String> = []
             for membership in memberships {
                 guard let group = try await groupsService.fetchGroup(id: membership.groupID) else { continue }
-                guard membership.role == .admin || group.allowsMemberPublishing else { continue }
-                groups.append(group)
-
+                let cookbooks = try await groupsService.fetchGroupCookbooks(forGroup: membership.groupID)
                 let existing = try await publicationsService.fetchPublications(forGroup: group.id)
-                if existing.contains(where: { $0.sourceRecipeID == recipe.id.uuidString && $0.ownerUserID == userID }) {
-                    published.insert(group.id)
+                // Scoped per cookbook, not just per group — a group can
+                // hold several cookbooks now, and publishing to one
+                // shouldn't show as "already published" against another.
+                for cookbook in cookbooks where membership.role == .admin || cookbook.allowsMemberPublishing {
+                    eligible.append((group, cookbook))
+                    let alreadyPublishedHere = existing.contains {
+                        $0.cookbookID == cookbook.id && $0.sourceRecipeID == recipe.id.uuidString && $0.ownerUserID == userID
+                    }
+                    if alreadyPublishedHere {
+                        published.insert(cookbook.id)
+                    }
                 }
             }
-            eligibleGroups = groups
-            publishedGroupIDs = published
+            eligibleCookbooks = eligible
+            publishedCookbookIDs = published
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func publish(to group: FamilyGroup) async {
+    private func publish(_ entry: (group: FamilyGroup, cookbook: GroupCookbook)) async {
         guard let userID = accountState.currentUserID else { return }
-        busyGroupIDs.insert(group.id)
+        busyCookbookIDs.insert(entry.cookbook.id)
         errorMessage = nil
         statusMessage = nil
-        defer { busyGroupIDs.remove(group.id) }
+        defer { busyCookbookIDs.remove(entry.cookbook.id) }
 
         do {
             let photoUploadSucceeded = try await RecipePublishingCoordinator.publish(
-                recipe, to: group, ownerUserID: userID,
+                recipe, to: entry.group, cookbook: entry.cookbook, ownerUserID: userID, commentsEnabled: allowComments,
                 publicationsService: publicationsService, photoUploadService: photoUploadService
             )
-            publishedGroupIDs.insert(group.id)
+            publishedCookbookIDs.insert(entry.cookbook.id)
             statusMessage = photoUploadSucceeded
-                ? "Published to \(group.cookbookName)."
-                : "Published to \(group.cookbookName), but the photo couldn't be uploaded."
+                ? "Published to \(entry.cookbook.cookbookName)."
+                : "Published to \(entry.cookbook.cookbookName), but the photo couldn't be uploaded."
         } catch {
             errorMessage = error.localizedDescription
         }

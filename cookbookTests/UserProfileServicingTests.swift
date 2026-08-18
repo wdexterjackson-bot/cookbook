@@ -39,4 +39,30 @@ struct UserProfileServicingTests {
         let afterDelete = try await service.fetchLocation(userID: "alice")
         #expect(afterDelete == nil)
     }
+
+    @Test func emailDiscoverabilityDefaultsToTrueWhenNeverSet() async throws {
+        let service = InMemoryUserProfileService()
+
+        #expect(try await service.fetchIsEmailDiscoverable(userID: "alice") == true)
+    }
+
+    @Test func emailDiscoverabilityCanBeToggledOff() async throws {
+        let service = InMemoryUserProfileService()
+
+        try await service.setEmailDiscoverable(false, userID: "alice")
+
+        #expect(try await service.fetchIsEmailDiscoverable(userID: "alice") == false)
+    }
+
+    @Test func deletingAProfileClearsEmailAndDiscoverabilityToo() async throws {
+        let service = InMemoryUserProfileService()
+        try await service.setEmail("alice@example.com", userID: "alice")
+        try await service.setEmailDiscoverable(false, userID: "alice")
+
+        try await service.deleteProfile(userID: "alice")
+
+        #expect(service.emailsByUserID["alice"] == nil)
+        // Discoverability reverts to the default once the override is gone.
+        #expect(try await service.fetchIsEmailDiscoverable(userID: "alice") == true)
+    }
 }

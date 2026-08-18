@@ -20,19 +20,37 @@ struct AccountDeletionCoordinatorTests {
         return ModelContext(container)
     }
 
-    private func makeDetails(name: String, cookbookName: String) -> NewGroupDetails {
+    private func makeGroupDetails(name: String) -> NewGroupDetails {
         NewGroupDetails(
             name: name,
-            cookbookName: cookbookName,
             description: "",
             type: "Family",
             locationText: "Memphis, TN",
             structuredRegion: nil,
             visibility: .publicGroup,
             allowsMemberInvites: false,
-            allowsMemberPublishing: true,
-            autoApproveJoinRequests: false
+            approvalPolicy: .anyAdministrator
         )
+    }
+
+    private func makeCookbookDetails(cookbookName: String) -> NewGroupCookbookDetails {
+        NewGroupCookbookDetails(cookbookName: cookbookName, allowsMemberPublishing: true)
+    }
+
+    private func createTestGroup(
+        _ groups: InMemoryGroupsService,
+        name: String,
+        cookbookName: String,
+        idempotencyKey: String = "req-1"
+    ) async throws -> FamilyGroup {
+        let (group, _) = try await groups.createGroup(
+            makeGroupDetails(name: name),
+            cookbookDetails: makeCookbookDetails(cookbookName: cookbookName),
+            creatorUserID: "alice",
+            creatorDisplayName: "Alice",
+            idempotencyKey: idempotencyKey
+        )
+        return group
     }
 
     @Test func deletesAllLocalRecipesAndCookbooksForTheUser() async throws {
@@ -79,7 +97,7 @@ struct AccountDeletionCoordinatorTests {
         let context = try makeInMemoryContext()
         let groups = InMemoryGroupsService()
         groups.tier2CreditsByUserID["alice"] = 1
-        let group = try await groups.createGroup(makeDetails(name: "Barrentines", cookbookName: "Reunion"), creatorUserID: "alice", idempotencyKey: "req-1")
+        let group = try await createTestGroup(groups, name: "Barrentines", cookbookName: "Reunion")
         let joinRequest = try await groups.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await groups.decideJoinRequest(joinRequest.id, approve: true, decidedByUserID: "alice")
 
@@ -103,7 +121,7 @@ struct AccountDeletionCoordinatorTests {
 
         let groups = InMemoryGroupsService()
         groups.tier2CreditsByUserID["alice"] = 1
-        let group = try await groups.createGroup(makeDetails(name: "Barrentines", cookbookName: "Reunion"), creatorUserID: "alice", idempotencyKey: "req-1")
+        let group = try await createTestGroup(groups, name: "Barrentines", cookbookName: "Reunion")
         let joinRequest = try await groups.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await groups.decideJoinRequest(joinRequest.id, approve: true, decidedByUserID: "alice")
 
@@ -130,7 +148,7 @@ struct AccountDeletionCoordinatorTests {
         let context = try makeInMemoryContext()
         let groups = InMemoryGroupsService()
         groups.tier2CreditsByUserID["alice"] = 1
-        let group = try await groups.createGroup(makeDetails(name: "Solo", cookbookName: "Solo Cookbook"), creatorUserID: "alice", idempotencyKey: "req-1")
+        let group = try await createTestGroup(groups, name: "Solo", cookbookName: "Solo Cookbook")
 
         try await AccountDeletionCoordinator.deleteAllData(
             for: "alice",
@@ -171,7 +189,7 @@ struct AccountDeletionCoordinatorTests {
         let context = try makeInMemoryContext()
         let groups = InMemoryGroupsService()
         groups.tier2CreditsByUserID["alice"] = 1
-        let group = try await groups.createGroup(makeDetails(name: "Barrentines", cookbookName: "Reunion"), creatorUserID: "alice", idempotencyKey: "req-1")
+        let group = try await createTestGroup(groups, name: "Barrentines", cookbookName: "Reunion")
         let joinRequest = try await groups.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
         try await groups.decideJoinRequest(joinRequest.id, approve: true, decidedByUserID: "alice")
 
@@ -187,7 +205,7 @@ struct AccountDeletionCoordinatorTests {
             tags: [],
             authorLineage: "Bob Barrentine of Memphis, TN"
         )
-        let published = try await publications.publish(content, sourceRecipeID: "r1", to: group.id, ownerUserID: "bob")
+        let published = try await publications.publish(content, sourceRecipeID: "r1", to: group.id, cookbookID: "cb-1", ownerUserID: "bob")
 
         try await AccountDeletionCoordinator.deleteAllData(
             for: "bob",

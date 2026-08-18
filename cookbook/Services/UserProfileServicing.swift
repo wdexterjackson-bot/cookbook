@@ -56,6 +56,15 @@ enum USState {
 protocol UserProfileServicing {
     func fetchLocation(userID: String) async throws -> UserLocation?
     func setLocation(_ location: UserLocation, userID: String) async throws
+    /// Called on every successful sign-in (see PostSignInCoordinator), not
+    /// just the first — an idempotent sync rather than a true write-once,
+    /// so it also picks up an email change on the auth provider's side.
+    /// This is what `findUserByEmail` (Cloud Function) searches.
+    func setEmail(_ email: String, userID: String) async throws
+    /// Defaults to `true` when unset — an opt-out toggle for email search
+    /// discoverability, enforced server-side by `findUserByEmail`.
+    func fetchIsEmailDiscoverable(userID: String) async throws -> Bool
+    func setEmailDiscoverable(_ discoverable: Bool, userID: String) async throws
     /// Account deletion cleanup — best-effort by design, same as
     /// EntitlementServicing.deleteEntitlement.
     func deleteProfile(userID: String) async throws

@@ -2,11 +2,11 @@
 //  FirestoreGroupsService.swift
 //  cookbook
 //
-//  Collections: groups/{id}, memberships/{id} (top-level, queried by
-//  groupID/userID rather than nested — simpler cross-group membership
-//  lookups), joinRequests/{id}, invitations/{id}, entitlements/{uid},
-//  groupCreationRequests/{idempotencyKey} (the idempotency ledger for
-//  createGroup — PAY-005).
+//  Collections: groups/{id}, groupCookbooks/{id}, memberships/{id}
+//  (top-level, queried by groupID/userID rather than nested — simpler
+//  cross-group membership lookups), joinRequests/{id}, invitations/{id},
+//  entitlements/{uid}, groupCreationRequests/{idempotencyKey} (the
+//  idempotency ledger for createGroup — PAY-005).
 //
 
 import FirebaseFirestore
@@ -17,19 +17,25 @@ final class FirestoreGroupsService: GroupsServicing {
     private let db = Firestore.firestore()
     private let functions = Functions.functions()
 
-    func createGroup(_ details: NewGroupDetails, creatorUserID: String, idempotencyKey: String) async throws -> FamilyGroup {
+    func createGroup(
+        _ groupDetails: NewGroupDetails,
+        cookbookDetails: NewGroupCookbookDetails,
+        creatorUserID: String,
+        creatorDisplayName: String,
+        idempotencyKey: String
+    ) async throws -> (FamilyGroup, GroupCookbook) {
         let requestRef = db.collection("groupCreationRequests").document(idempotencyKey)
         let entitlementRef = db.collection("entitlements").document(creatorUserID)
         let groupRef = db.collection("groups").document()
+        let cookbookRef = db.collection("groupCookbooks").document()
         let membershipRef = db.collection("memberships").document(Membership.compositeID(groupID: groupRef.documentID, userID: creatorUserID))
-        let uniquenessKey = FamilyGroup.uniquenessKey(cookbookName: details.cookbookName, familyName: details.name, locationText: details.locationText)
-        let uniquenessRef = db.collection("groupUniquenessKeys").document(uniquenessKey)
 
         let transactionResult: Any = try await db.runTransaction { transaction, errorPointer -> Any? in
             do {
                 let requestSnapshot = try transaction.getDocument(requestRef)
-                if let existingGroupID = requestSnapshot.data()?["groupID"] as? String {
-                    return existingGroupID
+                if let existingGroupID = requestSnapshot.data()?["groupID"] as? String,
+                   let existingCookbookID = requestSnapshot.data()?["cookbookID"] as? String {
+                    return [existingGroupID, existingCookbookID]
                 }
 
                 let entitlementSnapshot = try transaction.getDocument(entitlementRef)
@@ -48,41 +54,92 @@ final class FirestoreGroupsService: GroupsServicing {
                     return nil
                 }
 
-                // Checked defensively for a clean error even though the
-                // rules' create-vs-update semantics are the real
-                // enforcement (see firestore.rules) — without this check
-                // the transaction would still fail, just with a raw
-                // permission-denied instead of a catchable Swift error.
-                let uniquenessSnapshot = try transaction.getDocument(uniquenessRef)
-                guard !uniquenessSnapshot.exists else {
-                    errorPointer?.pointee = GroupsServiceError.duplicateCookbookIdentity as NSError
-                    return nil
-                }
-
                 let now = Date()
                 transaction.setData([
                     "tier2Credits": tier2Credits - 1,
                 ], forDocument: entitlementRef, merge: true)
 
-                transaction.setData(Self.groupData(details, id: groupRef.documentID, uniquenessKey: uniquenessKey, creatorUserID: creatorUserID, createdAt: now), forDocument: groupRef)
+                transaction.setData(Self.groupData(groupDetails, id: groupRef.documentID, creatorUserID: creatorUserID, creatorDisplayName: creatorDisplayName, createdAt: now), forDocument: groupRef)
+                transaction.setData(Self.cookbookData(cookbookDetails, id: cookbookRef.documentID, groupID: groupRef.documentID, creatorUserID: creatorUserID, creatorDisplayName: creatorDisplayName, createdAt: now), forDocument: cookbookRef)
                 transaction.setData(Self.founderMembershipData(id: membershipRef.documentID, groupID: groupRef.documentID, userID: creatorUserID, joinedAt: now), forDocument: membershipRef)
-                transaction.setData(["groupID": groupRef.documentID, "requestedByUserID": creatorUserID, "createdAt": now], forDocument: requestRef)
-                transaction.setData(["groupID": groupRef.documentID, "createdAt": now], forDocument: uniquenessRef)
+                transaction.setData(["groupID": groupRef.documentID, "cookbookID": cookbookRef.documentID, "requestedByUserID": creatorUserID, "createdAt": now], forDocument: requestRef)
 
-                return groupRef.documentID
+                return [groupRef.documentID, cookbookRef.documentID]
             } catch {
                 errorPointer?.pointee = error as NSError
                 return nil
             }
         }
 
-        guard let groupID = transactionResult as? String else {
+        guard let ids = transactionResult as? [String], ids.count == 2 else {
             throw GroupsServiceError.groupNotFound
         }
-        guard let group = try await fetchGroup(id: groupID) else {
+        guard let group = try await fetchGroup(id: ids[0]) else {
             throw GroupsServiceError.groupNotFound
         }
-        return group
+        guard let cookbook = try await fetchGroupCookbook(id: ids[1]) else {
+            throw GroupsServiceError.groupCookbookNotFound
+        }
+        return (group, cookbook)
+    }
+
+    func createGroupCookbook(
+        _ details: NewGroupCookbookDetails,
+        in groupID: String,
+        creatorUserID: String,
+        creatorDisplayName: String
+    ) async throws -> GroupCookbook {
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(creatorUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
+
+        let cookbook = GroupCookbook(
+            id: db.collection("groupCookbooks").document().documentID,
+            groupID: groupID,
+            cookbookName: details.cookbookName,
+            createdByUserID: creatorUserID,
+            createdByDisplayName: creatorDisplayName,
+            createdAt: .now,
+            coverImageURL: nil,
+            allowsMemberPublishing: details.allowsMemberPublishing
+        )
+        try db.collection("groupCookbooks").document(cookbook.id).setData(from: cookbook)
+        return cookbook
+    }
+
+    func fetchGroupCookbooks(forGroup groupID: String) async throws -> [GroupCookbook] {
+        let snapshot = try await db.collection("groupCookbooks").whereField("groupID", isEqualTo: groupID).getDocuments()
+        return try snapshot.documents.map { try $0.data(as: GroupCookbook.self) }
+    }
+
+    func fetchGroupCookbook(id: String) async throws -> GroupCookbook? {
+        let snapshot = try await db.collection("groupCookbooks").document(id).getDocument()
+        return try snapshot.data(as: GroupCookbook.self)
+    }
+
+    /// Fetches every cookbook belonging to a public, active group, then
+    /// filters by name client-side — mirrors `fetchPublicGroups`' own
+    /// "fetch broadly, filter in Swift" style rather than a dedicated
+    /// search backend. `whereField(_:in:)` caps at 30 values per query, so
+    /// group IDs are chunked; fine at this app's actual scale, would need
+    /// revisiting for a much larger public-group directory.
+    func fetchPublicGroupCookbooks(matching filter: PublicGroupCookbookSearchFilter) async throws -> [GroupCookbook] {
+        let publicGroups = try await fetchPublicGroups(matching: PublicGroupSearchFilter())
+        guard !publicGroups.isEmpty else { return [] }
+        let groupIDs = publicGroups.map(\.id)
+
+        var cookbooks: [GroupCookbook] = []
+        for chunkStart in stride(from: 0, to: groupIDs.count, by: 30) {
+            let chunk = Array(groupIDs[chunkStart..<min(chunkStart + 30, groupIDs.count)])
+            let snapshot = try await db.collection("groupCookbooks").whereField("groupID", in: chunk).getDocuments()
+            cookbooks += try snapshot.documents.map { try $0.data(as: GroupCookbook.self) }
+        }
+
+        if let text = filter.text, !text.isEmpty {
+            cookbooks = cookbooks.filter { $0.cookbookName.localizedCaseInsensitiveContains(text) }
+        }
+        return cookbooks
     }
 
     func fetchPublicGroups(matching filter: PublicGroupSearchFilter) async throws -> [FamilyGroup] {
@@ -93,9 +150,7 @@ final class FirestoreGroupsService: GroupsServicing {
         var groups = try snapshot.documents.map { try $0.data(as: FamilyGroup.self) }
 
         if let text = filter.text, !text.isEmpty {
-            groups = groups.filter {
-                $0.cookbookName.localizedCaseInsensitiveContains(text) || $0.name.localizedCaseInsensitiveContains(text)
-            }
+            groups = groups.filter { $0.name.localizedCaseInsensitiveContains(text) }
         }
         if let locationText = filter.locationText, !locationText.isEmpty {
             groups = groups.filter { $0.locationText.localizedCaseInsensitiveContains(locationText) }
@@ -127,7 +182,7 @@ final class FirestoreGroupsService: GroupsServicing {
             throw GroupsServiceError.alreadyMember
         }
 
-        if group.autoApproveJoinRequests {
+        if group.approvalPolicy == .noApprovalNeeded {
             let membership = Membership(
                 id: Membership.compositeID(groupID: groupID, userID: requesterID),
                 groupID: groupID,
@@ -180,8 +235,11 @@ final class FirestoreGroupsService: GroupsServicing {
             throw GroupsServiceError.invalidState
         }
 
+        guard let group = try await fetchGroup(id: request.groupID) else {
+            throw GroupsServiceError.groupNotFound
+        }
         let groupMemberships = try await fetchMemberships(forGroup: request.groupID)
-        guard GroupPolicy.isActiveAdmin(decidedByUserID, in: groupMemberships) else {
+        guard GroupPolicy.canDecideJoinRequest(decidedByUserID, group: group, memberships: groupMemberships) else {
             throw GroupsServiceError.notAuthorized
         }
 
@@ -314,7 +372,7 @@ final class FirestoreGroupsService: GroupsServicing {
     }
 
     /// Every client-facing collection touched here (`memberships`,
-    /// `publications`, `groupUniquenessKeys`, `groups`) has
+    /// `publications`, `groupCookbooks`, `groups`) has
     /// `allow delete: if false` in firestore.rules, and storage.rules only
     /// lets a user delete files they themselves uploaded — so none of this
     /// cleanup is possible directly from the client. The Cloud Function
@@ -324,18 +382,11 @@ final class FirestoreGroupsService: GroupsServicing {
         _ = try await callable.call(["groupID": groupID])
     }
 
-    /// `uniquenessKey` is written onto the group document (though not part
-    /// of the `FamilyGroup` Swift model — nothing client-side reads it
-    /// back) purely so firestore.rules' `groups` create rule can
-    /// `getAfter()`-check it against the matching `groupUniquenessKeys/{key}`
-    /// reservation doc written in the same transaction.
-    private static func groupData(_ details: NewGroupDetails, id: String, uniquenessKey: String, creatorUserID: String, createdAt: Date) -> [String: Any] {
+    private static func groupData(_ details: NewGroupDetails, id: String, creatorUserID: String, creatorDisplayName: String, createdAt: Date) -> [String: Any] {
         [
             "id": id,
             "slug": UUID().uuidString.lowercased(),
             "name": details.name,
-            "cookbookName": details.cookbookName,
-            "uniquenessKey": uniquenessKey,
             "description": details.description,
             "type": details.type,
             "locationText": details.locationText,
@@ -343,14 +394,27 @@ final class FirestoreGroupsService: GroupsServicing {
             "coverImageURL": NSNull(),
             "visibility": details.visibility.rawValue,
             "createdByUserID": creatorUserID,
+            "createdByDisplayName": creatorDisplayName,
             "createdAt": createdAt,
             "status": GroupStatus.active.rawValue,
             "allowsMemberInvites": details.allowsMemberInvites,
-            "allowsMemberPublishing": details.allowsMemberPublishing,
-            "autoApproveJoinRequests": details.autoApproveJoinRequests,
+            "approvalPolicy": details.approvalPolicy.rawValue,
             // Never settable from the normal create flow — see
             // FamilyGroup.isMFB's doc comment.
             "isMFB": false,
+        ]
+    }
+
+    private static func cookbookData(_ details: NewGroupCookbookDetails, id: String, groupID: String, creatorUserID: String, creatorDisplayName: String, createdAt: Date) -> [String: Any] {
+        [
+            "id": id,
+            "groupID": groupID,
+            "cookbookName": details.cookbookName,
+            "createdByUserID": creatorUserID,
+            "createdByDisplayName": creatorDisplayName,
+            "createdAt": createdAt,
+            "coverImageURL": NSNull(),
+            "allowsMemberPublishing": details.allowsMemberPublishing,
         ]
     }
 

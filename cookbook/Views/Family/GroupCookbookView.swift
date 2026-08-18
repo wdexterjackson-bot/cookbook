@@ -12,6 +12,7 @@ import SwiftUI
 
 struct GroupCookbookView: View {
     let group: FamilyGroup
+    let cookbook: GroupCookbook
     let membership: Membership
     let groupsService: GroupsServicing
 
@@ -23,6 +24,7 @@ struct GroupCookbookView: View {
     @State private var errorMessage: String?
     @State private var busyPublicationIDs: Set<String> = []
     @State private var isPresentingLeaveConfirmation = false
+    @State private var isPresentingGroupQRCode = false
     /// Which publications the current user has liked — loaded once
     /// alongside the publications themselves, then kept in sync locally as
     /// the user taps Like (PublicationsServicing.setLiked is the source of
@@ -51,6 +53,18 @@ struct GroupCookbookView: View {
                 LabeledContent("Location", value: group.locationText)
                 LabeledContent("Your Role", value: membership.role.rawValue.capitalized)
                 LabeledContent("Visibility", value: group.visibility == .publicGroup ? "Public" : "Private")
+                Button {
+                    isPresentingGroupQRCode = true
+                } label: {
+                    Label("Share Group QR Code", systemImage: "qrcode")
+                }
+                if membership.role == .admin {
+                    NavigationLink {
+                        GroupAdminManagementView(group: group, groupsService: groupsService)
+                    } label: {
+                        Label("Manage Administrators", systemImage: "person.badge.key")
+                    }
+                }
             }
 
             Section("Recipes") {
@@ -94,6 +108,13 @@ struct GroupCookbookView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .sheet(isPresented: $isPresentingGroupQRCode) {
+            QRCodeDisplayView(
+                payload: .group(id: group.id),
+                title: group.name,
+                subtitle: "Scan this to send a request to join \(group.name)."
+            )
+        }
     }
 
     /// Whether `membership.userID` leaving would be the last active
@@ -105,19 +126,19 @@ struct GroupCookbookView: View {
 
     private var leaveConfirmationMessage: String {
         if isLastActiveMember {
-            return "You're the last member of \(group.cookbookName). Leaving will permanently delete this cookbook and everything in it — recipes and photos — for everyone. This cannot be undone."
+            return "You're the last member of \(cookbook.cookbookName). Leaving will permanently delete this cookbook and everything in it — recipes and photos — for everyone. This cannot be undone."
         }
         return "Leave \(group.name)? You'll be removed from this Family Cookbook."
     }
 
     private var cookbookHeader: some View {
         VStack(spacing: 8) {
-            Text(group.cookbookName)
+            Text(cookbook.cookbookName)
                 .font(.potluckHeadline(24))
                 .foregroundStyle(Color.potluckDeepTeal)
                 .multilineTextAlignment(.center)
 
-            if let urlString = group.coverImageURL, let url = URL(string: urlString) {
+            if let urlString = cookbook.coverImageURL ?? group.coverImageURL, let url = URL(string: urlString) {
                 AsyncImage(url: url) { image in
                     image.resizable().aspectRatio(contentMode: .fill)
                 } placeholder: {
@@ -155,6 +176,15 @@ struct GroupCookbookView: View {
                 }
                 likeRow(publication)
                 ratingRow(publication)
+
+                if publication.commentsEnabled {
+                    NavigationLink {
+                        PublicationCommentsView(publication: publication, membership: membership, publicationsService: publicationsService)
+                    } label: {
+                        Label("Comments", systemImage: "bubble.left")
+                    }
+                    .font(.caption)
+                }
 
                 if publication.ownerUserID == accountState.currentUserID {
                     Button("Unpublish", role: .destructive) {
@@ -285,7 +315,7 @@ struct GroupCookbookView: View {
             try await publicationsService.unpublish(publication.id, actingUserID: userID)
             // Best-effort — an orphaned Storage file is a minor cost, not
             // worth blocking the unpublish the user actually asked for.
-            try? await photoUploadService.delete(groupID: group.id, ownerUserID: userID, sourceRecipeID: publication.sourceRecipeID)
+            try? await photoUploadService.delete(groupID: group.id, cookbookID: cookbook.id, ownerUserID: userID, sourceRecipeID: publication.sourceRecipeID)
             await loadPublications()
         } catch {
             errorMessage = error.localizedDescription
@@ -297,7 +327,11 @@ struct GroupCookbookView: View {
         errorMessage = nil
         defer { isLoading = false }
         do {
+            // A group can hold several cookbooks now — scope down to just
+            // this one client-side, since fetchPublications(forGroup:)
+            // doesn't take a cookbook filter.
             publications = try await publicationsService.fetchPublications(forGroup: group.id)
+                .filter { $0.cookbookID == cookbook.id }
             if let userID = accountState.currentUserID {
                 var liked: Set<String> = []
                 for publication in publications where try await publicationsService.hasLiked(publication.id, userID: userID) {

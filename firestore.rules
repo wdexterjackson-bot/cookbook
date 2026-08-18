@@ -1,8 +1,10 @@
 rules_version = '2';
 
-// Milestone 2C. Covers every collection the app writes as of Phase 2
-// milestones 2A/2B: entitlements, groups, memberships, joinRequests,
-// invitations, publications, messages, groupCreationRequests.
+// Milestone 2C, extended for #5 Groups & Friends. Covers every collection
+// the app writes: entitlements, groups, groupCookbooks, memberships,
+// joinRequests, invitations, friendRequests, friendships, publications
+// (+ likes/ratings/comments), messages, groupCreationRequests,
+// personalCookbooks.
 //
 // Design notes (why some things are stricter than they might look):
 // - `memberships/{groupID}_{userID}` uses a deterministic composite ID
@@ -14,11 +16,33 @@ rules_version = '2';
 //   one tier-2 credit" — the entitlements update rule alone (decrement-by-1)
 //   isn't sufficient on its own, since nothing would otherwise stop a client
 //   from creating a group without touching entitlements at all.
+// - `groupCookbooks/{cookbookID}` create has the same "founder acting
+//   before their own membership/admin status exists yet" problem
+//   memberships/create's founder branch solves — a brand-new group's first
+//   cookbook is created in the same transaction as the group itself, so
+//   isAdmin(groupID) can't be true yet. Resolved the same way: a getAfter()
+//   check against the group doc's createdByUserID.
 // - A public group's profile (groups/{id}) is readable once a member is
 //   already able to reference its id, but a group's recipe content
 //   (publications) is members-only regardless of visibility — the PRD is
 //   explicit that "public" means discoverable-with-a-profile, not
-//   "cookbook visible to non-members" (GRP-002).
+//   "cookbook visible to non-members" (GRP-002). Cookbook visibility
+//   within a group is all-or-nothing too: every member of a group sees
+//   every one of its groupCookbooks, there's no per-cookbook membership.
+// - `approvalPolicy` (on `groups/{id}`, replacing the old
+//   `autoApproveJoinRequests` boolean) governs both whether joining needs
+//   approval at all (`noApprovalNeeded` — same instant-membership path the
+//   old boolean's `true` case used) and, for the other three policies, who
+//   is allowed to decide a pending joinRequest (`creatorOnly` /
+//   `anyAdministrator` / `anyUser`) — see canDecideJoinRequest() below.
+//   This same helper gates both the joinRequests/update (decide) rule and
+//   memberships/create's "someone approved my request" branch — those two
+//   have to stay in lock-step, or a valid decide could produce a
+//   membership write the decider isn't actually allowed to make.
+// - `friendRequests/{senderID}_{recipientID}` and the paired
+//   `friendships/{sortedID}` mirror groups/create's getAfter() pairing
+//   pattern: a friendship can only be created alongside its matching
+//   request doc actually flipping to 'accepted' in the same transaction.
 // - Client-side entitlement increases are never allowed except two exact,
 //   narrow shapes: the one-time launch-credit grant/backfill (validated to
 //   an exact shape, gated by the promo cutoff date) and redeeming a tier-1
@@ -172,6 +196,50 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/entitlements/$(userID)).data.isProUser == true)
         || (exists(/databases/$(database)/documents/groups/$(groupID))
           && get(/databases/$(database)/documents/groups/$(groupID)).data.isMFB == true);
+    }
+
+    function fetchGroup(groupID) {
+      return get(/databases/$(database)/documents/groups/$(groupID)).data;
+    }
+
+    // Mirrors groups/{id}'s own "public or member" read rule — a public
+    // group's cookbook *metadata* (name, cover, founder) is discoverable
+    // the same way the group's own profile is, so public search can work
+    // (see FEATURE 2's fetchPublicGroupCookbooks). This is metadata only:
+    // a group's recipe *content* (publications) stays members-only
+    // regardless of visibility (GRP-002) — that's a separate rule below,
+    // unaffected by this.
+    function isGroupPublic(groupID) {
+      return fetchGroup(groupID).visibility == 'public';
+    }
+
+    // Who is allowed to decide (approve/deny) a pending joinRequest, per
+    // the target group's approvalPolicy. Deliberately excludes
+    // 'noApprovalNeeded' — that policy never produces a pending
+    // joinRequest in the first place (memberships/create's 'auto' branch
+    // handles it directly), so there's nothing for this to authorize.
+    function canDecideJoinRequest(groupID) {
+      return (fetchGroup(groupID).approvalPolicy == 'creatorOnly'
+          && request.auth.uid == fetchGroup(groupID).createdByUserID)
+        || (fetchGroup(groupID).approvalPolicy == 'anyAdministrator' && isAdmin(groupID))
+        || (fetchGroup(groupID).approvalPolicy == 'anyUser' && isMember(groupID));
+    }
+
+    function groupCookbookPath(cookbookID) {
+      return /databases/$(database)/documents/groupCookbooks/$(cookbookID);
+    }
+
+    // FriendRequest doc IDs are direction-sensitive ({senderID}_{recipientID})
+    // — this just centralizes building that path so both directions can be
+    // checked without repeating the concatenation.
+    function friendRequestPath(senderID, recipientID) {
+      return /databases/$(database)/documents/friendRequests/$(senderID + '_' + recipientID);
+    }
+
+    function sortedFriendshipID(userIDs) {
+      return userIDs[0] < userIDs[1]
+        ? userIDs[0] + '_' + userIDs[1]
+        : userIDs[1] + '_' + userIDs[0];
     }
 
     match /entitlements/{userID} {
@@ -354,28 +422,6 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // FC milestone: reservation doc enforcing "Cookbook Name +
-    // Family/Group Name + Home Location" uniqueness
-    // (FamilyGroup.uniquenessKey). Firestore's own create-vs-update
-    // semantics do the real enforcement — create is only permitted while
-    // the doc doesn't yet exist, so a second claim of the same key is
-    // evaluated as an update, which is denied, atomically preventing two
-    // concurrent creators from both winning the same combination.
-    //
-    // Scope note: this guards against real accidental collisions between
-    // good-faith clients (the actual scenario this exists for), not a
-    // maliciously reverse-engineered client that lies about its own
-    // normalization of the three fields — a fully tamper-proof version
-    // would need a Cloud Function to independently recompute the key
-    // server-side, which is a deferred hardening follow-up, not attempted
-    // here.
-    match /groupUniquenessKeys/{key} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn();
-      allow update: if false;
-      allow delete: if false;
-    }
-
     match /groups/{groupID} {
       allow read: if resource.data.visibility == 'public' || isMember(groupID);
 
@@ -383,22 +429,43 @@ service cloud.firestore {
         && request.auth.uid == request.resource.data.createdByUserID
         && request.resource.data.status == 'active'
         && request.resource.data.visibility in ['public', 'private']
+        && request.resource.data.approvalPolicy in ['creatorOnly', 'anyAdministrator', 'anyUser', 'noApprovalNeeded']
         // Never client-settable — see isMFB's doc comment on FamilyGroup.
         && request.resource.data.isMFB == false
         && get(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.tier2Credits
-           - getAfter(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.tier2Credits == 1
-        // Cookbook Name + Family/Group Name + Home Location uniqueness
-        // (FC milestone): a group can only be created alongside a matching
-        // groupUniquenessKeys reservation doc in the same transaction —
-        // without this, nothing would stop a client from creating a group
-        // whose fields collide with an existing one while simply skipping
-        // the reservation write.
-        && getAfter(/databases/$(database)/documents/groupUniquenessKeys/$(request.resource.data.uniquenessKey)).data.groupID == request.resource.data.id;
+           - getAfter(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.tier2Credits == 1;
 
       allow update: if isAdmin(groupID)
         && request.resource.data.createdByUserID == resource.data.createdByUserID
         && request.resource.data.id == resource.data.id
-        && request.resource.data.isMFB == resource.data.isMFB;
+        && request.resource.data.isMFB == resource.data.isMFB
+        && request.resource.data.approvalPolicy in ['creatorOnly', 'anyAdministrator', 'anyUser', 'noApprovalNeeded'];
+
+      allow delete: if false;
+    }
+
+    // A group's cookbooks — split out from groups/{id} itself (see
+    // GroupCookbook's own doc comment in the Swift model) since one group
+    // can now hold several. Visibility is all-or-nothing per group
+    // membership, not per cookbook: every active member of the parent
+    // group can read every one of its cookbooks.
+    match /groupCookbooks/{cookbookID} {
+      allow read: if isGroupPublic(resource.data.groupID) || isMember(resource.data.groupID);
+
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.createdByUserID
+        && (
+          isAdmin(request.resource.data.groupID)
+          ||
+          // The founder creating the group's very first cookbook in the
+          // same transaction as the group itself — see the founder-branch
+          // design note at the top of this file.
+          getAfter(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.createdByUserID == request.auth.uid
+        );
+
+      // Admin-only, and can't be reparented to a different group.
+      allow update: if isAdmin(resource.data.groupID)
+        && request.resource.data.groupID == resource.data.groupID;
 
       allow delete: if false;
     }
@@ -416,11 +483,17 @@ service cloud.firestore {
             && request.resource.data.role == 'admin'
             && getAfter(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.createdByUserID == request.auth.uid)
           ||
-          // An admin approving someone else's join request. The requester
-          // must already be Pro (or MFB) — normally already guaranteed by
-          // joinRequests/create below, this is defense-in-depth for an
-          // admin approving a request that's gone stale since it was filed.
-          (isAdmin(request.resource.data.groupID)
+          // Someone with standing to decide join requests for this group
+          // (admin, or — per approvalPolicy — the creator or any member)
+          // approving someone else's request. The requester must already
+          // be Pro (or MFB) — normally already guaranteed by
+          // joinRequests/create below, this is defense-in-depth for a
+          // decider approving a request that's gone stale since it was
+          // filed. Uses the same canDecideJoinRequest() the joinRequests
+          // update rule uses — these two must stay in lock-step, since a
+          // valid decide is worthless if it can't be followed by the
+          // matching membership write.
+          (canDecideJoinRequest(request.resource.data.groupID)
             && request.resource.data.source == 'request'
             && request.resource.data.role == 'member'
             && request.auth.uid != request.resource.data.userID
@@ -432,14 +505,14 @@ service cloud.firestore {
             && isProOrMFB(request.resource.data.userID, request.resource.data.groupID))
           ||
           // Auto-approve: the requester joins directly as a plain member
-          // when the target group has opted into instant joining (e.g. a
-          // global seed cookbook everyone's invited to) — independently
-          // re-checked against the stored group doc, never trusted from
-          // the client alone.
+          // when the target group's approvalPolicy is noApprovalNeeded
+          // (e.g. a global seed cookbook everyone's invited to) —
+          // independently re-checked against the stored group doc, never
+          // trusted from the client alone.
           (request.auth.uid == request.resource.data.userID
             && request.resource.data.source == 'auto'
             && request.resource.data.role == 'member'
-            && get(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.autoApproveJoinRequests == true
+            && fetchGroup(request.resource.data.groupID).approvalPolicy == 'noApprovalNeeded'
             && isProOrMFB(request.resource.data.userID, request.resource.data.groupID))
         );
 
@@ -471,21 +544,27 @@ service cloud.firestore {
         && !isMember(request.resource.data.groupID)
         && isProOrMFB(request.resource.data.requesterID, request.resource.data.groupID);
 
-      allow update: if isAdmin(resource.data.groupID)
+      allow update: if isSignedIn()
         && resource.data.state == 'pending'
         && request.resource.data.state in ['approved', 'denied']
         && request.resource.data.decidedByUserID == request.auth.uid
         && request.resource.data.requesterID == resource.data.requesterID
-        && request.resource.data.groupID == resource.data.groupID;
+        && request.resource.data.groupID == resource.data.groupID
+        && canDecideJoinRequest(resource.data.groupID);
 
       allow delete: if false;
     }
 
     match /invitations/{invitationID} {
+      // request.auth.uid == inviteeIdentifier covers a UID-based invite
+      // (friend invites); the email check covers the original
+      // email-based flow — kept both since inviteeIdentifier can hold
+      // either shape depending on how the invite was sent.
       allow read: if isSignedIn()
         && (request.auth.uid == resource.data.inviterID
           || isAdmin(resource.data.groupID)
-          || request.auth.token.email == resource.data.inviteeIdentifier);
+          || request.auth.token.email == resource.data.inviteeIdentifier
+          || request.auth.uid == resource.data.inviteeIdentifier);
 
       allow create: if isSignedIn()
         && request.auth.uid == request.resource.data.inviterID
@@ -500,7 +579,8 @@ service cloud.firestore {
         && resource.data.inviterID == request.resource.data.inviterID
         && resource.data.inviteeIdentifier == request.resource.data.inviteeIdentifier
         && (
-          (request.auth.token.email == resource.data.inviteeIdentifier
+          ((request.auth.token.email == resource.data.inviteeIdentifier
+              || request.auth.uid == resource.data.inviteeIdentifier)
             && request.resource.data.state in ['accepted', 'declined'])
           ||
           ((request.auth.uid == resource.data.inviterID || isAdmin(resource.data.groupID))
@@ -508,6 +588,58 @@ service cloud.firestore {
         );
 
       allow delete: if false;
+    }
+
+    match /friendRequests/{requestID} {
+      allow read: if isSignedIn()
+        && (request.auth.uid == resource.data.senderID || request.auth.uid == resource.data.recipientID);
+
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.senderID
+        && requestID == request.resource.data.senderID + '_' + request.resource.data.recipientID
+        && request.resource.data.status == 'pending';
+
+      allow update: if isSignedIn()
+        && resource.data.senderID == request.resource.data.senderID
+        && resource.data.recipientID == request.resource.data.recipientID
+        && (
+          // The recipient accepting or declining a pending request.
+          (request.auth.uid == resource.data.recipientID
+            && resource.data.status == 'pending'
+            && request.resource.data.status in ['accepted', 'declined'])
+          ||
+          // The original sender re-requesting after an earlier decline —
+          // same doc ID (senderID_recipientID), reset back to pending
+          // rather than erroring on "already exists." The other direction
+          // (the original recipient choosing to send their own request)
+          // is a different doc ID and just goes through create instead.
+          (request.auth.uid == resource.data.senderID
+            && resource.data.status == 'declined'
+            && request.resource.data.status == 'pending')
+        );
+
+      allow delete: if false;
+    }
+
+    match /friendships/{friendshipID} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.userIDs;
+
+      // Paired with an accepted friendRequests doc in the same
+      // transaction (mirrors groups/create's uniqueness-reservation
+      // pairing) — checks both possible request directions, since either
+      // party could have been the original sender.
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.userIDs
+        && request.resource.data.userIDs.size() == 2
+        && friendshipID == sortedFriendshipID(request.resource.data.userIDs)
+        && (
+          getAfter(friendRequestPath(request.resource.data.userIDs[0], request.resource.data.userIDs[1])).data.status == 'accepted'
+          ||
+          getAfter(friendRequestPath(request.resource.data.userIDs[1], request.resource.data.userIDs[0])).data.status == 'accepted'
+        );
+
+      allow update: if false;
+      allow delete: if isSignedIn() && request.auth.uid in resource.data.userIDs;
     }
 
     match /publications/{publicationID} {
@@ -518,9 +650,12 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.auth.uid == request.resource.data.ownerUserID
         && request.resource.data.state == 'published'
+        // Prevents forging a publication that points at a cookbookID from
+        // a different group than the one it claims to belong to.
+        && get(groupCookbookPath(request.resource.data.cookbookID)).data.groupID == request.resource.data.groupID
         && (isAdmin(request.resource.data.groupID)
           || (isMember(request.resource.data.groupID)
-            && get(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.allowsMemberPublishing == true));
+            && get(groupCookbookPath(request.resource.data.cookbookID)).data.allowsMemberPublishing == true));
 
       allow update: if isSignedIn()
         && resource.data.groupID == request.resource.data.groupID
@@ -553,7 +688,32 @@ service cloud.firestore {
             && request.resource.data.content == resource.data.content)
         );
 
-      allow delete: if false;
+      // New, was unconditionally false: the owner removing their own
+      // recipe, or an admin removing anyone's — same owner-or-admin shape
+      // as the comments delete rule below.
+      allow delete: if isSignedIn()
+        && (request.auth.uid == resource.data.ownerUserID || isAdmin(resource.data.groupID));
+    }
+
+    // A publication's comments — gated on the parent publication's own
+    // commentsEnabled flag at create time, not a per-comment isHidden
+    // field (there isn't one; the whole list is hidden together when
+    // comments are off). Immutable once posted.
+    match /publications/{publicationID}/comments/{commentID} {
+      allow read: if isMember(resource.data.groupID);
+
+      allow create: if isSignedIn()
+        && isMember(request.resource.data.groupID)
+        && request.auth.uid == request.resource.data.authorUserID
+        && get(/databases/$(database)/documents/publications/$(publicationID)).data.commentsEnabled == true;
+
+      allow update: if false;
+
+      // Owner-or-admin, same shape as publication delete above — the
+      // minimum moderation capability a group needs from day one, not
+      // full moderation tooling.
+      allow delete: if isSignedIn()
+        && (request.auth.uid == resource.data.authorUserID || isAdmin(resource.data.groupID));
     }
 
     // One doc per user who's liked a publication — existence is the

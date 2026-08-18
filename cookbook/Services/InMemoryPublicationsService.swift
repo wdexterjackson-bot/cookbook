@@ -7,11 +7,19 @@ import Foundation
 
 final class InMemoryPublicationsService: PublicationsServicing {
     private(set) var publications: [Publication] = []
+    private(set) var comments: [RecipeComment] = []
     private var likedUserIDsByPublicationID: [String: Set<String>] = [:]
     private var ratingsByPublicationID: [String: [String: Int]] = [:]
+    private let groupsService: GroupsServicing
 
-    func publish(_ content: PublicationContentSnapshot, sourceRecipeID: String, to groupID: String, ownerUserID: String) async throws -> Publication {
-        if let index = publications.firstIndex(where: { $0.groupID == groupID && $0.sourceRecipeID == sourceRecipeID && $0.ownerUserID == ownerUserID }) {
+    init(groupsService: GroupsServicing = InMemoryGroupsService()) {
+        self.groupsService = groupsService
+    }
+
+    func publish(_ content: PublicationContentSnapshot, sourceRecipeID: String, to groupID: String, cookbookID: String, ownerUserID: String) async throws -> Publication {
+        if let index = publications.firstIndex(where: {
+            $0.groupID == groupID && $0.cookbookID == cookbookID && $0.sourceRecipeID == sourceRecipeID && $0.ownerUserID == ownerUserID
+        }) {
             publications[index].content = content
             publications[index].state = .published
             publications[index].updatedAt = .now
@@ -21,6 +29,7 @@ final class InMemoryPublicationsService: PublicationsServicing {
         let publication = Publication(
             id: UUID().uuidString,
             groupID: groupID,
+            cookbookID: cookbookID,
             ownerUserID: ownerUserID,
             sourceRecipeID: sourceRecipeID,
             state: .published,
@@ -41,6 +50,69 @@ final class InMemoryPublicationsService: PublicationsServicing {
         }
         publications[index].state = .unpublished
         publications[index].updatedAt = .now
+    }
+
+    func setCommentsEnabled(_ publicationID: String, enabled: Bool, actingUserID: String) async throws {
+        guard let index = publications.firstIndex(where: { $0.id == publicationID }) else {
+            throw PublicationsServiceError.publicationNotFound
+        }
+        guard publications[index].ownerUserID == actingUserID else {
+            throw PublicationsServiceError.notAuthorized
+        }
+        publications[index].commentsEnabled = enabled
+    }
+
+    func deletePublication(_ publicationID: String, actingUserID: String) async throws {
+        guard let index = publications.firstIndex(where: { $0.id == publicationID }) else {
+            throw PublicationsServiceError.publicationNotFound
+        }
+        let publication = publications[index]
+        if publication.ownerUserID != actingUserID {
+            let groupMemberships = try await groupsService.fetchMemberships(forGroup: publication.groupID)
+            guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+                throw PublicationsServiceError.notAuthorized
+            }
+        }
+        publications.remove(at: index)
+        comments.removeAll { $0.publicationID == publicationID }
+    }
+
+    func fetchComments(_ publicationID: String) async throws -> [RecipeComment] {
+        comments.filter { $0.publicationID == publicationID }.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func addComment(_ publicationID: String, authorUserID: String, authorDisplayName: String, text: String) async throws -> RecipeComment {
+        guard let publication = publications.first(where: { $0.id == publicationID }) else {
+            throw PublicationsServiceError.publicationNotFound
+        }
+        guard publication.commentsEnabled else {
+            throw PublicationsServiceError.commentsDisabled
+        }
+        let comment = RecipeComment(
+            id: UUID().uuidString,
+            publicationID: publicationID,
+            groupID: publication.groupID,
+            authorUserID: authorUserID,
+            authorDisplayName: authorDisplayName,
+            text: text,
+            createdAt: .now
+        )
+        comments.append(comment)
+        return comment
+    }
+
+    func deleteComment(_ commentID: String, publicationID: String, actingUserID: String) async throws {
+        guard let index = comments.firstIndex(where: { $0.id == commentID && $0.publicationID == publicationID }) else {
+            throw PublicationsServiceError.commentNotFound
+        }
+        let comment = comments[index]
+        if comment.authorUserID != actingUserID {
+            let groupMemberships = try await groupsService.fetchMemberships(forGroup: comment.groupID)
+            guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+                throw PublicationsServiceError.notAuthorized
+            }
+        }
+        comments.remove(at: index)
     }
 
     func fetchPublications(forGroup groupID: String) async throws -> [Publication] {

@@ -41,6 +41,11 @@ struct AccountView: View {
     @State private var isApplyingDiscountCode = false
     @State private var discountCodeMessage: String?
     @State private var discountCodeErrorMessage: String?
+    @State private var isPresentingFriendQRCode = false
+    @State private var isEmailDiscoverable = true
+    @State private var isPresentingEmailDiscoverabilityWarning = false
+    @State private var isSavingEmailDiscoverability = false
+    @State private var emailDiscoverabilityErrorMessage: String?
 
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
@@ -72,6 +77,11 @@ struct AccountView: View {
                         }
                         if let saveNameErrorMessage {
                             Text(saveNameErrorMessage).foregroundStyle(.red)
+                        }
+                        Button {
+                            isPresentingFriendQRCode = true
+                        } label: {
+                            Label("Share My QR Code", systemImage: "qrcode")
                         }
                         Button("Sign Out", role: .destructive) {
                             signOut()
@@ -189,6 +199,33 @@ struct AccountView: View {
                     }
 
                     Section {
+                        Toggle("Findable by email search", isOn: Binding(
+                            get: { isEmailDiscoverable },
+                            set: { newValue in
+                                if !newValue {
+                                    isPresentingEmailDiscoverabilityWarning = true
+                                } else {
+                                    Task { await setEmailDiscoverable(true) }
+                                }
+                            }
+                        ))
+                        .disabled(isSavingEmailDiscoverability)
+                        if let emailDiscoverabilityErrorMessage {
+                            Text(emailDiscoverabilityErrorMessage).foregroundStyle(.red).font(.caption)
+                        }
+                    } footer: {
+                        Text("Lets friends find you by searching your email. Turning this off doesn't stop friends from adding you via your QR code.")
+                    }
+                    .alert("Turn Off Email Search?", isPresented: $isPresentingEmailDiscoverabilityWarning) {
+                        Button("Turn Off", role: .destructive) {
+                            Task { await setEmailDiscoverable(false) }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("You won't be findable by email search — friends can still add you via your QR code.")
+                    }
+
+                    Section {
                         Button("Delete Account", role: .destructive) {
                             isPresentingDeleteConfirmation = true
                         }
@@ -251,10 +288,20 @@ struct AccountView: View {
             .sheet(isPresented: $isPresentingCreateFamilyCookbook) {
                 CreateFamilyCookbookView(groupsService: groupsService)
             }
+            .sheet(isPresented: $isPresentingFriendQRCode) {
+                if let userID = accountState.currentUserID {
+                    QRCodeDisplayView(
+                        payload: .friend(id: userID),
+                        title: "Your Friend Code",
+                        subtitle: "Friends can scan this to send you a friend request."
+                    )
+                }
+            }
             .task(id: accountState.currentUserID) {
                 fullNameDraft = accountState.currentUserDisplayName ?? ""
                 await loadLocation()
                 await loadEntitlement()
+                await loadEmailDiscoverability()
             }
             .onChange(of: isPresentingMembership) { wasPresenting, isPresenting in
                 // The paywall sheet is where credits actually get spent —
@@ -377,6 +424,25 @@ struct AccountView: View {
 
     private var locationHasUnsavedChanges: Bool {
         currentDraftLocation != (savedLocation ?? UserLocation(city: "", isUS: true, stateCode: nil, country: nil))
+    }
+
+    private func loadEmailDiscoverability() async {
+        guard let userID = accountState.currentUserID else { return }
+        guard let discoverable = try? await userProfileService.fetchIsEmailDiscoverable(userID: userID) else { return }
+        isEmailDiscoverable = discoverable
+    }
+
+    private func setEmailDiscoverable(_ discoverable: Bool) async {
+        guard let userID = accountState.currentUserID else { return }
+        isSavingEmailDiscoverability = true
+        emailDiscoverabilityErrorMessage = nil
+        defer { isSavingEmailDiscoverability = false }
+        do {
+            try await userProfileService.setEmailDiscoverable(discoverable, userID: userID)
+            isEmailDiscoverable = discoverable
+        } catch {
+            emailDiscoverabilityErrorMessage = error.localizedDescription
+        }
     }
 
     private func loadLocation() async {

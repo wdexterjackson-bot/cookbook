@@ -179,7 +179,7 @@ struct SignInView: View {
             let result = isSignUp
                 ? try await accountState.signUp(email: trimmedEmail, password: password, displayName: fullName)
                 : try await accountState.signIn(email: trimmedEmail, password: password)
-            try PostSignInCoordinator.handle(result, modelContext: modelContext)
+            try await PostSignInCoordinator.handle(result, email: accountState.currentUserEmail, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: trimmedEmail, context: isSignUp ? .signUp : .signIn)
@@ -240,7 +240,7 @@ struct SignInView: View {
                     try? await accountState.updateDisplayName(name)
                 }
             }
-            try PostSignInCoordinator.handle(authResult, modelContext: modelContext)
+            try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
@@ -266,7 +266,7 @@ struct SignInView: View {
             if authResult.isNewAccount, let name = signInResult.user.profile?.name, !name.isEmpty {
                 try? await accountState.updateDisplayName(name)
             }
-            try PostSignInCoordinator.handle(authResult, modelContext: modelContext)
+            try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)

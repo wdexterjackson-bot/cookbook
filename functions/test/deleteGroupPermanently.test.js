@@ -1,5 +1,5 @@
 // Runs against the real Firestore emulator (memberships/publications/
-// groupUniquenessKeys/groups docs) with a stubbed Storage bucket (no real
+// groupCookbooks/groups docs) with a stubbed Storage bucket (no real
 // Storage emulator fixture needed for listing/deleting a handful of fake
 // file references) — same approach as resolveSignInProviders.test.js
 // stubbing the Auth client.
@@ -21,7 +21,7 @@ before(() => {
 });
 
 beforeEach(async () => {
-  for (const collectionName of ['groups', 'memberships', 'publications', 'groupUniquenessKeys', 'deleteGroupPermanentlyAttempts']) {
+  for (const collectionName of ['groups', 'memberships', 'publications', 'groupCookbooks', 'deleteGroupPermanentlyAttempts']) {
     const snapshot = await db.collection(collectionName).get();
     await Promise.all(snapshot.docs.map((docSnap) => docSnap.ref.delete()));
   }
@@ -43,26 +43,21 @@ function fakeBucket(filesByPrefix) {
   };
 }
 
-async function seedGroup({ groupID, uniquenessKey, memberships }) {
-  await db.collection('groups').doc(groupID).set({
-    id: groupID,
-    cookbookName: 'Reunion',
-    uniquenessKey,
-  });
+async function seedGroup({ groupID, memberships }) {
+  await db.collection('groups').doc(groupID).set({ id: groupID });
   await Promise.all(memberships.map((membership) => (
     db.collection('memberships').doc(membership.id).set(membership)
   )));
 }
 
-test('deletes the group, its memberships, publications, photos, and the uniqueness reservation', async () => {
+test('deletes the group, its memberships, cookbooks, publications, and photos', async () => {
   const groupID = 'group-1';
-  const uniquenessKey = 'reunion|barrentine|memphis';
   await seedGroup({
     groupID,
-    uniquenessKey,
     memberships: [{ id: 'm1', groupID, userID: 'alice', status: 'active' }],
   });
-  await db.collection('groupUniquenessKeys').doc(uniquenessKey).set({ groupID });
+  await db.collection('groupCookbooks').doc('cb1').set({ id: 'cb1', groupID, cookbookName: 'Reunion' });
+  await db.collection('groupCookbooks').doc('cb2').set({ id: 'cb2', groupID, cookbookName: 'Holidays' });
   await db.collection('publications').doc('p1').set({ groupID, sourceRecipeID: 'r1' });
   await db.collection('publications').doc('p2').set({ groupID, sourceRecipeID: 'r2' });
   const bucket = fakeBucket({
@@ -74,9 +69,10 @@ test('deletes the group, its memberships, publications, photos, and the uniquene
   assert.deepEqual(result, { deleted: true });
   assert.equal((await db.collection('groups').doc(groupID).get()).exists, false);
   assert.equal((await db.collection('memberships').doc('m1').get()).exists, false);
+  assert.equal((await db.collection('groupCookbooks').doc('cb1').get()).exists, false);
+  assert.equal((await db.collection('groupCookbooks').doc('cb2').get()).exists, false);
   assert.equal((await db.collection('publications').doc('p1').get()).exists, false);
   assert.equal((await db.collection('publications').doc('p2').get()).exists, false);
-  assert.equal((await db.collection('groupUniquenessKeys').doc(uniquenessKey).get()).exists, false);
   assert.equal(bucket.deleted.length, 2);
 });
 
@@ -84,7 +80,6 @@ test('rejects a caller who is not an active member of the group', async () => {
   const groupID = 'group-2';
   await seedGroup({
     groupID,
-    uniquenessKey: 'other-key',
     memberships: [{ id: 'm1', groupID, userID: 'alice', status: 'active' }],
   });
   const bucket = fakeBucket({});
@@ -99,7 +94,6 @@ test('rejects an active member who is not the last active member', async () => {
   const groupID = 'group-4';
   await seedGroup({
     groupID,
-    uniquenessKey: 'other-key-3',
     memberships: [
       { id: 'm1', groupID, userID: 'alice', status: 'active' },
       { id: 'm2', groupID, userID: 'bob', status: 'active' },
@@ -122,7 +116,6 @@ test('rejects a caller whose own membership has already left', async () => {
   const groupID = 'group-3';
   await seedGroup({
     groupID,
-    uniquenessKey: 'other-key-2',
     memberships: [{ id: 'm1', groupID, userID: 'alice', status: 'left' }],
   });
   const bucket = fakeBucket({});
@@ -156,7 +149,6 @@ test('rate-limits repeated deletion attempts by the same caller', async () => {
     const groupID = `rl-group-${i}`;
     await seedGroup({
       groupID,
-      uniquenessKey: `rl-key-${i}`,
       memberships: [{ id: `rl-m-${i}`, groupID, userID: 'alice', status: 'active' }],
     });
     const result = await deleteGroupPermanently({ db, bucket, groupID, callerUserID: 'alice' });
@@ -166,7 +158,6 @@ test('rate-limits repeated deletion attempts by the same caller', async () => {
   const sixthGroupID = 'rl-group-5';
   await seedGroup({
     groupID: sixthGroupID,
-    uniquenessKey: 'rl-key-5',
     memberships: [{ id: 'rl-m-5', groupID: sixthGroupID, userID: 'alice', status: 'active' }],
   });
 
@@ -183,7 +174,6 @@ test('rate limit is tracked per caller, not globally', async () => {
     const groupID = `rl2-group-${i}`;
     await seedGroup({
       groupID,
-      uniquenessKey: `rl2-key-${i}`,
       memberships: [{ id: `rl2-m-${i}`, groupID, userID: 'alice', status: 'active' }],
     });
     await deleteGroupPermanently({ db, bucket, groupID, callerUserID: 'alice' });
@@ -193,7 +183,6 @@ test('rate limit is tracked per caller, not globally', async () => {
   const bobGroupID = 'rl2-bob-group';
   await seedGroup({
     groupID: bobGroupID,
-    uniquenessKey: 'rl2-bob-key',
     memberships: [{ id: 'rl2-bob-m', groupID: bobGroupID, userID: 'bob', status: 'active' }],
   });
 

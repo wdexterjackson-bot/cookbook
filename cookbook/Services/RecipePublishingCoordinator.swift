@@ -24,7 +24,9 @@ enum RecipePublishingCoordinator {
     static func publish(
         _ recipe: Recipe,
         to group: FamilyGroup,
+        cookbook: GroupCookbook,
         ownerUserID: String,
+        commentsEnabled: Bool = false,
         publicationsService: PublicationsServicing,
         photoUploadService: RecipePhotoUploadServicing
     ) async throws -> Bool {
@@ -38,6 +40,7 @@ enum RecipePublishingCoordinator {
                 coverImageURL = try await photoUploadService.upload(
                     imageData: imageData,
                     groupID: group.id,
+                    cookbookID: cookbook.id,
                     ownerUserID: ownerUserID,
                     sourceRecipeID: recipe.id.uuidString
                 ).absoluteString
@@ -47,7 +50,10 @@ enum RecipePublishingCoordinator {
         }
 
         let content = PublicationContentSnapshot.make(from: recipe, coverImageURL: coverImageURL)
-        _ = try await publicationsService.publish(content, sourceRecipeID: recipe.id.uuidString, to: group.id, ownerUserID: ownerUserID)
+        let publication = try await publicationsService.publish(content, sourceRecipeID: recipe.id.uuidString, to: group.id, cookbookID: cookbook.id, ownerUserID: ownerUserID)
+        // Best-effort, same non-fatal precedent as the photo upload above
+        // — a failure here shouldn't undo an otherwise-successful publish.
+        try? await publicationsService.setCommentsEnabled(publication.id, enabled: commentsEnabled, actingUserID: ownerUserID)
         return photoUploadSucceeded
     }
 }

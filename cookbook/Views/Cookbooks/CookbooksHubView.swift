@@ -22,7 +22,7 @@ struct CookbooksHubView: View {
     @Environment(ActiveCookbookState.self) private var activeCookbookState
     @Query(sort: \Cookbook.sortOrder) private var allCookbooks: [Cookbook]
     @Query private var allRecipes: [Recipe]
-    @State private var joinedGroups: [(membership: Membership, group: FamilyGroup)] = []
+    @State private var joinedGroups: [(membership: Membership, group: FamilyGroup, cookbook: GroupCookbook)] = []
     @State private var isLoading = false
     @State private var isPresentingNewPersonalCookbook = false
     @State private var isPresentingNewFamilyCookbook = false
@@ -134,12 +134,12 @@ struct CookbooksHubView: View {
 
                 if !joinedGroups.isEmpty {
                     Section("Family Cookbooks") {
-                        ForEach(joinedGroups, id: \.group.id) { entry in
+                        ForEach(joinedGroups, id: \.cookbook.id) { entry in
                             NavigationLink {
-                                GroupCookbookView(group: entry.group, membership: entry.membership, groupsService: groupsService)
+                                GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.group.cookbookName)
+                                    Text(entry.cookbook.cookbookName)
                                     Text(entry.group.name)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -359,11 +359,11 @@ struct CookbooksHubView: View {
         defer { isLoading = false }
         do {
             let memberships = try await groupsService.fetchMemberships(forUser: userID).filter { $0.status == .active }
-            var groups: [(Membership, FamilyGroup)] = []
+            var groups: [(Membership, FamilyGroup, GroupCookbook)] = []
             for membership in memberships {
-                if let group = try await groupsService.fetchGroup(id: membership.groupID) {
-                    groups.append((membership, group))
-                }
+                guard let group = try await groupsService.fetchGroup(id: membership.groupID) else { continue }
+                let cookbooks = try await groupsService.fetchGroupCookbooks(forGroup: membership.groupID)
+                groups.append(contentsOf: cookbooks.map { (membership, group, $0) })
             }
             joinedGroups = groups
         } catch {

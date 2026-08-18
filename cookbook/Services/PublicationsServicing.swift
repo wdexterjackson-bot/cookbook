@@ -7,16 +7,29 @@ import Foundation
 
 enum PublicationsServiceError: Error, Equatable {
     case publicationNotFound
+    case commentNotFound
+    case commentsDisabled
     case notAuthorized
 }
 
 protocol PublicationsServicing {
-    /// Publishing the same `sourceRecipeID` to the same `groupID` again
-    /// updates the existing Publication in place — an explicit "Publish
-    /// update," never silent propagation (LIN-001) — rather than creating
-    /// a duplicate.
-    func publish(_ content: PublicationContentSnapshot, sourceRecipeID: String, to groupID: String, ownerUserID: String) async throws -> Publication
+    /// Publishing the same `sourceRecipeID` to the same `groupID` *and*
+    /// `cookbookID` again updates the existing Publication in place — an
+    /// explicit "Publish update," never silent propagation (LIN-001) —
+    /// rather than creating a duplicate. Publishing the same recipe to a
+    /// *different* cookbook within the same group is a genuinely separate
+    /// Publication, not an update — cookbookID is part of the identity
+    /// this checks, not just an extra field along for the ride.
+    func publish(_ content: PublicationContentSnapshot, sourceRecipeID: String, to groupID: String, cookbookID: String, ownerUserID: String) async throws -> Publication
     func unpublish(_ publicationID: String, actingUserID: String) async throws
+    /// Admin-delete-any (or the owner deleting their own) — permanent,
+    /// unlike `unpublish`, which just flips state. No delete path existed
+    /// for publications before this.
+    func deletePublication(_ publicationID: String, actingUserID: String) async throws
+    /// The owner-only "Allow Comments?" toggle — firestore.rules' existing
+    /// owner-republish branch already permits this alongside content/state
+    /// changes, no rules change needed for this specifically.
+    func setCommentsEnabled(_ publicationID: String, enabled: Bool, actingUserID: String) async throws
     func fetchPublications(forGroup groupID: String) async throws -> [Publication]
     func fetchPublication(id: String) async throws -> Publication?
 
@@ -65,4 +78,17 @@ protocol PublicationsServicing {
     /// (returns the current aggregate unchanged) if they hadn't rated it.
     @discardableResult
     func clearRating(_ publicationID: String, userID: String) async throws -> (sum: Int, count: Int)
+
+    /// Every comment on a publication, oldest first — the caller is
+    /// responsible for checking `Publication.commentsEnabled` before
+    /// showing them (this doesn't gate on it, mirroring how
+    /// fetchPublications(forGroup:) doesn't re-check membership either;
+    /// firestore.rules is the real enforcement either way).
+    func fetchComments(_ publicationID: String) async throws -> [RecipeComment]
+    /// Throws `.commentsDisabled` if the publication doesn't have
+    /// comments turned on — checked here too, not just by
+    /// firestore.rules, for a clean catchable error.
+    func addComment(_ publicationID: String, authorUserID: String, authorDisplayName: String, text: String) async throws -> RecipeComment
+    /// Owner-or-admin, same shape as `deletePublication`.
+    func deleteComment(_ commentID: String, publicationID: String, actingUserID: String) async throws
 }

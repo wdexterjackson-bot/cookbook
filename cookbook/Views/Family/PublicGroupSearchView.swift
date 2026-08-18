@@ -59,6 +59,12 @@ struct PublicGroupSearchContent: View {
     @State private var locationFilter = ""
     @State private var results: [FamilyGroup] = []
     @State private var groupStats: [String: (recipeCount: Int, likeCount: Int)] = [:]
+    /// A group can now hold several cookbooks — fetched alongside the
+    /// stats below (same concurrent, best-effort pattern) since this
+    /// screen's search box still finds groups by family/location, but
+    /// showing at least one of a group's cookbook names is what makes a
+    /// result recognizable to someone searching for it.
+    @State private var groupCookbookNames: [String: [String]] = [:]
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var requestedGroupIDs: Set<String> = []
@@ -81,7 +87,7 @@ struct PublicGroupSearchContent: View {
             } else {
                 ForEach(results) { group in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(group.cookbookName)
+                        Text(cookbookNamesText(for: group))
                             .font(.headline)
                         Text("\(group.name) · \(group.locationText)")
                             .font(.caption)
@@ -99,8 +105,8 @@ struct PublicGroupSearchContent: View {
                         // "Request to Join" is the request-membership
                         // action for every public group — approval path
                         // (pending vs. instant) is decided server-side by
-                        // the group's own autoApproveJoinRequests, not
-                        // something this screen needs to branch on.
+                        // the group's own approvalPolicy, not something
+                        // this screen needs to branch on.
                         Button(requestedGroupIDs.contains(group.id) ? "Requested" : "Request to Join") {
                             Task { await requestToJoin(group) }
                         }
@@ -138,6 +144,7 @@ struct PublicGroupSearchContent: View {
                 locationText: locationFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : locationFilter
             ))
             groupStats = [:]
+            groupCookbookNames = [:]
             await loadStats(for: results)
         } catch {
             errorMessage = error.localizedDescription
@@ -160,6 +167,22 @@ struct PublicGroupSearchContent: View {
                 groupStats[groupID] = (recipeCount, likeCount)
             }
         }
+        await withTaskGroup(of: (String, [String]).self) { taskGroup in
+            for familyGroup in groups {
+                taskGroup.addTask {
+                    let cookbooks = (try? await groupsService.fetchGroupCookbooks(forGroup: familyGroup.id)) ?? []
+                    return (familyGroup.id, cookbooks.map(\.cookbookName))
+                }
+            }
+            for await (groupID, names) in taskGroup {
+                groupCookbookNames[groupID] = names
+            }
+        }
+    }
+
+    private func cookbookNamesText(for group: FamilyGroup) -> String {
+        let names = groupCookbookNames[group.id] ?? []
+        return names.isEmpty ? group.name : names.joined(separator: ", ")
     }
 
     private func requestToJoin(_ group: FamilyGroup) async {

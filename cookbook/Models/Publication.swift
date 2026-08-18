@@ -78,6 +78,11 @@ struct PublicationContentSnapshot: Codable, Equatable {
 struct Publication: Codable, Identifiable, Equatable {
     var id: String
     var groupID: String
+    /// Which of the group's (possibly several) cookbooks this belongs to
+    /// — required, no nil-handling, since this field didn't exist before
+    /// the #5 clean-slate data wipe (see firestore.rules' publications/
+    /// create rule, which checks this belongs to the claimed groupID).
+    var cookbookID: String
     var ownerUserID: String
     /// The local SwiftData Recipe.id this was published from — what makes
     /// "publish this recipe again" update the existing Publication in
@@ -108,4 +113,8 @@ struct Publication: Codable, Identifiable, Equatable {
     /// create/delete.
     var ratingSum: Int? = nil
     var ratingCount: Int? = nil
+    /// Off by default — set via the publish flow's "Allow Comments?"
+    /// toggle. The whole comment list (RecipeComment) is gated on this at
+    /// read time rather than each comment carrying its own visibility.
+    var commentsEnabled: Bool = false
 }

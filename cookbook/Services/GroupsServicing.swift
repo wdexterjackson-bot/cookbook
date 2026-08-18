@@ -3,9 +3,9 @@
 //  cookbook
 //
 //  The seam for everything a group's lifecycle touches: the group itself,
-//  its memberships, join requests, and invitations. These four are one
-//  protocol (not four) because they're one aggregate — nothing here makes
-//  sense without the others.
+//  its cookbooks, memberships, join requests, and invitations. These are
+//  one protocol (not several) because they're one aggregate — nothing
+//  here makes sense without the others.
 //
 
 import Foundation
@@ -18,6 +18,7 @@ enum GroupsServiceError: Error, Equatable {
     /// Firestore permission-denied from the rules-side enforcement.
     case creditExpired
     case groupNotFound
+    case groupCookbookNotFound
     case membershipNotFound
     case joinRequestNotFound
     case invitationNotFound
@@ -25,29 +26,28 @@ enum GroupsServiceError: Error, Equatable {
     case lastAdminCannotLeaveOrBeDemoted
     case alreadyMember
     case invalidState
-    /// The Cookbook Name + Family/Group Name + Home Location combination
-    /// is already taken by another group (FamilyGroup.uniquenessKey).
-    case duplicateCookbookIdentity
 }
 
 struct NewGroupDetails {
     var name: String
-    var cookbookName: String
     var description: String
     var type: String
     var locationText: String
     var structuredRegion: String?
     var visibility: GroupVisibility
     var allowsMemberInvites: Bool
-    var allowsMemberPublishing: Bool
-    var autoApproveJoinRequests: Bool
+    var approvalPolicy: JoinApprovalPolicy
 }
 
-/// Search/filter for the public-cookbook-directory screen — `text` matches
-/// against either `cookbookName` or `name` (family/group name), so
-/// searching "Jackson" finds a cookbook named that OR a family named that;
-/// `locationText` narrows further, matching the user's own "hundreds of
-/// Team USA cookbooks, filter by family name and location" example.
+struct NewGroupCookbookDetails {
+    var cookbookName: String
+    var allowsMemberPublishing: Bool
+}
+
+/// Search/filter for the public-group-directory screen — `text` matches
+/// against `name` (the family/group name); `locationText` narrows further.
+/// Cookbook-name search is a separate query now that a group's cookbooks
+/// are their own objects — see `fetchPublicGroupCookbooks`.
 struct PublicGroupSearchFilter {
     var text: String?
     var locationText: String?
@@ -55,6 +55,14 @@ struct PublicGroupSearchFilter {
     init(text: String? = nil, locationText: String? = nil) {
         self.text = text
         self.locationText = locationText
+    }
+}
+
+struct PublicGroupCookbookSearchFilter {
+    var text: String?
+
+    init(text: String? = nil) {
+        self.text = text
     }
 }
 
@@ -83,14 +91,59 @@ enum GroupPolicy {
         let active = memberships.filter { $0.status == .active }
         return active.count == 1 && active.first?.userID == userID
     }
+
+    /// Who is allowed to decide a pending JoinRequest, per the group's
+    /// approvalPolicy. Must stay in lock-step with firestore.rules'
+    /// canDecideJoinRequest() — a decide this allows but the rules reject
+    /// (or vice versa) means either a legitimate admin gets a confusing
+    /// permission-denied, or a client that skips this check gets away with
+    /// something the rules alone should have caught. `.noApprovalNeeded`
+    /// never produces a pending request in the first place (requestToJoin
+    /// grants membership directly), so there's nothing to decide.
+    static func canDecideJoinRequest(_ userID: String, group: FamilyGroup, memberships: [Membership]) -> Bool {
+        switch group.approvalPolicy {
+        case .creatorOnly:
+            return userID == group.createdByUserID
+        case .anyAdministrator:
+            return isActiveAdmin(userID, in: memberships)
+        case .anyUser:
+            return isActiveMember(userID, in: memberships)
+        case .noApprovalNeeded:
+            return false
+        }
+    }
 }
 
 protocol GroupsServicing {
-    /// Creates a group and its founding admin membership, consuming one
-    /// creation credit — atomically and exactly once per `idempotencyKey`,
-    /// even if this is called more than once for the same user action
-    /// (PAY-005).
-    func createGroup(_ details: NewGroupDetails, creatorUserID: String, idempotencyKey: String) async throws -> FamilyGroup
+    /// Creates a group, its founding admin membership, and its first
+    /// cookbook — atomically and exactly once per `idempotencyKey`, even
+    /// if this is called more than once for the same user action
+    /// (PAY-005). Consumes one tier-2 creation credit.
+    func createGroup(
+        _ groupDetails: NewGroupDetails,
+        cookbookDetails: NewGroupCookbookDetails,
+        creatorUserID: String,
+        creatorDisplayName: String,
+        idempotencyKey: String
+    ) async throws -> (FamilyGroup, GroupCookbook)
+
+    /// Adds a further cookbook to an already-existing group. Caller must
+    /// already be an active admin of `groupID`.
+    func createGroupCookbook(
+        _ details: NewGroupCookbookDetails,
+        in groupID: String,
+        creatorUserID: String,
+        creatorDisplayName: String
+    ) async throws -> GroupCookbook
+
+    func fetchGroupCookbooks(forGroup groupID: String) async throws -> [GroupCookbook]
+    func fetchGroupCookbook(id: String) async throws -> GroupCookbook?
+    /// Cookbook-name search across every cookbook belonging to a public,
+    /// active group — a separate query from `fetchPublicGroups` now that
+    /// cookbooks are their own objects (today's one search box finding
+    /// either the group name or the cookbook name doesn't carry over
+    /// as a single query post-split).
+    func fetchPublicGroupCookbooks(matching filter: PublicGroupCookbookSearchFilter) async throws -> [GroupCookbook]
 
     func fetchPublicGroups(matching filter: PublicGroupSearchFilter) async throws -> [FamilyGroup]
     func fetchGroup(id: String) async throws -> FamilyGroup?
@@ -99,7 +152,8 @@ protocol GroupsServicing {
 
     func requestToJoin(groupID: String, requesterID: String, note: String?) async throws -> JoinRequest
     func decideJoinRequest(_ requestID: String, approve: Bool, decidedByUserID: String) async throws
-    /// Join requests awaiting decision by an admin of `groupID`.
+    /// Join requests awaiting decision, for whoever has standing to decide
+    /// them under `groupID`'s approvalPolicy.
     func fetchJoinRequests(forGroup groupID: String) async throws -> [JoinRequest]
     /// Every join request `userID` has made, across all groups — used to
     /// show "your request was approved/denied" in Messages.
@@ -107,7 +161,8 @@ protocol GroupsServicing {
 
     func invite(groupID: String, inviterID: String, inviteeIdentifier: String, role: MembershipRole) async throws -> Invitation
     func respondToInvitation(_ invitationID: String, accept: Bool, respondingUserID: String) async throws
-    /// Pending invitations addressed to `identifier` (the invitee's email).
+    /// Pending invitations addressed to `identifier` (the invitee's email
+    /// or userID — see the invitations UID-matching fix in firestore.rules).
     func fetchInvitations(forInvitee identifier: String) async throws -> [Invitation]
 
     /// Throws `.lastAdminCannotLeaveOrBeDemoted` if this would leave the
@@ -120,12 +175,12 @@ protocol GroupsServicing {
     /// a populated-but-adminless group is still not allowed.
     func leaveGroup(groupID: String, userID: String) async throws
     /// Permanently deletes a group and everything tied to it — memberships,
-    /// published recipes, their photos, and the cookbook-name/location
-    /// reservation. Client-side rules block direct deletes on every one of
-    /// those collections (`allow delete: if false`), so this always goes
-    /// through a Cloud Function running with elevated privileges; there is
-    /// no client-only implementation. Called automatically by `leaveGroup`
-    /// when the leaving member is the last one — not normally called
-    /// directly by UI code.
+    /// cookbooks, published recipes, and their photos. Client-side rules
+    /// block direct deletes on every one of those collections
+    /// (`allow delete: if false`), so this always goes through a Cloud
+    /// Function running with elevated privileges; there is no client-only
+    /// implementation. Called automatically by `leaveGroup` when the
+    /// leaving member is the last one — not normally called directly by UI
+    /// code.
     func deleteGroupPermanently(groupID: String) async throws
 }

@@ -9,7 +9,7 @@ import {
   assertSucceeds,
   assertFails,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, writeBatch, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, writeBatch, Timestamp } from 'firebase/firestore';
 
 let testEnv;
 
@@ -36,15 +36,12 @@ async function seed(setupFn) {
   });
 }
 
-const GROUP1_UNIQUENESS_KEY = 'barrentine family reunion|barrentines|memphis';
-
 function groupData(overrides = {}) {
   return {
     id: 'group1',
     slug: 'group1',
     name: 'Barrentines',
-    cookbookName: 'Barrentine Family Reunion',
-    uniquenessKey: GROUP1_UNIQUENESS_KEY,
+    createdByDisplayName: 'Alice',
     description: '',
     type: 'Family',
     locationText: 'Memphis',
@@ -55,9 +52,22 @@ function groupData(overrides = {}) {
     createdAt: Timestamp.now(),
     status: 'active',
     allowsMemberInvites: false,
-    allowsMemberPublishing: true,
-    autoApproveJoinRequests: false,
+    approvalPolicy: 'anyAdministrator',
     isMFB: false,
+    ...overrides,
+  };
+}
+
+function groupCookbookData(overrides = {}) {
+  return {
+    id: 'cb-group1',
+    groupID: 'group1',
+    cookbookName: 'Barrentine Family Reunion',
+    createdByUserID: 'alice',
+    createdByDisplayName: 'Alice',
+    createdAt: Timestamp.now(),
+    coverImageURL: null,
+    allowsMemberPublishing: true,
     ...overrides,
   };
 }
@@ -330,44 +340,18 @@ describe('entitlements', () => {
 });
 
 describe('group creation', () => {
-  it('succeeds when paired with a matching entitlement decrement and uniqueness-key claim in one batch', async () => {
+  it('succeeds when paired with a matching entitlement decrement, founder membership, and first cookbook in one batch', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
     const alice = testEnv.authenticatedContext('alice').firestore();
     const batch = writeBatch(alice);
     batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
     batch.set(doc(alice, 'groups/group1'), groupData());
-    batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
     batch.set(doc(alice, 'memberships/group1_alice'), {
       id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
       status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
     });
+    batch.set(doc(alice, 'groupCookbooks/cb-group1'), groupCookbookData());
     await assertSucceeds(batch.commit());
-  });
-
-  it('rejects creating a group without a matching uniqueness-key claim in the same batch', async () => {
-    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
-    const alice = testEnv.authenticatedContext('alice').firestore();
-    const batch = writeBatch(alice);
-    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
-    batch.set(doc(alice, 'groups/group1'), groupData());
-    // No groupUniquenessKeys write this time — even with a correct credit
-    // decrement, the create rule's second getAfter() check should reject it.
-    await assertFails(batch.commit());
-  });
-
-  it('rejects claiming a Cookbook Name + Family Name + Location combination that is already taken', async () => {
-    await seed(async (db) => {
-      await setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 5 }));
-      await setDoc(doc(db, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group0', createdAt: Timestamp.now() });
-    });
-    const alice = testEnv.authenticatedContext('alice').firestore();
-    const batch = writeBatch(alice);
-    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 4 }));
-    batch.set(doc(alice, 'groups/group1'), groupData());
-    batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
-    // The reservation doc already exists (from "group0"), so this write is
-    // an update, not a create — denied, and the whole batch fails with it.
-    await assertFails(batch.commit());
   });
 
   it('rejects creating a group without spending a credit', async () => {
@@ -400,8 +384,105 @@ describe('group creation', () => {
     const batch = writeBatch(alice);
     batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
     batch.set(doc(alice, 'groups/group1'), groupData({ isMFB: true }));
-    batch.set(doc(alice, `groupUniquenessKeys/${GROUP1_UNIQUENESS_KEY}`), { groupID: 'group1', createdAt: Timestamp.now() });
     await assertFails(batch.commit());
+  });
+
+  it('rejects an invalid approvalPolicy value', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
+    batch.set(doc(alice, 'groups/group1'), groupData({ approvalPolicy: 'nonsense' }));
+    await assertFails(batch.commit());
+  });
+});
+
+describe('groupCookbooks', () => {
+  it("lets the founder create the group's first cookbook in the same batch as the group itself", async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'entitlements/alice'), entitlementData({ tier2Credits: 0 }));
+    batch.set(doc(alice, 'groups/group1'), groupData());
+    batch.set(doc(alice, 'groupCookbooks/cb-group1'), groupCookbookData());
+    await assertSucceeds(batch.commit());
+  });
+
+  it("rejects a cookbook create claiming a different user's createdByUserID than the actor, even during group creation", async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', tier2Credits: 1 })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    const batch = writeBatch(bob);
+    batch.set(doc(bob, 'entitlements/bob'), entitlementData({ userID: 'bob', tier2Credits: 0 }));
+    batch.set(doc(bob, 'groups/group1'), groupData({ createdByUserID: 'bob' }));
+    // Bob is the group's real founder (would pass the getAfter() founder
+    // check), but claims someone else made the cookbook — the plain
+    // auth.uid == createdByUserID check on groupCookbooks/create itself
+    // has to catch this independent of the founder branch.
+    batch.set(doc(bob, 'groupCookbooks/cb-group1'), groupCookbookData({ createdByUserID: 'alice' }));
+    await assertFails(batch.commit());
+  });
+
+  it('an admin can add a further cookbook to an already-existing group', async () => {
+    await seed((db) => setDoc(doc(db, 'memberships/group1_alice'), {
+      id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+      status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'groupCookbooks/cb2'), groupCookbookData({ id: 'cb2' })));
+  });
+
+  it('a plain member cannot add a further cookbook to an already-existing group', async () => {
+    await seed((db) => setDoc(doc(db, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'groupCookbooks/cb2'), groupCookbookData({ id: 'cb2', createdByUserID: 'bob' })));
+  });
+
+  it("a member can read their group's cookbook", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData());
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(getDoc(doc(bob, 'groupCookbooks/cb-group1')));
+  });
+
+  it('a non-member cannot read a cookbook belonging to a private group they are not in', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ visibility: 'private' }));
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData());
+    });
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'groupCookbooks/cb-group1')));
+  });
+
+  // Mirrors groups/{id}'s own public-read rule — needed so a public
+  // cookbook's name/metadata is searchable without being a member
+  // (fetchPublicGroupCookbooks).
+  it('a non-member can read a cookbook belonging to a public group', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ visibility: 'public' }));
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData());
+    });
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertSucceeds(getDoc(doc(mallory, 'groupCookbooks/cb-group1')));
+  });
+
+  it('rejects reparenting a cookbook to a different group', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData());
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'groupCookbooks/cb-group1'), groupCookbookData({ groupID: 'group2' })));
   });
 });
 
@@ -537,9 +618,9 @@ describe('memberships', () => {
     await assertFails(getDoc(doc(mallory, 'memberships/group1_alice')));
   });
 
-  it('a Pro User can self-create a member membership when the group auto-approves', async () => {
+  it('a Pro User can self-create a member membership when the group needs no approval', async () => {
     await seed(async (db) => {
-      await setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true }));
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'noApprovalNeeded' }));
       await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
     });
     const bob = testEnv.authenticatedContext('bob').firestore();
@@ -550,7 +631,7 @@ describe('memberships', () => {
   });
 
   it('a non-Pro user can self-create a member membership on the MFB cookbook even without credits', async () => {
-    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true, isMFB: true })));
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'noApprovalNeeded', isMFB: true })));
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertSucceeds(setDoc(doc(bob, 'memberships/group1_bob'), {
       id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
@@ -558,8 +639,8 @@ describe('memberships', () => {
     }));
   });
 
-  it('a non-Pro user cannot self-create a membership on a non-MFB auto-approve group without a Pro credit', async () => {
-    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true })));
+  it('a non-Pro user cannot self-create a membership on a non-MFB no-approval group without a Pro credit', async () => {
+    await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'noApprovalNeeded' })));
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertFails(setDoc(doc(bob, 'memberships/group1_bob'), {
       id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
@@ -567,9 +648,9 @@ describe('memberships', () => {
     }));
   });
 
-  it('a user cannot self-create a membership via the auto path when the group does not auto-approve', async () => {
+  it('a user cannot self-create a membership via the auto path when the group requires approval', async () => {
     await seed(async (db) => {
-      await setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: false }));
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'anyAdministrator' }));
       await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
     });
     const bob = testEnv.authenticatedContext('bob').firestore();
@@ -579,9 +660,9 @@ describe('memberships', () => {
     }));
   });
 
-  it('a user cannot self-grant admin via the auto-approve path even when the group allows it', async () => {
+  it('a user cannot self-grant admin via the auto path even when the group needs no approval', async () => {
     await seed(async (db) => {
-      await setDoc(doc(db, 'groups/group1'), groupData({ autoApproveJoinRequests: true }));
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'noApprovalNeeded' }));
       await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
     });
     const bob = testEnv.authenticatedContext('bob').firestore();
@@ -599,12 +680,50 @@ describe('memberships', () => {
       status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
     }));
   });
+
+  // Exercises the exact gap that would exist if canDecideJoinRequest()
+  // (joinRequests/update) and this collection's "someone approved my
+  // request" branch ever fell out of lock-step: under an anyUser policy, a
+  // plain member (not an admin) can legally decide the request, so they
+  // must also be able to create the resulting membership.
+  it('under an anyUser approval policy, a plain member can create the membership their own approval unlocked', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'anyUser' }));
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 }));
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'memberships/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', userID: 'carol', role: 'member',
+      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('under a creatorOnly approval policy, an admin who is not the creator cannot create the resulting membership', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 }));
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'memberships/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', userID: 'carol', role: 'member',
+      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
 });
 
 function publicationData(overrides = {}) {
   return {
     id: 'pub1',
     groupID: 'group1',
+    cookbookID: 'cb-group1',
     ownerUserID: 'alice',
     sourceRecipeID: 'recipe1',
     state: 'published',
@@ -686,6 +805,192 @@ describe('publications', () => {
       },
     })));
   });
+
+  it('a member can publish to a cookbook that allows member publishing', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData({ allowsMemberPublishing: true }));
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'publications/pub1'), publicationData({ ownerUserID: 'bob' })));
+  });
+
+  it('a member cannot publish to a cookbook that disallows member publishing', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData({ allowsMemberPublishing: false }));
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'publications/pub1'), publicationData({ ownerUserID: 'bob' })));
+  });
+
+  it('an admin can publish to a cookbook regardless of allowsMemberPublishing', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData({ allowsMemberPublishing: false }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'publications/pub1'), publicationData()));
+  });
+
+  it("rejects publishing with a cookbookID that belongs to a different group than claimed", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groupCookbooks/cb-group1'), groupCookbookData({ groupID: 'group2', allowsMemberPublishing: true }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    // publicationData() claims groupID: 'group1', but cb-group1 actually belongs to group2.
+    await assertFails(setDoc(doc(alice, 'publications/pub1'), publicationData()));
+  });
+
+  it('the owner can delete their own publication', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData());
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(deleteDoc(doc(alice, 'publications/pub1')));
+  });
+
+  it("an admin can delete a member's publication", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData({ ownerUserID: 'bob' }));
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(deleteDoc(doc(alice, 'publications/pub1')));
+  });
+
+  it("a non-owner, non-admin member cannot delete someone else's publication", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData());
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(deleteDoc(doc(bob, 'publications/pub1')));
+  });
+});
+
+describe('comments', () => {
+  function commentData(overrides = {}) {
+    return {
+      id: 'comment1', publicationID: 'pub1', groupID: 'group1',
+      authorUserID: 'bob', authorDisplayName: 'Bob', text: 'Delicious!',
+      createdAt: Timestamp.now(),
+      ...overrides,
+    };
+  }
+
+  it('a member can comment when the publication has comments enabled', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData({ commentsEnabled: true }));
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'publications/pub1/comments/comment1'), commentData()));
+  });
+
+  it('rejects commenting when the publication has comments disabled', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData({ commentsEnabled: false }));
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'publications/pub1/comments/comment1'), commentData()));
+  });
+
+  it('rejects a non-member commenting even when comments are enabled', async () => {
+    await seed((db) => setDoc(doc(db, 'publications/pub1'), publicationData({ commentsEnabled: true })));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(setDoc(doc(mallory, 'publications/pub1/comments/comment1'), commentData({ authorUserID: 'mallory' })));
+  });
+
+  it('rejects impersonating another user as the comment author', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1'), publicationData({ commentsEnabled: true }));
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'publications/pub1/comments/comment1'), commentData({ authorUserID: 'alice' })));
+  });
+
+  it('the author can delete their own comment', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1/comments/comment1'), commentData());
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(deleteDoc(doc(bob, 'publications/pub1/comments/comment1')));
+  });
+
+  it("an admin can delete someone else's comment", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1/comments/comment1'), commentData());
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(deleteDoc(doc(alice, 'publications/pub1/comments/comment1')));
+  });
+
+  it("a non-author, non-admin member cannot delete someone else's comment", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_carol'), {
+        id: 'group1_carol', groupID: 'group1', userID: 'carol', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1/comments/comment1'), commentData());
+    });
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertFails(deleteDoc(doc(carol, 'publications/pub1/comments/comment1')));
+  });
+
+  it('rejects editing a comment after it is posted', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1/comments/comment1'), commentData());
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'publications/pub1/comments/comment1'), commentData({ text: 'Edited' })));
+  });
 });
 
 describe('join requests', () => {
@@ -730,8 +1035,9 @@ describe('join requests', () => {
     }));
   });
 
-  it('a non-admin cannot approve a join request', async () => {
+  it('under the default anyAdministrator policy, a non-admin cannot approve a join request', async () => {
     await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData());
       await setDoc(doc(db, 'memberships/group1_bob'), {
         id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
         status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
@@ -748,8 +1054,9 @@ describe('join requests', () => {
     }));
   });
 
-  it('an admin can approve a join request', async () => {
+  it('under the default anyAdministrator policy, an admin can approve a join request', async () => {
     await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData());
       await setDoc(doc(db, 'memberships/group1_alice'), {
         id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
         status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
@@ -764,5 +1071,203 @@ describe('join requests', () => {
       id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
       state: 'approved', decidedByUserID: 'alice', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
     }));
+  });
+
+  it('under a creatorOnly policy, the creator can approve even without an admin membership', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'joinRequests/req1'), {
+        id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'approved', decidedByUserID: 'alice', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+    }));
+  });
+
+  it('under a creatorOnly policy, an admin who is not the creator cannot approve', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'joinRequests/req1'), {
+        id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+      });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'approved', decidedByUserID: 'bob', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+    }));
+  });
+
+  it('under an anyUser policy, a plain member can approve', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'anyUser' }));
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'joinRequests/req1'), {
+        id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+      });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'approved', decidedByUserID: 'bob', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+    }));
+  });
+});
+
+function invitationData(overrides = {}) {
+  return {
+    id: 'invite1', groupID: 'group1', inviterID: 'alice',
+    inviteeIdentifier: 'bob@example.com', state: 'pending',
+    createdAt: Timestamp.now(),
+    ...overrides,
+  };
+}
+
+describe('invitations', () => {
+  it('an invitee identified by email can read their own invitation', async () => {
+    await seed((db) => setDoc(doc(db, 'invitations/invite1'), invitationData()));
+    const bob = testEnv.authenticatedContext('bob', { email: 'bob@example.com' }).firestore();
+    await assertSucceeds(getDoc(doc(bob, 'invitations/invite1')));
+  });
+
+  // The real correctness gap this covers: inviteeIdentifier can now hold a
+  // UID (friend invites), not just an email — the original rule only ever
+  // checked request.auth.token.email, so a UID-identified invitee could
+  // never read or accept their own invitation.
+  it('an invitee identified by userID can read their own invitation', async () => {
+    await seed((db) => setDoc(doc(db, 'invitations/invite1'), invitationData({ inviteeIdentifier: 'bob' })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(getDoc(doc(bob, 'invitations/invite1')));
+  });
+
+  it('an invitee identified by userID can accept their own invitation', async () => {
+    await seed((db) => setDoc(doc(db, 'invitations/invite1'), invitationData({ inviteeIdentifier: 'bob' })));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'invitations/invite1'), invitationData({
+      inviteeIdentifier: 'bob', state: 'accepted',
+    })));
+  });
+
+  it('a stranger cannot read an invitation meant for someone else', async () => {
+    await seed((db) => setDoc(doc(db, 'invitations/invite1'), invitationData({ inviteeIdentifier: 'bob' })));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'invitations/invite1')));
+  });
+});
+
+describe('friendRequests', () => {
+  it('a user can send a friend request', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+  });
+
+  it("rejects sending a friend request on someone else's behalf", async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'friendRequests/bob_carol'), {
+      id: 'bob_carol', senderID: 'bob', recipientID: 'carol',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+  });
+
+  it('the recipient can accept a pending request', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'accepted', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+  });
+
+  it('the sender cannot unilaterally accept their own request', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'accepted', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+  });
+
+  it('the original sender can re-request after an earlier decline', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'declined', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+  });
+});
+
+describe('friendships', () => {
+  it('creating a friendship succeeds when paired with the matching request flipping to accepted, in one batch', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    const batch = writeBatch(bob);
+    batch.set(doc(bob, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'accepted', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    });
+    batch.set(doc(bob, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    });
+    await assertSucceeds(batch.commit());
+  });
+
+  it('rejects creating a friendship with no accepted request behind it', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+  });
+
+  it('either party can read the friendship', async () => {
+    await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(getDoc(doc(bob, 'friendships/alice_bob')));
+  });
+
+  it('a third party cannot read the friendship', async () => {
+    await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'friendships/alice_bob')));
+  });
+
+  it('either party can remove the friendship', async () => {
+    await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(deleteDoc(doc(bob, 'friendships/alice_bob')));
   });
 });

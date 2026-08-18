@@ -264,7 +264,6 @@ private extension FamilyGroup {
             id: "group-1",
             slug: "group-1",
             name: "Jackson",
-            cookbookName: "Jackson Family Reunion",
             description: "",
             type: "Family",
             locationText: "Baltimore, MD",
@@ -272,11 +271,11 @@ private extension FamilyGroup {
             coverImageURL: nil,
             visibility: .publicGroup,
             createdByUserID: "creator",
+            createdByDisplayName: "Creator",
             createdAt: .now,
             status: .active,
             allowsMemberInvites: false,
-            allowsMemberPublishing: true,
-            autoApproveJoinRequests: false,
+            approvalPolicy: .anyAdministrator,
             isMFB: isMFB
         )
     }

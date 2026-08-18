@@ -9,6 +9,8 @@ const { getStorage } = require('firebase-admin/storage');
 const { applyPurchaseClaim } = require('./applyPurchaseClaim');
 const { verifyTransaction } = require('./purchaseClaimVerifier');
 const { resolveSignInProviders, RateLimitExceededError } = require('./resolveSignInProviders');
+const { RateLimitExceededError: FriendLookupRateLimitExceededError } = require('./rateLimiter');
+const { findUserByEmail } = require('./findUserByEmail');
 const { deleteGroupPermanently } = require('./deleteGroupPermanently');
 const { handleAppStoreServerNotification } = require('./appStoreServerNotifications');
 const { decodeAndVerifyNotification } = require('./appStoreServerNotificationVerifier');
@@ -52,6 +54,26 @@ exports.resolveSignInProviders = onCall(async (request) => {
     }
     console.error('resolveSignInProviders failed:', error);
     throw new HttpsError('internal', 'Could not check this email right now.');
+  }
+});
+
+// Friend discovery by email (#5) — see findUserByEmail.js for the
+// anti-enumeration reasoning (silent not-found for both "no such user"
+// and "user hid their email," rate-limited per caller).
+exports.findUserByEmail = onCall(async (request) => {
+  const email = request.data && request.data.email;
+  const callerUserID = request.auth && request.auth.uid;
+  if (!callerUserID) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  try {
+    return await findUserByEmail({ db: getFirestore(), authClient: getAuth(), email, callerUserID });
+  } catch (error) {
+    if (error instanceof FriendLookupRateLimitExceededError) {
+      throw new HttpsError('resource-exhausted', error.message);
+    }
+    console.error('findUserByEmail failed:', error);
+    throw new HttpsError('internal', 'Could not look up this email right now.');
   }
 });
 

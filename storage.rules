@@ -15,7 +15,7 @@ rules_version = '2';
 // passes before trusting this file blindly after any future change here.
 service firebase.storage {
   match /b/{bucket}/o {
-    match /publications/{groupID}/{fileName} {
+    match /publications/{groupID}/{cookbookID}/{fileName} {
       allow read: if request.auth != null
         && firestore.exists(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid))
         && firestore.get(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid)).data.status == 'active';

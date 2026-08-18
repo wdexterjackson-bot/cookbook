@@ -20,10 +20,10 @@ enum MembershipSource: String, Codable {
     case request
     case invite
     case founder
-    /// Self-granted the instant a user requests to join a group that has
-    /// FamilyGroup.autoApproveJoinRequests set — distinct from `.request`
-    /// (which always requires an admin's separate approval) so a
-    /// membership document itself records how it came to exist.
+    /// Self-granted the instant a user requests to join a group whose
+    /// FamilyGroup.approvalPolicy is .noApprovalNeeded — distinct from
+    /// `.request` (which always requires a decision per approvalPolicy) so
+    /// a membership document itself records how it came to exist.
     case auto
 }
 

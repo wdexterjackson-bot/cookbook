@@ -32,12 +32,16 @@ struct MoreHubView: View {
     @State private var isPresentingCommunities = false
     @State private var isPresentingDiscover = false
     @State private var isPresentingConversionTool = false
+    @State private var isPresentingFriends = false
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
+    private let friendsService: FriendsServicing = FirestoreFriendsService()
+    private let friendDiscoveryService: FriendDiscoveryServicing = FirebaseFriendDiscoveryService()
 
     private let items: [MoreMenuItem] = [
         MoreMenuItem(title: "Profile", subtitle: "Account & purchases", systemImage: "person.crop.circle.fill", tint: .potluckTomato),
         MoreMenuItem(title: "Messages", subtitle: "Invitations & requests", systemImage: "tray.fill", tint: .potluckSage),
+        MoreMenuItem(title: "Friends", subtitle: "Add friends, manage requests", systemImage: "person.2.fill", tint: .potluckTomato),
         MoreMenuItem(title: "Administrator", subtitle: "Bulk recipe import", systemImage: "wrench.and.screwdriver.fill", tint: .potluckSunflower),
         MoreMenuItem(title: "Discover New Cookbook Communities", subtitle: "Search & join public Family Cookbooks", systemImage: "person.3.fill", tint: .potluckTomato),
         MoreMenuItem(title: "Discover", subtitle: "Find recipes to import from the web", systemImage: "sparkle.magnifyingglass", tint: .potluckSage),
@@ -73,6 +77,9 @@ struct MoreHubView: View {
         .sheet(isPresented: $isPresentingMessages) {
             MessagesView()
         }
+        .sheet(isPresented: $isPresentingFriends) {
+            FriendsListView(friendsService: friendsService, friendDiscoveryService: friendDiscoveryService)
+        }
         .sheet(isPresented: $isPresentingAdministrator) {
             AdministratorView()
         }
@@ -91,6 +98,7 @@ struct MoreHubView: View {
         switch item.title {
         case "Profile": isPresentingProfile = true
         case "Messages": isPresentingMessages = true
+        case "Friends": isPresentingFriends = true
         case "Administrator": isPresentingAdministrator = true
         case "Discover New Cookbook Communities": isPresentingCommunities = true
         case "Discover": isPresentingDiscover = true

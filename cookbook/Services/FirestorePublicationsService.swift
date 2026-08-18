@@ -2,7 +2,7 @@
 //  FirestorePublicationsService.swift
 //  cookbook
 //
-//  Collection: publications/{id}.
+//  Collections: publications/{id}, publications/{id}/comments/{id}.
 //
 
 import FirebaseFirestore
@@ -10,10 +10,16 @@ import Foundation
 
 final class FirestorePublicationsService: PublicationsServicing {
     private let db = Firestore.firestore()
+    private let groupsService: GroupsServicing
 
-    func publish(_ content: PublicationContentSnapshot, sourceRecipeID: String, to groupID: String, ownerUserID: String) async throws -> Publication {
+    init(groupsService: GroupsServicing = FirestoreGroupsService()) {
+        self.groupsService = groupsService
+    }
+
+    func publish(_ content: PublicationContentSnapshot, sourceRecipeID: String, to groupID: String, cookbookID: String, ownerUserID: String) async throws -> Publication {
         let existingSnapshot = try await db.collection("publications")
             .whereField("groupID", isEqualTo: groupID)
+            .whereField("cookbookID", isEqualTo: cookbookID)
             .whereField("sourceRecipeID", isEqualTo: sourceRecipeID)
             .whereField("ownerUserID", isEqualTo: ownerUserID)
             .getDocuments()
@@ -30,6 +36,7 @@ final class FirestorePublicationsService: PublicationsServicing {
         let publication = Publication(
             id: db.collection("publications").document().documentID,
             groupID: groupID,
+            cookbookID: cookbookID,
             ownerUserID: ownerUserID,
             sourceRecipeID: sourceRecipeID,
             state: .published,
@@ -52,6 +59,74 @@ final class FirestorePublicationsService: PublicationsServicing {
         publication.state = .unpublished
         publication.updatedAt = .now
         try ref.setData(from: publication)
+    }
+
+    func setCommentsEnabled(_ publicationID: String, enabled: Bool, actingUserID: String) async throws {
+        let ref = db.collection("publications").document(publicationID)
+        guard var publication = try await ref.getDocument().data(as: Publication?.self) else {
+            throw PublicationsServiceError.publicationNotFound
+        }
+        guard publication.ownerUserID == actingUserID else {
+            throw PublicationsServiceError.notAuthorized
+        }
+        publication.commentsEnabled = enabled
+        try ref.setData(from: publication)
+    }
+
+    func deletePublication(_ publicationID: String, actingUserID: String) async throws {
+        let ref = db.collection("publications").document(publicationID)
+        guard let publication = try await ref.getDocument().data(as: Publication?.self) else {
+            throw PublicationsServiceError.publicationNotFound
+        }
+        if publication.ownerUserID != actingUserID {
+            let groupMemberships = try await groupsService.fetchMemberships(forGroup: publication.groupID)
+            guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+                throw PublicationsServiceError.notAuthorized
+            }
+        }
+        try await ref.delete()
+    }
+
+    func fetchComments(_ publicationID: String) async throws -> [RecipeComment] {
+        let snapshot = try await db.collection("publications").document(publicationID)
+            .collection("comments")
+            .order(by: "createdAt")
+            .getDocuments()
+        return try snapshot.documents.map { try $0.data(as: RecipeComment.self) }
+    }
+
+    func addComment(_ publicationID: String, authorUserID: String, authorDisplayName: String, text: String) async throws -> RecipeComment {
+        guard let publication = try await fetchPublication(id: publicationID) else {
+            throw PublicationsServiceError.publicationNotFound
+        }
+        guard publication.commentsEnabled else {
+            throw PublicationsServiceError.commentsDisabled
+        }
+        let comment = RecipeComment(
+            id: db.collection("publications").document(publicationID).collection("comments").document().documentID,
+            publicationID: publicationID,
+            groupID: publication.groupID,
+            authorUserID: authorUserID,
+            authorDisplayName: authorDisplayName,
+            text: text,
+            createdAt: .now
+        )
+        try db.collection("publications").document(publicationID).collection("comments").document(comment.id).setData(from: comment)
+        return comment
+    }
+
+    func deleteComment(_ commentID: String, publicationID: String, actingUserID: String) async throws {
+        let ref = db.collection("publications").document(publicationID).collection("comments").document(commentID)
+        guard let comment = try await ref.getDocument().data(as: RecipeComment?.self) else {
+            throw PublicationsServiceError.commentNotFound
+        }
+        if comment.authorUserID != actingUserID {
+            let groupMemberships = try await groupsService.fetchMemberships(forGroup: comment.groupID)
+            guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+                throw PublicationsServiceError.notAuthorized
+            }
+        }
+        try await ref.delete()
     }
 
     func fetchPublications(forGroup groupID: String) async throws -> [Publication] {

@@ -22,8 +22,8 @@ struct PublishCookbookToFamilyCookbookView: View {
     @Query private var allRecipes: [Recipe]
 
     @State private var selectedCookbookID: UUID?
-    @State private var eligibleGroups: [FamilyGroup] = []
-    @State private var selectedGroupID: String?
+    @State private var eligibleCookbooks: [(group: FamilyGroup, cookbook: GroupCookbook)] = []
+    @State private var selectedGroupCookbookID: String?
     @State private var isLoadingGroups = false
     @State private var isPublishing = false
     @State private var publishedCount = 0
@@ -88,14 +88,14 @@ struct PublishCookbookToFamilyCookbookView: View {
                     Section {
                         if isLoadingGroups {
                             ProgressView()
-                        } else if eligibleGroups.isEmpty {
+                        } else if eligibleCookbooks.isEmpty {
                             Text("No Family Cookbooks you can publish to yet.")
                                 .foregroundStyle(.secondary)
                         } else {
-                            Picker("Family Cookbook", selection: $selectedGroupID) {
+                            Picker("Family Cookbook", selection: $selectedGroupCookbookID) {
                                 Text("Choose a Family Cookbook").tag(String?.none)
-                                ForEach(eligibleGroups) { group in
-                                    Text(group.cookbookName).tag(String?.some(group.id))
+                                ForEach(eligibleCookbooks, id: \.cookbook.id) { entry in
+                                    Text(entry.cookbook.cookbookName).tag(String?.some(entry.cookbook.id))
                                 }
                             }
                         }
@@ -136,30 +136,32 @@ struct PublishCookbookToFamilyCookbookView: View {
                         Button("Publish") {
                             Task { await publishAll() }
                         }
-                        .disabled(selectedCookbookID == nil || selectedGroupID == nil || recipesInSelectedCookbook.isEmpty || isPublishing)
+                        .disabled(selectedCookbookID == nil || selectedGroupCookbookID == nil || recipesInSelectedCookbook.isEmpty || isPublishing)
                     }
                 }
             }
             .task {
-                await loadEligibleGroups()
+                await loadEligibleCookbooks()
             }
         }
     }
 
-    private func loadEligibleGroups() async {
+    private func loadEligibleCookbooks() async {
         guard let userID = accountState.currentUserID else { return }
         isLoadingGroups = true
         errorMessage = nil
         defer { isLoadingGroups = false }
         do {
             let memberships = try await groupsService.fetchMemberships(forUser: userID).filter { $0.status == .active }
-            var groups: [FamilyGroup] = []
+            var eligible: [(FamilyGroup, GroupCookbook)] = []
             for membership in memberships {
                 guard let group = try await groupsService.fetchGroup(id: membership.groupID) else { continue }
-                guard membership.role == .admin || group.allowsMemberPublishing else { continue }
-                groups.append(group)
+                let cookbooks = try await groupsService.fetchGroupCookbooks(forGroup: membership.groupID)
+                for cookbook in cookbooks where membership.role == .admin || cookbook.allowsMemberPublishing {
+                    eligible.append((group, cookbook))
+                }
             }
-            eligibleGroups = groups
+            eligibleCookbooks = eligible
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -167,10 +169,11 @@ struct PublishCookbookToFamilyCookbookView: View {
 
     private func publishAll() async {
         guard let userID = accountState.currentUserID,
-              let selectedGroupID,
-              let group = eligibleGroups.first(where: { $0.id == selectedGroupID }) else {
+              let selectedGroupCookbookID,
+              let entry = eligibleCookbooks.first(where: { $0.cookbook.id == selectedGroupCookbookID }) else {
             return
         }
+        let group = entry.group
         isPublishing = true
         errorMessage = nil
         publishedCount = 0
@@ -180,7 +183,7 @@ struct PublishCookbookToFamilyCookbookView: View {
         for recipe in recipesInSelectedCookbook {
             do {
                 let photoUploadSucceeded = try await RecipePublishingCoordinator.publish(
-                    recipe, to: group, ownerUserID: userID,
+                    recipe, to: group, cookbook: entry.cookbook, ownerUserID: userID,
                     publicationsService: publicationsService, photoUploadService: photoUploadService
                 )
                 publishedCount += 1

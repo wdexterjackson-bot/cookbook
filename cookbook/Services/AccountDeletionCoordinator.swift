@@ -43,9 +43,11 @@ enum AccountDeletionCoordinator {
             // instead of stranding it, so that case doesn't need blocking.
             guard GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships),
                   !GroupPolicy.isLastActiveMember(userID, in: groupMemberships) else { continue }
-            if let group = try await groupsService.fetchGroup(id: membership.groupID) {
-                blockingCookbookNames.append(group.cookbookName)
-            }
+            // A group can now hold several cookbooks — being the last
+            // admin strands all of them, so every one gets listed, not
+            // just a single "the" cookbook.
+            let cookbooks = try await groupsService.fetchGroupCookbooks(forGroup: membership.groupID)
+            blockingCookbookNames.append(contentsOf: cookbooks.map(\.cookbookName))
         }
         guard blockingCookbookNames.isEmpty else {
             throw AccountDeletionError.blockedByAdminOnlyCookbooks(cookbookNames: blockingCookbookNames)

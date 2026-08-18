@@ -26,6 +26,19 @@ final class FirestoreUserProfileService: UserProfileServicing {
         try await db.collection("userProfiles").document(userID).setData(encoded, merge: true)
     }
 
+    func setEmail(_ email: String, userID: String) async throws {
+        try await db.collection("userProfiles").document(userID).setData(["email": email], merge: true)
+    }
+
+    func fetchIsEmailDiscoverable(userID: String) async throws -> Bool {
+        let doc = try await db.collection("userProfiles").document(userID).getDocument()
+        return doc.data()?["isEmailDiscoverable"] as? Bool ?? true
+    }
+
+    func setEmailDiscoverable(_ discoverable: Bool, userID: String) async throws {
+        try await db.collection("userProfiles").document(userID).setData(["isEmailDiscoverable": discoverable], merge: true)
+    }
+
     func deleteProfile(userID: String) async throws {
         try await db.collection("userProfiles").document(userID).delete()
     }

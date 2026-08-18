@@ -52,21 +52,21 @@ describe('publication photo uploads', () => {
   it('allows a member to upload their own recipe photo', async () => {
     await seedMembership('group-upload-own', 'alice');
     const alice = testEnv.authenticatedContext('alice').storage();
-    const fileRef = ref(alice, 'publications/group-upload-own/alice_recipe1.jpg');
+    const fileRef = ref(alice, 'publications/group-upload-own/cb-1/alice_recipe1.jpg');
     await assertSucceeds(uploadBytes(fileRef, jpegBytes, { contentType: 'image/jpeg' }));
   });
 
   it("rejects uploading under someone else's uid prefix", async () => {
     await seedMembership('group-upload-other', 'alice');
     const alice = testEnv.authenticatedContext('alice').storage();
-    const fileRef = ref(alice, 'publications/group-upload-other/bob_recipe1.jpg');
+    const fileRef = ref(alice, 'publications/group-upload-other/cb-1/bob_recipe1.jpg');
     await assertFails(uploadBytes(fileRef, jpegBytes, { contentType: 'image/jpeg' }));
   });
 
   it('rejects a non-image content type', async () => {
     await seedMembership('group-upload-badtype', 'alice');
     const alice = testEnv.authenticatedContext('alice').storage();
-    const fileRef = ref(alice, 'publications/group-upload-badtype/alice_recipe1.jpg');
+    const fileRef = ref(alice, 'publications/group-upload-badtype/cb-1/alice_recipe1.jpg');
     await assertFails(uploadBytes(fileRef, jpegBytes, { contentType: 'text/plain' }));
   });
 
@@ -74,28 +74,38 @@ describe('publication photo uploads', () => {
     await seedMembership('group-read-member', 'alice');
     await seedMembership('group-read-member', 'bob');
     const alice = testEnv.authenticatedContext('alice').storage();
-    await uploadBytes(ref(alice, 'publications/group-read-member/alice_recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
+    await uploadBytes(ref(alice, 'publications/group-read-member/cb-1/alice_recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
 
     const bob = testEnv.authenticatedContext('bob').storage();
-    await assertSucceeds(getBytes(ref(bob, 'publications/group-read-member/alice_recipe1.jpg')));
+    await assertSucceeds(getBytes(ref(bob, 'publications/group-read-member/cb-1/alice_recipe1.jpg')));
   });
 
   it('rejects a non-member from reading the photo', async () => {
     await seedMembership('group-read-nonmember', 'alice');
     const alice = testEnv.authenticatedContext('alice').storage();
-    await uploadBytes(ref(alice, 'publications/group-read-nonmember/alice_recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
+    await uploadBytes(ref(alice, 'publications/group-read-nonmember/cb-1/alice_recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
 
     const mallory = testEnv.authenticatedContext('mallory').storage();
-    await assertFails(getBytes(ref(mallory, 'publications/group-read-nonmember/alice_recipe1.jpg')));
+    await assertFails(getBytes(ref(mallory, 'publications/group-read-nonmember/cb-1/alice_recipe1.jpg')));
   });
 
   it('rejects reading from an unauthenticated context', async () => {
     await seedMembership('group-read-anon', 'alice');
     const alice = testEnv.authenticatedContext('alice').storage();
-    await uploadBytes(ref(alice, 'publications/group-read-anon/alice_recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
+    await uploadBytes(ref(alice, 'publications/group-read-anon/cb-1/alice_recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
 
     const anon = testEnv.unauthenticatedContext().storage();
-    await assertFails(getBytes(ref(anon, 'publications/group-read-anon/alice_recipe1.jpg')));
+    await assertFails(getBytes(ref(anon, 'publications/group-read-anon/cb-1/alice_recipe1.jpg')));
+  });
+
+  it('allows reading a photo under a second cookbook in the same group', async () => {
+    await seedMembership('group-multi-cookbook', 'alice');
+    await seedMembership('group-multi-cookbook', 'bob');
+    const alice = testEnv.authenticatedContext('alice').storage();
+    await uploadBytes(ref(alice, 'publications/group-multi-cookbook/cb-2/alice_recipe1.jpg'), jpegBytes, { contentType: 'image/jpeg' });
+
+    const bob = testEnv.authenticatedContext('bob').storage();
+    await assertSucceeds(getBytes(ref(bob, 'publications/group-multi-cookbook/cb-2/alice_recipe1.jpg')));
   });
 });
 

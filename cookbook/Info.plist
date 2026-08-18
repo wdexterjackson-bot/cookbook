@@ -13,6 +13,8 @@
 		<string>Poppins-SemiBold.ttf</string>
 		<string>Poppins-ExtraBold.ttf</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Used to scan a Family Cookbook or friend QR code.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

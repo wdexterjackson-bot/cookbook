@@ -25,7 +25,7 @@ struct PublicationsServicingTests {
     @Test func publishCreatesANewPublication() async throws {
         let service = InMemoryPublicationsService()
 
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         #expect(publication.state == .published)
         let fetched = try await service.fetchPublications(forGroup: "group-1")
@@ -34,9 +34,9 @@ struct PublicationsServicingTests {
 
     @Test func republishingSameRecipeUpdatesInPlaceInsteadOfDuplicating() async throws {
         let service = InMemoryPublicationsService()
-        let first = try await service.publish(makeContent(title: "V1"), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let first = try await service.publish(makeContent(title: "V1"), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
-        let second = try await service.publish(makeContent(title: "V2"), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let second = try await service.publish(makeContent(title: "V2"), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         #expect(first.id == second.id)
         #expect(second.content.title == "V2")
@@ -45,7 +45,7 @@ struct PublicationsServicingTests {
 
     @Test func unpublishRemovesItFromGroupFetch() async throws {
         let service = InMemoryPublicationsService()
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         try await service.unpublish(publication.id, actingUserID: "alice")
 
@@ -55,7 +55,7 @@ struct PublicationsServicingTests {
 
     @Test func onlyOwnerCanUnpublish() async throws {
         let service = InMemoryPublicationsService()
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         await #expect(throws: PublicationsServiceError.notAuthorized) {
             try await service.unpublish(publication.id, actingUserID: "bob")
@@ -67,14 +67,14 @@ struct PublicationsServicingTests {
         var content = makeContent()
         content.coverImageURL = "https://example.com/photo.jpg"
 
-        let publication = try await service.publish(content, sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(content, sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         #expect(publication.content.coverImageURL == "https://example.com/photo.jpg")
     }
 
     @Test func newPublicationHasNoLikesYet() async throws {
         let service = InMemoryPublicationsService()
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         #expect(publication.likeCount == nil)
         #expect(try await service.hasLiked(publication.id, userID: "bob") == false)
@@ -82,7 +82,7 @@ struct PublicationsServicingTests {
 
     @Test func likingIncrementsCountAndMarksTheUserAsHavingLiked() async throws {
         let service = InMemoryPublicationsService()
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         let newCount = try await service.setLiked(publication.id, userID: "bob", liked: true)
 
@@ -93,7 +93,7 @@ struct PublicationsServicingTests {
 
     @Test func unlikingDecrementsCountBackDown() async throws {
         let service = InMemoryPublicationsService()
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
         try await service.setLiked(publication.id, userID: "bob", liked: true)
 
         let newCount = try await service.setLiked(publication.id, userID: "bob", liked: false)
@@ -104,7 +104,7 @@ struct PublicationsServicingTests {
 
     @Test func likingTwiceDoesNotDoubleCount() async throws {
         let service = InMemoryPublicationsService()
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         try await service.setLiked(publication.id, userID: "bob", liked: true)
         let secondCount = try await service.setLiked(publication.id, userID: "bob", liked: true)
@@ -114,11 +114,131 @@ struct PublicationsServicingTests {
 
     @Test func likesFromDifferentUsersAccumulate() async throws {
         let service = InMemoryPublicationsService()
-        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", ownerUserID: "alice")
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
 
         try await service.setLiked(publication.id, userID: "bob", liked: true)
         let countAfterCarol = try await service.setLiked(publication.id, userID: "carol", liked: true)
 
         #expect(countAfterCarol == 2)
+    }
+
+    @Test func publishingTheSameRecipeToADifferentCookbookInTheSameGroupCreatesASeparatePublication() async throws {
+        let service = InMemoryPublicationsService()
+        let first = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
+
+        let second = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-2", ownerUserID: "alice")
+
+        #expect(first.id != second.id)
+        #expect(service.publications.count == 2)
+    }
+
+    @Test func ownerCanDeleteTheirOwnPublication() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
+
+        try await service.deletePublication(publication.id, actingUserID: "alice")
+
+        #expect(try await service.fetchPublication(id: publication.id) == nil)
+    }
+
+    @Test func adminCanDeleteSomeoneElsesPublication() async throws {
+        let groups = InMemoryGroupsService()
+        groups.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await groups.createGroup(
+            NewGroupDetails(name: "Barrentines", description: "", type: "Family", locationText: "Memphis, TN", structuredRegion: nil, visibility: .publicGroup, allowsMemberInvites: false, approvalPolicy: .anyAdministrator),
+            cookbookDetails: NewGroupCookbookDetails(cookbookName: "Reunion", allowsMemberPublishing: true),
+            creatorUserID: "alice", creatorDisplayName: "Alice", idempotencyKey: "req-1"
+        )
+        let service = InMemoryPublicationsService(groupsService: groups)
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: group.id, cookbookID: "cb-1", ownerUserID: "bob")
+
+        try await service.deletePublication(publication.id, actingUserID: "alice")
+
+        #expect(try await service.fetchPublication(id: publication.id) == nil)
+    }
+
+    @Test func nonOwnerNonAdminCannotDeleteSomeoneElsesPublication() async throws {
+        let groups = InMemoryGroupsService()
+        groups.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await groups.createGroup(
+            NewGroupDetails(name: "Barrentines", description: "", type: "Family", locationText: "Memphis, TN", structuredRegion: nil, visibility: .publicGroup, allowsMemberInvites: false, approvalPolicy: .anyAdministrator),
+            cookbookDetails: NewGroupCookbookDetails(cookbookName: "Reunion", allowsMemberPublishing: true),
+            creatorUserID: "alice", creatorDisplayName: "Alice", idempotencyKey: "req-1"
+        )
+        let service = InMemoryPublicationsService(groupsService: groups)
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: group.id, cookbookID: "cb-1", ownerUserID: "bob")
+
+        await #expect(throws: PublicationsServiceError.notAuthorized) {
+            try await service.deletePublication(publication.id, actingUserID: "carol")
+        }
+    }
+
+    @Test func commentingRequiresCommentsToBeEnabled() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
+        // commentsEnabled defaults to false — never explicitly turned on.
+
+        await #expect(throws: PublicationsServiceError.commentsDisabled) {
+            try await service.addComment(publication.id, authorUserID: "bob", authorDisplayName: "Bob", text: "Yum!")
+        }
+    }
+
+    @Test func addingAndFetchingCommentsWhenEnabled() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
+        try await service.setCommentsEnabled(publication.id, enabled: true, actingUserID: "alice")
+
+        _ = try await service.addComment(publication.id, authorUserID: "bob", authorDisplayName: "Bob", text: "Yum!")
+
+        let comments = try await service.fetchComments(publication.id)
+        #expect(comments.map(\.text) == ["Yum!"])
+        #expect(comments.first?.authorDisplayName == "Bob")
+    }
+
+    @Test func authorCanDeleteTheirOwnComment() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
+        try await service.setCommentsEnabled(publication.id, enabled: true, actingUserID: "alice")
+        let comment = try await service.addComment(publication.id, authorUserID: "bob", authorDisplayName: "Bob", text: "Yum!")
+
+        try await service.deleteComment(comment.id, publicationID: publication.id, actingUserID: "bob")
+
+        #expect(try await service.fetchComments(publication.id).isEmpty)
+    }
+
+    @Test func adminCanDeleteSomeoneElsesComment() async throws {
+        let groups = InMemoryGroupsService()
+        groups.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await groups.createGroup(
+            NewGroupDetails(name: "Barrentines", description: "", type: "Family", locationText: "Memphis, TN", structuredRegion: nil, visibility: .publicGroup, allowsMemberInvites: false, approvalPolicy: .anyAdministrator),
+            cookbookDetails: NewGroupCookbookDetails(cookbookName: "Reunion", allowsMemberPublishing: true),
+            creatorUserID: "alice", creatorDisplayName: "Alice", idempotencyKey: "req-1"
+        )
+        let service = InMemoryPublicationsService(groupsService: groups)
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: group.id, cookbookID: "cb-1", ownerUserID: "alice")
+        try await service.setCommentsEnabled(publication.id, enabled: true, actingUserID: "alice")
+        let comment = try await service.addComment(publication.id, authorUserID: "bob", authorDisplayName: "Bob", text: "Yum!")
+
+        try await service.deleteComment(comment.id, publicationID: publication.id, actingUserID: "alice")
+
+        #expect(try await service.fetchComments(publication.id).isEmpty)
+    }
+
+    @Test func nonAuthorNonAdminCannotDeleteSomeoneElsesComment() async throws {
+        let groups = InMemoryGroupsService()
+        groups.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await groups.createGroup(
+            NewGroupDetails(name: "Barrentines", description: "", type: "Family", locationText: "Memphis, TN", structuredRegion: nil, visibility: .publicGroup, allowsMemberInvites: false, approvalPolicy: .anyAdministrator),
+            cookbookDetails: NewGroupCookbookDetails(cookbookName: "Reunion", allowsMemberPublishing: true),
+            creatorUserID: "alice", creatorDisplayName: "Alice", idempotencyKey: "req-1"
+        )
+        let service = InMemoryPublicationsService(groupsService: groups)
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: group.id, cookbookID: "cb-1", ownerUserID: "alice")
+        try await service.setCommentsEnabled(publication.id, enabled: true, actingUserID: "alice")
+        let comment = try await service.addComment(publication.id, authorUserID: "bob", authorDisplayName: "Bob", text: "Yum!")
+
+        await #expect(throws: PublicationsServiceError.notAuthorized) {
+            try await service.deleteComment(comment.id, publicationID: publication.id, actingUserID: "carol")
+        }
     }
 }

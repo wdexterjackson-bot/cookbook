@@ -7,6 +7,7 @@ import Foundation
 
 final class InMemoryGroupsService: GroupsServicing {
     private(set) var groups: [FamilyGroup] = []
+    private(set) var groupCookbooks: [GroupCookbook] = []
     private(set) var memberships: [Membership] = []
     private(set) var joinRequests: [JoinRequest] = []
     private(set) var invitations: [Invitation] = []
@@ -18,8 +19,7 @@ final class InMemoryGroupsService: GroupsServicing {
     /// expiration recorded (never expires, matching the real adapter's
     /// tolerant treatment of a missing field).
     var tier2ExpiresAtByUserID: [String: Date] = [:]
-    private var processedIdempotencyKeys: [String: String] = [:] // key -> created group id
-    private var claimedUniquenessKeys: Set<String> = []
+    private var processedIdempotencyKeys: [String: (groupID: String, cookbookID: String)] = [:]
 
     /// Test/preview convenience — appends a group directly, bypassing
     /// createGroup's credit-spend requirement. Used to seed a fake MFB
@@ -28,10 +28,22 @@ final class InMemoryGroupsService: GroupsServicing {
         groups.append(group)
     }
 
-    func createGroup(_ details: NewGroupDetails, creatorUserID: String, idempotencyKey: String) async throws -> FamilyGroup {
-        if let existingGroupID = processedIdempotencyKeys[idempotencyKey],
-           let existingGroup = groups.first(where: { $0.id == existingGroupID }) {
-            return existingGroup
+    /// Test/preview convenience — appends a cookbook directly.
+    func seedGroupCookbook(_ cookbook: GroupCookbook) {
+        groupCookbooks.append(cookbook)
+    }
+
+    func createGroup(
+        _ groupDetails: NewGroupDetails,
+        cookbookDetails: NewGroupCookbookDetails,
+        creatorUserID: String,
+        creatorDisplayName: String,
+        idempotencyKey: String
+    ) async throws -> (FamilyGroup, GroupCookbook) {
+        if let existing = processedIdempotencyKeys[idempotencyKey],
+           let existingGroup = groups.first(where: { $0.id == existing.groupID }),
+           let existingCookbook = groupCookbooks.first(where: { $0.id == existing.cookbookID }) {
+            return (existingGroup, existingCookbook)
         }
 
         let availableCredits = tier2CreditsByUserID[creatorUserID] ?? 0
@@ -42,29 +54,33 @@ final class InMemoryGroupsService: GroupsServicing {
             throw GroupsServiceError.creditExpired
         }
 
-        let uniquenessKey = FamilyGroup.uniquenessKey(cookbookName: details.cookbookName, familyName: details.name, locationText: details.locationText)
-        guard !claimedUniquenessKeys.contains(uniquenessKey) else {
-            throw GroupsServiceError.duplicateCookbookIdentity
-        }
-
         let group = FamilyGroup(
             id: UUID().uuidString,
             slug: UUID().uuidString.lowercased(),
-            name: details.name,
-            cookbookName: details.cookbookName,
-            description: details.description,
-            type: details.type,
-            locationText: details.locationText,
-            structuredRegion: details.structuredRegion,
+            name: groupDetails.name,
+            description: groupDetails.description,
+            type: groupDetails.type,
+            locationText: groupDetails.locationText,
+            structuredRegion: groupDetails.structuredRegion,
             coverImageURL: nil,
-            visibility: details.visibility,
+            visibility: groupDetails.visibility,
             createdByUserID: creatorUserID,
+            createdByDisplayName: creatorDisplayName,
             createdAt: .now,
             status: .active,
-            allowsMemberInvites: details.allowsMemberInvites,
-            allowsMemberPublishing: details.allowsMemberPublishing,
-            autoApproveJoinRequests: details.autoApproveJoinRequests,
+            allowsMemberInvites: groupDetails.allowsMemberInvites,
+            approvalPolicy: groupDetails.approvalPolicy,
             isMFB: false
+        )
+        let cookbook = GroupCookbook(
+            id: UUID().uuidString,
+            groupID: group.id,
+            cookbookName: cookbookDetails.cookbookName,
+            createdByUserID: creatorUserID,
+            createdByDisplayName: creatorDisplayName,
+            createdAt: .now,
+            coverImageURL: nil,
+            allowsMemberPublishing: cookbookDetails.allowsMemberPublishing
         )
         let founderMembership = Membership(
             id: Membership.compositeID(groupID: group.id, userID: creatorUserID),
@@ -79,19 +95,58 @@ final class InMemoryGroupsService: GroupsServicing {
 
         tier2CreditsByUserID[creatorUserID] = availableCredits - 1
         groups.append(group)
+        groupCookbooks.append(cookbook)
         upsertMembership(founderMembership)
-        processedIdempotencyKeys[idempotencyKey] = group.id
-        claimedUniquenessKeys.insert(uniquenessKey)
+        processedIdempotencyKeys[idempotencyKey] = (group.id, cookbook.id)
 
-        return group
+        return (group, cookbook)
+    }
+
+    func createGroupCookbook(
+        _ details: NewGroupCookbookDetails,
+        in groupID: String,
+        creatorUserID: String,
+        creatorDisplayName: String
+    ) async throws -> GroupCookbook {
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(creatorUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
+        let cookbook = GroupCookbook(
+            id: UUID().uuidString,
+            groupID: groupID,
+            cookbookName: details.cookbookName,
+            createdByUserID: creatorUserID,
+            createdByDisplayName: creatorDisplayName,
+            createdAt: .now,
+            coverImageURL: nil,
+            allowsMemberPublishing: details.allowsMemberPublishing
+        )
+        groupCookbooks.append(cookbook)
+        return cookbook
+    }
+
+    func fetchGroupCookbooks(forGroup groupID: String) async throws -> [GroupCookbook] {
+        groupCookbooks.filter { $0.groupID == groupID }
+    }
+
+    func fetchGroupCookbook(id: String) async throws -> GroupCookbook? {
+        groupCookbooks.first { $0.id == id }
+    }
+
+    func fetchPublicGroupCookbooks(matching filter: PublicGroupCookbookSearchFilter) async throws -> [GroupCookbook] {
+        let publicGroupIDs = Set(groups.filter { $0.visibility == .publicGroup && $0.status == .active }.map(\.id))
+        var cookbooks = groupCookbooks.filter { publicGroupIDs.contains($0.groupID) }
+        if let text = filter.text, !text.isEmpty {
+            cookbooks = cookbooks.filter { $0.cookbookName.localizedCaseInsensitiveContains(text) }
+        }
+        return cookbooks
     }
 
     func fetchPublicGroups(matching filter: PublicGroupSearchFilter) async throws -> [FamilyGroup] {
         var publicGroups = groups.filter { $0.visibility == .publicGroup && $0.status == .active }
         if let text = filter.text, !text.isEmpty {
-            publicGroups = publicGroups.filter {
-                $0.cookbookName.localizedCaseInsensitiveContains(text) || $0.name.localizedCaseInsensitiveContains(text)
-            }
+            publicGroups = publicGroups.filter { $0.name.localizedCaseInsensitiveContains(text) }
         }
         if let locationText = filter.locationText, !locationText.isEmpty {
             publicGroups = publicGroups.filter { $0.locationText.localizedCaseInsensitiveContains(locationText) }
@@ -120,7 +175,7 @@ final class InMemoryGroupsService: GroupsServicing {
             throw GroupsServiceError.alreadyMember
         }
 
-        if group.autoApproveJoinRequests {
+        if group.approvalPolicy == .noApprovalNeeded {
             let membership = Membership(
                 id: Membership.compositeID(groupID: groupID, userID: requesterID),
                 groupID: groupID,
@@ -167,8 +222,11 @@ final class InMemoryGroupsService: GroupsServicing {
             throw GroupsServiceError.invalidState
         }
 
+        guard let group = groups.first(where: { $0.id == request.groupID }) else {
+            throw GroupsServiceError.groupNotFound
+        }
         let groupMemberships = try await fetchMemberships(forGroup: request.groupID)
-        guard GroupPolicy.isActiveAdmin(decidedByUserID, in: groupMemberships) else {
+        guard GroupPolicy.canDecideJoinRequest(decidedByUserID, group: group, memberships: groupMemberships) else {
             throw GroupsServiceError.notAuthorized
         }
 
@@ -294,6 +352,7 @@ final class InMemoryGroupsService: GroupsServicing {
 
     func deleteGroupPermanently(groupID: String) async throws {
         groups.removeAll { $0.id == groupID }
+        groupCookbooks.removeAll { $0.groupID == groupID }
         memberships.removeAll { $0.groupID == groupID }
         joinRequests.removeAll { $0.groupID == groupID }
         invitations.removeAll { $0.groupID == groupID }

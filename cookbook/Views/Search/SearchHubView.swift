@@ -37,8 +37,14 @@ struct SearchHubView: View {
     @State private var scope: SearchScope = .myRecipes
     @State private var criteria = RecipeFilterCriteria()
     @State private var isPresentingFilters = false
+    #if os(iOS)
+    @State private var isPresentingScanner = false
+    #endif
+    @State private var scanResultMessage: String?
+    @State private var scanErrorMessage: String?
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
+    private let friendsService: FriendsServicing = FirestoreFriendsService()
 
     private var ownedRecipes: [Recipe] {
         allRecipes.filter { $0.ownerID == accountState.currentOwnerID }
@@ -88,10 +94,67 @@ struct SearchHubView: View {
                         .accessibilityLabel("Filters")
                     }
                 }
+                #if os(iOS)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isPresentingScanner = true
+                    } label: {
+                        Image(systemName: "qrcode.viewfinder")
+                    }
+                    .accessibilityLabel("Scan QR Code")
+                }
+                #endif
             }
             .sheet(isPresented: $isPresentingFilters) {
                 RecipeFilterSheet(criteria: $criteria, availableOptions: RecipeFilterOptions(recipes: ownedRecipes))
             }
+            #if os(iOS)
+            .sheet(isPresented: $isPresentingScanner) {
+                QRCodeScannerView { payload in
+                    Task { await handleScannedPayload(payload) }
+                }
+            }
+            #endif
+            .alert("Sent", isPresented: Binding(
+                get: { scanResultMessage != nil },
+                set: { if !$0 { scanResultMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(scanResultMessage ?? "")
+            }
+            .alert("Couldn't Complete Request", isPresented: Binding(
+                get: { scanErrorMessage != nil },
+                set: { if !$0 { scanErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(scanErrorMessage ?? "")
+            }
+        }
+    }
+
+    private func handleScannedPayload(_ payload: QRCodePayload) async {
+        guard let userID = accountState.currentUserID else { return }
+        do {
+            switch payload {
+            case .group(let groupID):
+                _ = try await groupsService.requestToJoin(groupID: groupID, requesterID: userID, note: nil)
+                scanResultMessage = "Your request to join has been sent."
+            case .friend(let friendUserID):
+                guard friendUserID != userID else {
+                    scanErrorMessage = "That's your own QR code."
+                    return
+                }
+                _ = try await friendsService.sendFriendRequest(from: userID, to: friendUserID)
+                scanResultMessage = "Friend request sent."
+            }
+        } catch GroupsServiceError.alreadyMember {
+            scanErrorMessage = "You're already a member of this cookbook."
+        } catch FriendsServiceError.alreadyFriends {
+            scanErrorMessage = "You're already friends."
+        } catch {
+            scanErrorMessage = error.localizedDescription
         }
     }
 
