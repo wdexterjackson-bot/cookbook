@@ -17,7 +17,10 @@
 import AudioToolbox
 import Foundation
 import Observation
+import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 #if os(iOS) || os(macOS)
 import UserNotifications
 #endif
@@ -136,7 +139,7 @@ final class CookingTimerManager {
         #if os(iOS)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         #endif
-        UIAccessibility.post(notification: .announcement, argument: "\(timer.name) timer is done")
+        AccessibilityNotification.Announcement("\(timer.name) timer is done").post()
     }
 
     #if os(iOS) || os(macOS)

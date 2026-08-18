@@ -26,6 +26,19 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+extension View {
+    /// `.focusSection()` is tvOS-only (unavailable on iOS/macOS — a real
+    /// compile error, not a no-op) — this makes call sites platform-safe.
+    @ViewBuilder
+    func tvOSFocusSection() -> some View {
+        #if os(tvOS)
+        self.focusSection()
+        #else
+        self
+        #endif
+    }
+}
+
 struct HomeView: View {
     @Environment(AccountState.self) private var accountState
     @Environment(ActiveCookbookState.self) private var activeCookbookState
@@ -146,12 +159,22 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                // Each section below gets its own .tvOSFocusSection() —
+                // without one, tvOS's automatic focus engine has no
+                // explicit boundary between differently-shaped stacked
+                // groups, and a group whose only buttons are all
+                // .disabled(true) (mfbInvitationPlaceholderCard, always
+                // present in messagesStrip) can become a dead end it
+                // never hands directional navigation off from: nothing
+                // below a "stuck" section was reachable at all.
                 VStack(alignment: .leading, spacing: 24) {
                     greeting
 
                     continueCookingCard
+                        .tvOSFocusSection()
 
                     gettingStartedCard
+                        .tvOSFocusSection()
 
                     annualMembershipWarningBanner
 
@@ -159,30 +182,38 @@ struct HomeView: View {
 
                     if hasAnyMessagesContent && (!communityCookbooksAreLive || hasActivePendingInvitation) {
                         messagesStrip
+                            .tvOSFocusSection()
                     }
 
                     if !ownedCookbooks.isEmpty || !joinedGroups.isEmpty {
                         yourCookbooksShelf
+                            .tvOSFocusSection()
                     }
 
                     if !cloudSummaries.isEmpty {
                         cloudSyncStrip
+                            .tvOSFocusSection()
                     }
 
                     if !featuredGroups.isEmpty {
                         featuredCookbooksShelf
+                            .tvOSFocusSection()
                     }
 
                     favoriteDishesStrip
+                        .tvOSFocusSection()
 
                     shoppingCartCard
+                        .tvOSFocusSection()
 
                     if !ownedRecipes.isEmpty {
                         recentlyAddedStrip
+                            .tvOSFocusSection()
                     }
 
                     if communityCookbooksAreLive && hasAnyMessagesContent && !hasActivePendingInvitation {
                         messagesStrip
+                            .tvOSFocusSection()
                     }
                 }
                 .padding(.vertical)
@@ -797,6 +828,15 @@ struct HomeView: View {
         .padding(.horizontal)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Invitation, coming soon. Join the Memphis Family Barrentine shared recipe and cookbook for free with over 600 southern classics. Join and Decline are not yet available.")
+        // Both buttons above are permanently disabled, so without this the
+        // whole card has zero focusable elements — tvOS's focus engine is
+        // documented to skip an empty .focusSection(), but in practice
+        // (confirmed live) it doesn't reliably do that inside a
+        // ScrollView: it just stops dead at the boundary instead of
+        // searching past it to content further down. Making the card
+        // itself a focusable (but non-actionable) stop closes that dead
+        // end while keeping Join/Decline genuinely unpressable.
+        .focusable()
     }
 
     private func loadInvitationCardState() {
