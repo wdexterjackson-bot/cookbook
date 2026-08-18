@@ -109,6 +109,19 @@ async function checkPairingStatus({ db, authClient, code, deviceSessionID }) {
     if (Date.now() > data.expiresAt) {
       return { status: 'expired' };
     }
+    // Binds redemption to the exact TV that created this code — without
+    // this, the 6-character *display* code (shown on screen, encoded in
+    // its QR, sayable out loud) would be the only thing needed to redeem
+    // the sign-in token once a phone confirms it: anyone who merely saw
+    // the code (a photo, a screenshot, someone glancing at the TV) could
+    // call this endpoint directly and race the real TV for it.
+    // deviceSessionID is never displayed anywhere, so only the TV that
+    // actually called requestPairingCode can supply the right one. Same
+    // "expired" response as an unknown code — not a distinct error —
+    // so a wrong guess doesn't confirm the real deviceSessionID is wrong.
+    if (data.deviceSessionID !== trimmedSessionID) {
+      return { status: 'expired' };
+    }
     if (data.status === 'pending') {
       return { status: 'pending' };
     }

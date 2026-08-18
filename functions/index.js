@@ -13,6 +13,7 @@ const { RateLimitExceededError: FriendLookupRateLimitExceededError } = require('
 const { findUserByEmail } = require('./findUserByEmail');
 const { deleteGroupPermanently } = require('./deleteGroupPermanently');
 const { changeOwnMembership } = require('./changeOwnMembership');
+const { changeMemberRole } = require('./changeMemberRole');
 const { requestPairingCode, checkPairingStatus, confirmPairingCode } = require('./tvPairing');
 const { handleAppStoreServerNotification } = require('./appStoreServerNotifications');
 const { decodeAndVerifyNotification } = require('./appStoreServerNotificationVerifier');
@@ -114,6 +115,26 @@ exports.changeOwnMembership = onCall(async (request) => {
   } catch (error) {
     console.error('changeOwnMembership failed:', error);
     throw new HttpsError('failed-precondition', error.message || 'Could not update your membership right now.');
+  }
+});
+
+// Called by FirestoreGroupsService.updateRole/removeMember for an admin
+// acting on *someone else's* membership — see changeMemberRole.js for why
+// this can't be a client-side Firestore transaction (the client SDK's
+// Transaction type has no query support, only the Admin SDK's does).
+exports.changeMemberRole = onCall(async (request) => {
+  const groupID = request.data && request.data.groupID;
+  const targetUserID = request.data && request.data.targetUserID;
+  const action = request.data && request.data.action;
+  const callerUserID = request.auth && request.auth.uid;
+  if (!callerUserID) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  try {
+    return await changeMemberRole({ db: getFirestore(), groupID, targetUserID, action, callerUserID });
+  } catch (error) {
+    console.error('changeMemberRole failed:', error);
+    throw new HttpsError('failed-precondition', error.message || 'Could not update that member right now.');
   }
 });
 

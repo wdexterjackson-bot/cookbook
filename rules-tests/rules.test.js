@@ -738,7 +738,7 @@ describe('memberships', () => {
     }));
   });
 
-  it('an admin can remove a plain member (marks them suspended)', async () => {
+  it('an admin cannot remove a plain member via a direct write — must go through changeMemberRole', async () => {
     await seed(async (db) => {
       await setDoc(doc(db, 'memberships/group1_alice'), {
         id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
@@ -750,7 +750,7 @@ describe('memberships', () => {
       });
     });
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertSucceeds(setDoc(doc(alice, 'memberships/group1_bob'), {
+    await assertFails(setDoc(doc(alice, 'memberships/group1_bob'), {
       id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
       status: 'suspended', source: 'request', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
     }));
@@ -840,7 +840,7 @@ describe('memberships', () => {
     }));
   });
 
-  it("an admin can still directly promote/demote someone else — provably safe, since the acting admin stays admin", async () => {
+  it("an admin cannot promote/demote someone else via a direct write — must go through changeMemberRole (functions/changeMemberRole.js), which can atomically re-verify the last-admin invariant a client-side transaction can't", async () => {
     await seed(async (db) => {
       await setDoc(doc(db, 'memberships/group1_alice'), {
         id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
@@ -852,7 +852,7 @@ describe('memberships', () => {
       });
     });
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertSucceeds(setDoc(doc(alice, 'memberships/group1_bob'), {
+    await assertFails(setDoc(doc(alice, 'memberships/group1_bob'), {
       id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
       status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
     }));

@@ -160,6 +160,19 @@ struct RootTabView: View {
         } message: {
             Text(bootstrapErrorMessage ?? "")
         }
+        // Set by AccountState.postSignInError when PostSignInCoordinator.
+        // handle throws after a successful sign-in — RootTabView is
+        // whatever screen the person ends up on regardless of which
+        // sign-in path they used, so this is where that failure surfaces,
+        // not the (possibly already-unmounted) sign-in screen itself.
+        .alert("Sign-In Follow-Up Failed", isPresented: Binding(
+            get: { accountState.postSignInError != nil },
+            set: { if !$0 { accountState.postSignInError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(accountState.postSignInError ?? "")
+        }
         .alert(
             "Cookbooks Available",
             isPresented: $isPresentingCloudCookbooksAvailable

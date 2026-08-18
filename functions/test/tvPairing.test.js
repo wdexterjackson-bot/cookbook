@@ -66,6 +66,31 @@ test('the full happy path: request, confirm, then a single token delivery', asyn
   assert.equal(auth.minted.length, 1);
 });
 
+test('polling with the right code but the wrong deviceSessionID is rejected, even before confirmation — closes the "anyone who saw the code" race', async () => {
+  const { code } = await requestPairingCode({ db, deviceSessionID: 'tv-session-1' });
+
+  const result = await checkPairingStatus({ db, authClient: fakeAuthClient(), code, deviceSessionID: 'attacker-session' });
+
+  assert.deepEqual(result, { status: 'expired' });
+});
+
+test('polling with the wrong deviceSessionID never delivers the token, even after the real phone confirms', async () => {
+  const { code } = await requestPairingCode({ db, deviceSessionID: 'tv-session-1' });
+  await confirmPairingCode({ db, code, callerUserID: 'alice' });
+
+  const attackerAuth = fakeAuthClient();
+  const attackerResult = await checkPairingStatus({ db, authClient: attackerAuth, code, deviceSessionID: 'attacker-session' });
+  assert.deepEqual(attackerResult, { status: 'expired' });
+  assert.equal(attackerAuth.minted.length, 0);
+
+  // The real TV, polling with its own correct session ID, still gets it —
+  // the attacker's failed attempt must not have consumed tokenDelivered.
+  const realAuth = fakeAuthClient();
+  const realResult = await checkPairingStatus({ db, authClient: realAuth, code, deviceSessionID: 'tv-session-1' });
+  assert.equal(realResult.status, 'confirmed');
+  assert.ok(realResult.token);
+});
+
 test('checking an unknown code reports expired, not an error', async () => {
   const result = await checkPairingStatus({ db, authClient: fakeAuthClient(), code: 'ZZZZZZ', deviceSessionID: 'tv-session-1' });
   assert.deepEqual(result, { status: 'expired' });

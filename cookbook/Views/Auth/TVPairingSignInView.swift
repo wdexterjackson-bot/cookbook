@@ -154,7 +154,19 @@ struct TVPairingSignInView: View {
             let result = try await accountState.signInWithCustomToken(token)
             try await PostSignInCoordinator.handle(result, email: nil, modelContext: modelContext)
         } catch {
-            state = .error("Couldn't complete sign-in. Try again.")
+            // If signInWithCustomToken itself already succeeded before
+            // PostSignInCoordinator.handle threw, isSignedIn flips true and
+            // AuthGatedRootView swaps this whole view out for RootTabView()
+            // immediately — this screen's own .error state would never be
+            // seen. Route that case to accountState.postSignInError instead,
+            // which RootTabView checks regardless of which screen is
+            // mounted; only show the local error state for a genuine
+            // sign-in failure (this screen stays mounted for that case).
+            if accountState.isSignedIn {
+                accountState.postSignInError = "Signed in, but some of your local data may not have synced. Try relaunching."
+            } else {
+                state = .error("Couldn't complete sign-in. Try again.")
+            }
         }
     }
 }

@@ -362,9 +362,18 @@ final class FirestoreGroupsService: GroupsServicing {
             try await changeOwnMembership(groupID: groupID, action: "demote")
             return
         }
-        var mutableMembership = membership
-        mutableMembership.role = newRole
-        try db.collection("memberships").document(mutableMembership.id).setData(from: mutableMembership)
+        // Routed through the changeMemberRole Cloud Function, not a direct
+        // Firestore write — a plain read-then-write here (what this used
+        // to be) lets two admins simultaneously demoting/removing *each
+        // other* both read "2 active admins, safe to proceed" and both
+        // commit, leaving zero active admins with no way to ever create
+        // another (promoting requires being one). The client Firestore
+        // SDK's Transaction type has no query support (only
+        // get(DocumentReference)), so this can't be closed with a client-
+        // side transaction the way it first looked like it could — only
+        // the Admin SDK's Transaction.get() accepts a Query, hence a
+        // Cloud Function, same reasoning as changeOwnMembership.js.
+        try await changeMemberRole(groupID: groupID, targetUserID: userID, action: newRole == .admin ? "promote" : "demote")
     }
 
     func leaveGroup(groupID: String, userID: String) async throws {
@@ -399,26 +408,47 @@ final class FirestoreGroupsService: GroupsServicing {
     /// can't enforce "the last admin can't leave or be demoted."
     private func changeOwnMembership(groupID: String, action: String) async throws {
         let callable = functions.httpsCallable("changeOwnMembership")
-        _ = try await callable.call(["groupID": groupID, "action": action])
+        do {
+            _ = try await callable.call(["groupID": groupID, "action": action])
+        } catch {
+            // The client-side pre-checks in updateRole/leaveGroup can be
+            // fooled by a stale membership snapshot (another admin was
+            // just demoted/removed by someone else, list not yet
+            // refreshed) — when that happens, this callable's own
+            // server-side re-verification is what actually rejects it,
+            // and without this remap that surfaced as a generic Firebase
+            // Functions error instead of the same friendly message the
+            // common case already shows.
+            throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
+        }
+    }
+
+    /// Backs an admin promoting/demoting/removing *someone else* —
+    /// see functions/changeMemberRole.js for why this needs a Cloud
+    /// Function rather than a client-side transaction. Same blanket
+    /// remap-on-failure reasoning as changeOwnMembership above: by the
+    /// time this is called, updateRole/removeMember's own pre-checks
+    /// already passed against the client's local membership snapshot, so
+    /// the only realistic way this callable itself then rejects is that
+    /// snapshot having gone stale (someone else's role/status changed a
+    /// moment ago) — which is exactly the "last admin" family of error
+    /// the UI already has a friendly message for.
+    private func changeMemberRole(groupID: String, targetUserID: String, action: String) async throws {
+        let callable = functions.httpsCallable("changeMemberRole")
+        do {
+            _ = try await callable.call(["groupID": groupID, "targetUserID": targetUserID, "action": action])
+        } catch {
+            throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
+        }
     }
 
     func removeMember(groupID: String, userID: String, actingUserID: String) async throws {
         guard userID != actingUserID else {
             throw GroupsServiceError.notAuthorized
         }
-        let groupMemberships = try await fetchMemberships(forGroup: groupID)
-        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
-            throw GroupsServiceError.notAuthorized
-        }
-        guard var membership = groupMemberships.first(where: { $0.userID == userID && $0.status == .active }) else {
-            throw GroupsServiceError.membershipNotFound
-        }
-        if GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
-            throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
-        }
-        membership.status = .suspended
-        membership.leftAt = .now
-        try db.collection("memberships").document(membership.id).setData(from: membership)
+        // Routed through changeMemberRole for the same reason as
+        // updateRole's "someone else" branch above — see its comment.
+        try await changeMemberRole(groupID: groupID, targetUserID: userID, action: "remove")
     }
 
     /// Every client-facing collection touched here (`memberships`,

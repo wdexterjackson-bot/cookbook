@@ -119,6 +119,11 @@ struct GroupAdminManagementView: View {
             await loadMemberships()
         } catch GroupsServiceError.lastAdminCannotLeaveOrBeDemoted {
             errorMessage = "You're the last administrator — promote someone else before removing yourself."
+            // A stale membership list is exactly what could have fooled
+            // the client-side pre-check into attempting this in the first
+            // place — refresh so a retry isn't working from the same
+            // stale snapshot that caused the rejection.
+            await loadMemberships()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -134,6 +139,7 @@ struct GroupAdminManagementView: View {
             await loadMemberships()
         } catch GroupsServiceError.lastAdminCannotLeaveOrBeDemoted {
             errorMessage = "You're the last administrator — promote someone else before removing them."
+            await loadMemberships()
         } catch {
             errorMessage = error.localizedDescription
         }

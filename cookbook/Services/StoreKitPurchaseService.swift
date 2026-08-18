@@ -34,7 +34,13 @@ final class StoreKitPurchaseService: PurchaseServicing {
                 productID: transaction.productID,
                 jwsRepresentation: verification.jwsRepresentation
             )
-            await transaction.finish()
+            // Deliberately NOT calling transaction.finish() here — finishing
+            // tells StoreKit "fully processed, never redeliver this," but
+            // the purchaseClaims doc (what actually grants the entitlement)
+            // hasn't been submitted yet at this point; that's the caller's
+            // job (PurchaseCoordinator.purchase). Finishing before that
+            // write is confirmed would silently lose a paid-for entitlement
+            // forever if the write then failed (offline, app killed).
             return .success(receipt)
         case .pending:
             return .pending
@@ -57,6 +63,40 @@ final class StoreKitPurchaseService: PurchaseServicing {
             }
         }
         return productIDs
+    }
+
+    func currentEntitlementReceipts() async -> [PurchaseReceipt] {
+        var receipts: [PurchaseReceipt] = []
+        for await result in Transaction.currentEntitlements {
+            guard case .verified(let transaction) = result else { continue }
+            receipts.append(PurchaseReceipt(
+                transactionID: String(transaction.id),
+                productID: transaction.productID,
+                jwsRepresentation: result.jwsRepresentation
+            ))
+        }
+        return receipts
+    }
+
+    func unfinishedReceipts() async -> [PurchaseReceipt] {
+        var receipts: [PurchaseReceipt] = []
+        for await result in Transaction.unfinished {
+            guard case .verified(let transaction) = result else { continue }
+            receipts.append(PurchaseReceipt(
+                transactionID: String(transaction.id),
+                productID: transaction.productID,
+                jwsRepresentation: result.jwsRepresentation
+            ))
+        }
+        return receipts
+    }
+
+    func finishTransaction(transactionID: String) async {
+        for await result in Transaction.unfinished {
+            guard case .verified(let transaction) = result, String(transaction.id) == transactionID else { continue }
+            await transaction.finish()
+            return
+        }
     }
 
     private static func purchasableProduct(from product: Product) -> PurchasableProduct {

@@ -17,6 +17,8 @@ struct AuthGatedRootView: View {
     @Environment(AccountState.self) private var accountState
 
     private let entitlementGranter: EntitlementGranting = FirestoreEntitlementGranter()
+    private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
+    private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
 
     var body: some View {
         if accountState.isSignedIn {
@@ -39,6 +41,14 @@ struct AuthGatedRootView: View {
                     } catch {
                         print("grantMissingLaunchCreditsIfEligible failed for userID=\(userID): \(error)")
                     }
+                    // Catches up on a purchase StoreKit confirmed but this
+                    // device never finished submitting a claim for (offline
+                    // right after paying, app killed mid-flow) — see
+                    // PurchaseCoordinator.reconcileUnfinishedTransactions.
+                    // Already best-effort internally, nothing to catch here.
+                    await PurchaseCoordinator.reconcileUnfinishedTransactions(
+                        userID: userID, purchaseService: purchaseService, claimWriter: claimWriter
+                    )
                 }
         } else {
             #if os(tvOS)

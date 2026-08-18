@@ -68,6 +68,25 @@ struct AuthServicingTests {
         #expect(accountState.isSignedIn)
     }
 
+    /// postSignInError exists specifically so a PostSignInCoordinator.
+    /// handle failure survives AuthGatedRootView swapping the sign-in
+    /// screen out for RootTabView() the instant isSignedIn flips true —
+    /// this just proves the state itself behaves as a durable property of
+    /// AccountState, independent of any particular view reading it.
+    @MainActor
+    @Test func postSignInErrorPersistsIndependentlyOfSignInState() async throws {
+        let accountState = AccountState(authService: FakeAuthService())
+        _ = try await accountState.signInWithCustomToken("tv-pairing-token-for-carol")
+
+        accountState.postSignInError = "Couldn't finish setting up your account."
+
+        #expect(accountState.postSignInError == "Couldn't finish setting up your account.")
+        #expect(accountState.isSignedIn)
+
+        accountState.postSignInError = nil
+        #expect(accountState.postSignInError == nil)
+    }
+
     @Test func signOutClearsCurrentUser() async throws {
         let service = FakeAuthService()
         _ = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2", displayName: "Cook Example")

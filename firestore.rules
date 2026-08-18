@@ -580,27 +580,19 @@ service cloud.firestore {
             && request.resource.data.status == 'left'
             && resource.data.role == 'member')
           ||
-          // An admin changing *someone else's* role — provably safe with
-          // no invariant to check, since the acting admin stays admin, so
-          // the group never drops to zero admins. Self-demotion is
-          // excluded here for the same reason as self-leave above: it
-          // must go through changeOwnMembership instead.
-          (isAdmin(resource.data.groupID)
-            && request.auth.uid != resource.data.userID
-            && request.resource.data.status == resource.data.status
-            && request.resource.data.role in ['member', 'admin'])
-          ||
-          // An admin removing someone else from the group — distinct
-          // status ('suspended') from a voluntary 'left', so the removed
-          // member's own UI can tell "you left" from "you were removed."
-          // Can't target yourself this way (use the leaving branch above,
-          // or updateRole to demote); the "last admin can't be removed"
-          // invariant is enforced app-side, same as the role-change branch.
-          (isAdmin(resource.data.groupID)
-            && request.auth.uid != resource.data.userID
-            && request.resource.data.status == 'suspended'
-            && request.resource.data.role == resource.data.role)
-          ||
+          // An admin promoting/demoting/removing *someone else* is
+          // deliberately NOT a direct write here — it goes through the
+          // changeMemberRole callable (functions/changeMemberRole.js)
+          // instead. A single write in isolation looks safe (the acting
+          // admin stays admin, so the group never drops to zero admins on
+          // its own), but two admins simultaneously demoting/removing
+          // *each other* both read "2 admins, safe" and both commit,
+          // zeroing the group's admin count with no way to ever create
+          // another. Rules can't re-count active admins across a
+          // collection to close that race, and neither can a client-side
+          // Firestore transaction (its Transaction type has no query
+          // support) — only the Admin SDK's transactional query can.
+          //
           // Reactivating a previously left/suspended membership doc.
           // Membership.compositeID's own doc comment says status
           // transitions are meant to reuse the same document rather than

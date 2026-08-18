@@ -16,6 +16,16 @@ final class AccountState {
     private let authService: AuthServicing
 
     private(set) var currentUserID: String?
+    /// Set when PostSignInCoordinator.handle throws after a successful
+    /// sign-in — the moment currentUserID is set below, AuthGatedRootView's
+    /// @Observable diffing immediately swaps the whole view tree from the
+    /// sign-in screen to RootTabView(), which would silently discard any
+    /// @State error message a sign-in view is still in the middle of
+    /// setting. Living here instead means the failure survives that swap
+    /// regardless of which screen ends up mounted. Whoever reads this
+    /// (RootTabView, on first appearance) is responsible for clearing it
+    /// after showing it.
+    var postSignInError: String?
     var currentUserEmail: String? { authService.currentUserEmail }
     var currentUserDisplayName: String? { authService.currentUserDisplayName }
 

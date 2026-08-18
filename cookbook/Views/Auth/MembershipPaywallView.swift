@@ -127,6 +127,13 @@ struct MembershipPaywallView: View {
                 break
             }
             await refresh()
+        } catch PurchaseServiceError.claimSubmissionFailed {
+            // Apple has already been paid — this isn't a failed purchase,
+            // just an unconfirmed one. PurchaseCoordinator.
+            // reconcileUnfinishedTransactions (run at every launch) will
+            // pick it up automatically; no action needed from the user.
+            statusMessage = "Purchase completed but couldn't confirm right away — this will resolve automatically."
+            await refresh()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -139,7 +146,24 @@ struct MembershipPaywallView: View {
         defer { isBusy = false }
         do {
             try await purchaseService.restorePurchases()
-            statusMessage = "Restored."
+            // Resubmitting a claim for everything StoreKit currently shows
+            // as owned is safe even for an already-applied purchase —
+            // applyPurchaseClaim.js is keyed by transaction ID and no-ops
+            // on a repeat — so there's no need to first diff against the
+            // server's entitlement doc here.
+            let receipts = await purchaseService.currentEntitlementReceipts()
+            var resubmittedCount = 0
+            for receipt in receipts {
+                do {
+                    try await claimWriter.submit(receipt, userID: userID)
+                    resubmittedCount += 1
+                } catch {
+                    continue
+                }
+            }
+            statusMessage = resubmittedCount == 0
+                ? "No purchases found for this account."
+                : "Restored — checked \(resubmittedCount) purchase\(resubmittedCount == 1 ? "" : "s")."
             await refresh()
         } catch {
             errorMessage = error.localizedDescription

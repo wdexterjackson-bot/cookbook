@@ -187,7 +187,19 @@ struct SignInView: View {
             try await PostSignInCoordinator.handle(result, email: accountState.currentUserEmail, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
-            errorMessage = await resolveErrorMessage(error, attemptedEmail: trimmedEmail, context: isSignUp ? .signUp : .signIn)
+            // isSignedIn is already true here only if accountState.signIn/
+            // signUp above succeeded and PostSignInCoordinator.handle is
+            // what actually threw — AuthGatedRootView may have already
+            // swapped this view out by the time we get here, so that
+            // failure goes to accountState.postSignInError (survives the
+            // swap) instead of this view's own @State, which might never
+            // render again.
+            let message = await resolveErrorMessage(error, attemptedEmail: trimmedEmail, context: isSignUp ? .signUp : .signIn)
+            if accountState.isSignedIn {
+                accountState.postSignInError = message
+            } else {
+                errorMessage = message
+            }
         }
     }
 
@@ -248,7 +260,14 @@ struct SignInView: View {
             try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
-            errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
+            // See performEmailAuth's matching catch block for why this
+            // distinguishes a post-sign-in migration failure.
+            let message = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
+            if accountState.isSignedIn {
+                accountState.postSignInError = message
+            } else {
+                errorMessage = message
+            }
         }
     }
 
@@ -274,7 +293,14 @@ struct SignInView: View {
             try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
-            errorMessage = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
+            // See performEmailAuth's matching catch block for why this
+            // distinguishes a post-sign-in migration failure.
+            let message = await resolveErrorMessage(error, attemptedEmail: "", context: .signUp)
+            if accountState.isSignedIn {
+                accountState.postSignInError = message
+            } else {
+                errorMessage = message
+            }
         }
     }
     #endif

@@ -34,8 +34,12 @@ final class FirestorePurchaseClaimWriter: PurchaseClaimSubmitting {
 
 final class FakePurchaseClaimWriter: PurchaseClaimSubmitting {
     private(set) var submittedClaims: [(receipt: PurchaseReceipt, userID: String)] = []
+    /// Lets a test simulate a claim write failing (e.g. offline right after
+    /// paying) without needing a real network drop.
+    var submitError: Error?
 
     func submit(_ receipt: PurchaseReceipt, userID: String) async throws {
+        if let submitError { throw submitError }
         submittedClaims.append((receipt, userID))
     }
 }
