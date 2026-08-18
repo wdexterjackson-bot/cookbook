@@ -277,7 +277,7 @@ struct RecipeListView: View {
                 // default puts a noticeable gap between them —
                 // cut down to a fraction of that so the chapter
                 // list itself reads as compact, not spaced out.
-                #if !os(tvOS)
+                #if os(iOS)
                 .listSectionSpacing(2)
                 #endif
             }

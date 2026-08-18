@@ -151,7 +151,7 @@ private struct IngredientsListSection: View {
             .onMove { from, to in
                 ingredientRows.move(fromOffsets: from, toOffset: to)
             }
-            .environment(\.editMode, .constant(.active))
+            .alwaysEditingOnIOS()
 
             CreateEditRecipeView.addRowButton(label: "Add an ingredient") {
                 let row = DraftIngredientRow()
@@ -626,7 +626,7 @@ struct CreateEditRecipeView: View {
             .onMove { from, to in
                 stepRows.move(fromOffsets: from, toOffset: to)
             }
-            .environment(\.editMode, .constant(.active))
+            .alwaysEditingOnIOS()
 
             Self.addRowButton(label: "Add a step") {
                 let row = DraftStepRow()
@@ -841,9 +841,7 @@ struct CreateEditRecipeView: View {
                 Toggle("Give Credit for Inspiration", isOn: $isAddingInspirationCredit.animation())
                 if isAddingInspirationCredit {
                     TextField("Name", text: $inspirationCreditName)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.words)
-                        #endif
+                        .autocapitalizationIfAvailable(.words)
                     LocationFieldsView(
                         city: $inspirationCreditCity,
                         isUS: $inspirationCreditIsUS,
@@ -962,7 +960,7 @@ struct CreateEditRecipeView: View {
                         #if os(iOS)
                         .keyboardType(.URL)
                         #endif
-                        .textInputAutocapitalization(.never)
+                        .autocapitalizationIfAvailable(.never)
                         .autocorrectionDisabled()
                         .onSubmit(addVideoURL)
                     Button("Add", action: addVideoURL)

@@ -47,10 +47,10 @@ struct QuantityWheelPicker: View {
                     Text(fraction.displayText.isEmpty ? "—" : fraction.displayText).tag(fraction)
                 }
             }
-            // .wheel itself is unavailable on tvOS (no drag-to-scroll
-            // paradigm there) — the platform default (a focusable,
-            // remote-navigable list) is what tvOS Pickers fall back to.
-            #if !os(tvOS)
+            // .wheel is iOS-only — unavailable on tvOS (no drag-to-scroll
+            // paradigm there) and on macOS (not a supported PickerStyle).
+            // Both fall back to their platform default Picker presentation.
+            #if os(iOS)
             .pickerStyle(.wheel)
             #endif
             .frame(maxWidth: .infinity)

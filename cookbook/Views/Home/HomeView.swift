@@ -527,9 +527,18 @@ struct HomeView: View {
         .sheet(isPresented: $isPresentingFileImport) {
             ImportRecipesFileView()
         }
+        // .fullScreenCover itself is unavailable on macOS (no full-screen
+        // modal presentation concept there) — a regular .sheet is the
+        // closest equivalent.
+        #if os(macOS)
+        .sheet(isPresented: $isPresentingGettingStartedVideo) {
+            GettingStartedTutorialPlayerView()
+        }
+        #else
         .fullScreenCover(isPresented: $isPresentingGettingStartedVideo) {
             GettingStartedTutorialPlayerView()
         }
+        #endif
         // .fileImporter itself is unavailable on tvOS — no user-facing
         // document/file system there — so "Restore from a Backup File"
         // isn't offered on this platform; "From the Cloud" (Firestore) is

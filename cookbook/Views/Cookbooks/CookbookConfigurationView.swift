@@ -191,7 +191,7 @@ struct CookbookConfigurationView: View {
                         chapterTitles.move(fromOffsets: from, toOffset: to)
                         chaptersManuallyReordered = true
                     }
-                    .environment(\.editMode, .constant(.active))
+                    .alwaysEditingOnIOS()
 
                     HStack {
                         TextField("Other (custom chapter name)", text: $newCustomSectionTitle)
