@@ -23,6 +23,13 @@ struct QRCodePayloadTests {
         #expect(QRCodePayload(stringValue: payload.stringValue) == payload)
     }
 
+    @Test func tvPairPayloadRoundTrips() {
+        let payload = QRCodePayload.tvPair(code: "ABC234")
+
+        #expect(payload.stringValue == "cookbook:tvpair:ABC234")
+        #expect(QRCodePayload(stringValue: payload.stringValue) == payload)
+    }
+
     @Test func rejectsAnUnrelatedString() {
         #expect(QRCodePayload(stringValue: "https://example.com") == nil)
     }

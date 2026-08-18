@@ -72,6 +72,17 @@ final class FakeAuthService: AuthServicing {
         return AuthResult(userID: userID, isNewAccount: isNewAccount)
     }
 
+    /// A real custom token (minted server-side by confirmPairingCode) is
+    /// opaque and always targets one specific, already-existing uid — never
+    /// a new account — so the fake just treats the token string as that
+    /// uid directly, the simplest stand-in that still lets callers assert
+    /// "signing in with this token signs in as this user."
+    func signInWithCustomToken(_ token: String) async throws -> AuthResult {
+        currentUserID = token
+        currentUserEmail = nil
+        return AuthResult(userID: token, isNewAccount: false)
+    }
+
     func signOut() throws {
         currentUserID = nil
         currentUserEmail = nil

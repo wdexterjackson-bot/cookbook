@@ -60,6 +60,11 @@ final class FirebaseAuthService: AuthServicing {
         return AuthResult(userID: result.user.uid, isNewAccount: result.additionalUserInfo?.isNewUser ?? false)
     }
 
+    func signInWithCustomToken(_ token: String) async throws -> AuthResult {
+        let result = try await Auth.auth().signIn(withCustomToken: token)
+        return AuthResult(userID: result.user.uid, isNewAccount: result.additionalUserInfo?.isNewUser ?? false)
+    }
+
     func signOut() throws {
         try Auth.auth().signOut()
     }

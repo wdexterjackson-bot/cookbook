@@ -42,6 +42,12 @@ protocol AuthServicing {
     func signUpWithEmail(email: String, password: String, displayName: String) async throws -> AuthResult
     func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult
     func signInWithGoogle(idToken: String, accessToken: String) async throws -> AuthResult
+    /// Apple TV phone-pairing sign-in: the TV exchanges a short-lived,
+    /// single-use token minted by the confirmPairingCode/checkPairingStatus
+    /// Cloud Functions (functions/tvPairing.js) for a real session, without
+    /// ever typing credentials via the remote. Always targets one specific,
+    /// already-existing account — never creates one.
+    func signInWithCustomToken(_ token: String) async throws -> AuthResult
     func updateDisplayName(_ displayName: String) async throws
     func signOut() throws
     func deleteAccount() async throws

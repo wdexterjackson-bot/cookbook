@@ -13,6 +13,7 @@ const { RateLimitExceededError: FriendLookupRateLimitExceededError } = require('
 const { findUserByEmail } = require('./findUserByEmail');
 const { deleteGroupPermanently } = require('./deleteGroupPermanently');
 const { changeOwnMembership } = require('./changeOwnMembership');
+const { requestPairingCode, checkPairingStatus, confirmPairingCode } = require('./tvPairing');
 const { handleAppStoreServerNotification } = require('./appStoreServerNotifications');
 const { decodeAndVerifyNotification } = require('./appStoreServerNotificationVerifier');
 const { sweepLapsedAnnualProMembers } = require('./sweepLapsedAnnualProMembers');
@@ -113,6 +114,60 @@ exports.changeOwnMembership = onCall(async (request) => {
   } catch (error) {
     console.error('changeOwnMembership failed:', error);
     throw new HttpsError('failed-precondition', error.message || 'Could not update your membership right now.');
+  }
+});
+
+// Apple TV phone-pairing sign-in (tvPairing.js) — the TV is signed out
+// when it calls this, so no request.auth is expected or required. Rate-
+// limited by the TV-generated deviceSessionID (see tvPairing.js's own
+// comment for why this collection has no firestore.rules entry at all).
+exports.requestPairingCode = onCall(async (request) => {
+  const deviceSessionID = request.data && request.data.deviceSessionID;
+  try {
+    return await requestPairingCode({ db: getFirestore(), deviceSessionID });
+  } catch (error) {
+    if (error instanceof FriendLookupRateLimitExceededError) {
+      throw new HttpsError('resource-exhausted', error.message);
+    }
+    console.error('requestPairingCode failed:', error);
+    throw new HttpsError('internal', error.message || 'Could not start pairing right now.');
+  }
+});
+
+// Also signed-out — the TV polls this until the phone confirms. Only ever
+// returns a custom token once per pairing code (tvPairing.js's
+// tokenDelivered guard), so a dropped response can't be silently retried
+// into a second valid token.
+exports.checkPairingStatus = onCall(async (request) => {
+  const code = request.data && request.data.code;
+  const deviceSessionID = request.data && request.data.deviceSessionID;
+  try {
+    return await checkPairingStatus({ db: getFirestore(), authClient: getAuth(), code, deviceSessionID });
+  } catch (error) {
+    if (error instanceof FriendLookupRateLimitExceededError) {
+      throw new HttpsError('resource-exhausted', error.message);
+    }
+    console.error('checkPairingStatus failed:', error);
+    throw new HttpsError('internal', error.message || 'Could not check pairing status right now.');
+  }
+});
+
+// The one call in this trio that IS authenticated — the phone confirming
+// the code belongs to its own signed-in account.
+exports.confirmPairingCode = onCall(async (request) => {
+  const code = request.data && request.data.code;
+  const callerUserID = request.auth && request.auth.uid;
+  if (!callerUserID) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  try {
+    return await confirmPairingCode({ db: getFirestore(), code, callerUserID });
+  } catch (error) {
+    if (error instanceof FriendLookupRateLimitExceededError) {
+      throw new HttpsError('resource-exhausted', error.message);
+    }
+    console.error('confirmPairingCode failed:', error);
+    throw new HttpsError('failed-precondition', error.message || 'Could not confirm this code right now.');
   }
 });
 

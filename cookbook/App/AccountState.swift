@@ -64,6 +64,13 @@ final class AccountState {
         return result
     }
 
+    @discardableResult
+    func signInWithCustomToken(_ token: String) async throws -> AuthResult {
+        let result = try await authService.signInWithCustomToken(token)
+        currentUserID = result.userID
+        return result
+    }
+
     func signOut() throws {
         try authService.signOut()
         currentUserID = nil

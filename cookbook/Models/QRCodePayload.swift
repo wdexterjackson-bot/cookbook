@@ -13,17 +13,26 @@
 //  rules. Don't reuse this payload format for anything that grants access
 //  directly.
 //
+//  .tvPair follows the exact same division of responsibility, not an
+//  exception to it: the code alone never grants a sign-in — confirming it
+//  still requires a real, authenticated, rate-limited, single-use
+//  confirmPairingCode Cloud Function call (TVPairingServicing). This
+//  payload only ever identifies *which* pairing attempt, same as .group/
+//  .friend identify *which* group/person.
+//
 
 import Foundation
 
 enum QRCodePayload: Equatable {
     case group(id: String)
     case friend(id: String)
+    case tvPair(code: String)
 
     var stringValue: String {
         switch self {
         case .group(let id): return "cookbook:group:\(id)"
         case .friend(let id): return "cookbook:friend:\(id)"
+        case .tvPair(let code): return "cookbook:tvpair:\(code)"
         }
     }
 
@@ -35,6 +44,7 @@ enum QRCodePayload: Equatable {
         switch parts[1] {
         case "group": self = .group(id: id)
         case "friend": self = .friend(id: id)
+        case "tvpair": self = .tvPair(code: id)
         default: return nil
         }
     }

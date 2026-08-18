@@ -14,7 +14,7 @@
 		<string>Poppins-ExtraBold.ttf</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Used to scan a Family Cookbook or friend QR code.</string>
+	<string>Used to scan a Family Cookbook, friend, or TV sign-in QR code.</string>
 	<!-- Exposes this app's own Documents folder (including Inbox, where a
 	     dropped/"Open In…"-delivered file lands) under Files' "On My
 	     iPhone" — without this, neither Files nor a document picker

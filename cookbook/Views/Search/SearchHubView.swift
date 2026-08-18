@@ -148,6 +148,11 @@ struct SearchHubView: View {
                 }
                 _ = try await friendsService.sendFriendRequest(from: userID, to: friendUserID)
                 scanResultMessage = "Friend request sent."
+            case .tvPair:
+                // A TV sign-in code, not a group/friend code — the right
+                // place for it is AccountView's "Sign In a TV" (PairTVView),
+                // not this general-purpose scanner.
+                scanErrorMessage = "That's a TV sign-in code — use \"Sign In a TV\" from your Account screen instead."
             }
         } catch GroupsServiceError.alreadyMember {
             scanErrorMessage = "You're already a member of this cookbook."

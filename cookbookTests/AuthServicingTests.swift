@@ -48,6 +48,26 @@ struct AuthServicingTests {
         #expect(first.userID == second.userID)
     }
 
+    @Test func customTokenSignInSetsTheCurrentUser() async throws {
+        let service = FakeAuthService()
+
+        let result = try await service.signInWithCustomToken("tv-pairing-token-for-alice")
+
+        #expect(result.isNewAccount == false)
+        #expect(result.userID == "tv-pairing-token-for-alice")
+        #expect(service.currentUserID == "tv-pairing-token-for-alice")
+    }
+
+    @MainActor
+    @Test func accountStatePropagatesCustomTokenSignIn() async throws {
+        let accountState = AccountState(authService: FakeAuthService())
+
+        let result = try await accountState.signInWithCustomToken("tv-pairing-token-for-bob")
+
+        #expect(accountState.currentUserID == result.userID)
+        #expect(accountState.isSignedIn)
+    }
+
     @Test func signOutClearsCurrentUser() async throws {
         let service = FakeAuthService()
         _ = try await service.signUpWithEmail(email: "cook@example.com", password: "hunter2", displayName: "Cook Example")

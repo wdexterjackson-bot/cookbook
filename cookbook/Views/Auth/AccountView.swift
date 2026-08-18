@@ -42,6 +42,7 @@ struct AccountView: View {
     @State private var discountCodeMessage: String?
     @State private var discountCodeErrorMessage: String?
     @State private var isPresentingFriendQRCode = false
+    @State private var isPresentingPairTV = false
     @State private var isEmailDiscoverable = true
     @State private var isPresentingEmailDiscoverabilityWarning = false
     @State private var isSavingEmailDiscoverability = false
@@ -93,6 +94,18 @@ struct AccountView: View {
                     } footer: {
                         Text("Share this so a friend can add you instantly by scanning it — also available from the Friends screen.")
                     }
+
+                    #if !os(tvOS)
+                    Section {
+                        Button {
+                            isPresentingPairTV = true
+                        } label: {
+                            Label("Sign In a TV", systemImage: "appletv")
+                        }
+                    } footer: {
+                        Text("Enter or scan the code shown on your Apple TV to sign it in with this account.")
+                    }
+                    #endif
 
                     Section {
                         LocationFieldsView(
@@ -301,6 +314,9 @@ struct AccountView: View {
                         subtitle: "Friends can scan this to send you a friend request."
                     )
                 }
+            }
+            .sheet(isPresented: $isPresentingPairTV) {
+                PairTVView(pairingService: FirebaseTVPairingService())
             }
             .task(id: accountState.currentUserID) {
                 fullNameDraft = accountState.currentUserDisplayName ?? ""
