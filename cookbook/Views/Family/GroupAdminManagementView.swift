@@ -22,6 +22,7 @@ struct GroupAdminManagementView: View {
     @State private var isLoading = false
     @State private var busyMembershipIDs: Set<String> = []
     @State private var errorMessage: String?
+    @State private var pendingRemoval: Membership?
 
     private var activeMemberships: [Membership] {
         memberships.filter { $0.status == .active }.sorted { $0.joinedAt < $1.joinedAt }
@@ -58,6 +59,21 @@ struct GroupAdminManagementView: View {
         .refreshable {
             await loadMemberships()
         }
+        .confirmationDialog(
+            "Remove this member from the group?",
+            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let pendingRemoval {
+                    Task { await removeMember(pendingRemoval) }
+                }
+                pendingRemoval = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text("They'll lose access to this group's cookbooks immediately. They can still be re-invited or ask to rejoin later.")
+        }
     }
 
     @ViewBuilder
@@ -75,6 +91,13 @@ struct GroupAdminManagementView: View {
             }
             .font(.caption)
             .disabled(busyMembershipIDs.contains(membership.id))
+            if membership.userID != accountState.currentUserID {
+                Button("Remove", role: .destructive) {
+                    pendingRemoval = membership
+                }
+                .font(.caption)
+                .disabled(busyMembershipIDs.contains(membership.id))
+            }
         }
         .padding(.vertical, 2)
     }
@@ -96,6 +119,21 @@ struct GroupAdminManagementView: View {
             await loadMemberships()
         } catch GroupsServiceError.lastAdminCannotLeaveOrBeDemoted {
             errorMessage = "You're the last administrator — promote someone else before removing yourself."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeMember(_ membership: Membership) async {
+        guard let actingUserID = accountState.currentUserID else { return }
+        busyMembershipIDs.insert(membership.id)
+        errorMessage = nil
+        defer { busyMembershipIDs.remove(membership.id) }
+        do {
+            try await groupsService.removeMember(groupID: group.id, userID: membership.userID, actingUserID: actingUserID)
+            await loadMemberships()
+        } catch GroupsServiceError.lastAdminCannotLeaveOrBeDemoted {
+            errorMessage = "You're the last administrator — promote someone else before removing them."
         } catch {
             errorMessage = error.localizedDescription
         }

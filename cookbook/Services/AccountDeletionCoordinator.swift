@@ -29,6 +29,7 @@ enum AccountDeletionCoordinator {
         entitlementService: EntitlementServicing,
         userProfileService: UserProfileServicing,
         publicationsService: PublicationsServicing = InMemoryPublicationsService(),
+        friendsService: FriendsServicing = FirestoreFriendsService(),
         personalCookbookSyncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService(),
         personalCookbookPhotoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
     ) async throws {
@@ -53,20 +54,31 @@ enum AccountDeletionCoordinator {
             throw AccountDeletionError.blockedByAdminOnlyCookbooks(cookbookNames: blockingCookbookNames)
         }
 
-        // Tombstone attribution on every publication this user owns, in
-        // every group they're still an active member of, *before* leaving
-        // any of them below — firestore.rules' publication read/update
-        // rules both require active membership, so this window closes the
-        // moment leaveGroup runs. Best-effort (a failure here shouldn't
-        // block the deletion the user actually asked for, same reasoning
-        // as the entitlement/profile cleanup below), but PRD §6.6 wants
-        // descendants and remaining group members to see "Original
-        // contributor deleted" rather than a publication that silently
-        // still shows a since-deleted account's name forever.
+        // Tombstone attribution on every publication this user owns, and
+        // every comment they left (even on publications they don't own),
+        // in every group they're still an active member of, *before*
+        // leaving any of them below — firestore.rules' publication/comment
+        // read/update rules all require active membership, so this window
+        // closes the moment leaveGroup runs. Best-effort (a failure here
+        // shouldn't block the deletion the user actually asked for, same
+        // reasoning as the entitlement/profile cleanup below), but PRD
+        // §6.6 wants descendants and remaining group members to see
+        // "Original contributor deleted"/"Deleted User" rather than a
+        // publication or comment that silently still shows a
+        // since-deleted account's name forever. Likes are deliberately
+        // left untouched — they carry no attribution to show, and still
+        // counting toward a publication's likeCount is the intended
+        // retention behavior, not an oversight.
         for membership in memberships {
-            let ownedPublications = (try? await publicationsService.fetchPublications(forOwner: userID, groupID: membership.groupID)) ?? []
-            for publication in ownedPublications {
-                try? await publicationsService.tombstoneOwnerAttribution(publication.id, actingUserID: userID)
+            let groupPublications = (try? await publicationsService.fetchAllPublications(forGroup: membership.groupID)) ?? []
+            for publication in groupPublications {
+                if publication.ownerUserID == userID {
+                    try? await publicationsService.tombstoneOwnerAttribution(publication.id, actingUserID: userID)
+                }
+                let comments = (try? await publicationsService.fetchComments(publication.id)) ?? []
+                for comment in comments where comment.authorUserID == userID {
+                    try? await publicationsService.tombstoneCommentAuthorship(comment.id, publicationID: publication.id, actingUserID: userID)
+                }
             }
         }
 
@@ -94,6 +106,27 @@ enum AccountDeletionCoordinator {
                 cookbookID: cookbook.id, ownerUserID: userID,
                 syncService: personalCookbookSyncService, photoUploadService: personalCookbookPhotoUploadService
             )
+        }
+
+        // Best-effort, same non-fatal precedent as everything else here:
+        // otherwise a deleted user leaves permanent ghosts behind — a
+        // friendship the other party can never detect is dead, or a
+        // pending request that sits forever, un-resolvable, in someone's
+        // Messages/Home. Declining rather than silently deleting the
+        // incoming requests so respondToFriendRequest's normal state
+        // transition (and the recipient-side notification it implies)
+        // still runs.
+        let outgoingFriendRequests = (try? await friendsService.fetchFriendRequests(bySender: userID)) ?? []
+        for request in outgoingFriendRequests {
+            try? await friendsService.cancelFriendRequest(request.id, actingUserID: userID)
+        }
+        let incomingFriendRequests = (try? await friendsService.fetchFriendRequests(forRecipient: userID)) ?? []
+        for request in incomingFriendRequests {
+            try? await friendsService.respondToFriendRequest(request.id, accept: false, respondingUserID: userID)
+        }
+        let friendships = (try? await friendsService.fetchFriends(forUser: userID)) ?? []
+        for friendship in friendships {
+            try? await friendsService.removeFriend(friendship.id, actingUserID: userID)
         }
 
         try deleteLocalData(ownerID: userID, in: modelContext)

@@ -12,6 +12,7 @@ const { resolveSignInProviders, RateLimitExceededError } = require('./resolveSig
 const { RateLimitExceededError: FriendLookupRateLimitExceededError } = require('./rateLimiter');
 const { findUserByEmail } = require('./findUserByEmail');
 const { deleteGroupPermanently } = require('./deleteGroupPermanently');
+const { changeOwnMembership } = require('./changeOwnMembership');
 const { handleAppStoreServerNotification } = require('./appStoreServerNotifications');
 const { decodeAndVerifyNotification } = require('./appStoreServerNotificationVerifier');
 const { sweepLapsedAnnualProMembers } = require('./sweepLapsedAnnualProMembers');
@@ -92,6 +93,26 @@ exports.deleteGroupPermanently = onCall(async (request) => {
   } catch (error) {
     console.error('deleteGroupPermanently failed:', error);
     throw new HttpsError('internal', error.message || 'Could not delete this cookbook right now.');
+  }
+});
+
+// Called by FirestoreGroupsService.leaveGroup/updateRole client-side only
+// for the two self-targeting mutations firestore.rules can no longer
+// perform as a direct write (self-leave-as-admin, self-demote) — see
+// changeOwnMembership.js for why rules alone can't enforce "the last
+// admin can't leave or be demoted."
+exports.changeOwnMembership = onCall(async (request) => {
+  const groupID = request.data && request.data.groupID;
+  const action = request.data && request.data.action;
+  const callerUserID = request.auth && request.auth.uid;
+  if (!callerUserID) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  try {
+    return await changeOwnMembership({ db: getFirestore(), groupID, action, callerUserID });
+  } catch (error) {
+    console.error('changeOwnMembership failed:', error);
+    throw new HttpsError('failed-precondition', error.message || 'Could not update your membership right now.');
   }
 });
 

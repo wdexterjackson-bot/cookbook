@@ -222,6 +222,50 @@ struct AccountDeletionCoordinatorTests {
         #expect(survivingPublication.state == .published)
     }
 
+    /// A deleted user's own comment on someone *else's* publication should
+    /// also read as tombstoned afterward, not just publications they
+    /// owned — the display name changes, everything else (including the
+    /// publication's own attribution, since alice isn't being deleted)
+    /// stays untouched. Likes are deliberately left alone entirely.
+    @Test func tombstonesTheDeletedUsersOwnCommentsOnOtherPeoplesPublications() async throws {
+        let context = try makeInMemoryContext()
+        let groups = InMemoryGroupsService()
+        groups.tier2CreditsByUserID["alice"] = 1
+        let group = try await createTestGroup(groups, name: "Barrentines", cookbookName: "Reunion")
+        let joinRequest = try await groups.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await groups.decideJoinRequest(joinRequest.id, approve: true, decidedByUserID: "alice")
+
+        let publications = InMemoryPublicationsService()
+        let content = PublicationContentSnapshot(
+            title: "Alice's Cornbread",
+            summary: "", yield: "", totalTimeMinutes: nil,
+            ingredientSections: [], stepSections: [], notes: "", tags: []
+        )
+        let published = try await publications.publish(content, sourceRecipeID: "r1", to: group.id, cookbookID: "cb-1", ownerUserID: "alice")
+        try await publications.setCommentsEnabled(published.id, enabled: true, actingUserID: "alice")
+        _ = try await publications.addComment(published.id, authorUserID: "bob", authorDisplayName: "Bob", text: "This looks great!")
+        _ = try await publications.setLiked(published.id, userID: "bob", liked: true)
+
+        try await AccountDeletionCoordinator.deleteAllData(
+            for: "bob",
+            modelContext: context,
+            groupsService: groups,
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: InMemoryUserProfileService(),
+            publicationsService: publications
+        )
+
+        let comments = try await publications.fetchComments(published.id)
+        let comment = try #require(comments.first)
+        #expect(comment.authorUserID == "bob")
+        #expect(comment.authorDisplayName == "Deleted User")
+        #expect(comment.text == "This looks great!")
+
+        let survivingPublication = try #require(await publications.fetchPublication(id: published.id))
+        #expect(survivingPublication.content.authorLineage == nil)
+        #expect(survivingPublication.likeCount == 1)
+    }
+
     @Test func bestEffortDeletesTheProfileDocument() async throws {
         let context = try makeInMemoryContext()
         let userProfiles = InMemoryUserProfileService()
@@ -236,5 +280,31 @@ struct AccountDeletionCoordinatorTests {
         )
 
         #expect(userProfiles.locationsByUserID["alice"] == nil)
+    }
+
+    @Test func bestEffortCleansUpAllFriendDataSoNoGhostsAreLeftBehind() async throws {
+        let context = try makeInMemoryContext()
+        let friends = InMemoryFriendsService()
+        // Alice has an outgoing request to carol, an incoming one from dave,
+        // and an accepted friendship with bob — deleting alice should
+        // resolve all three so nobody's left with a permanent ghost.
+        _ = try await friends.sendFriendRequest(from: "alice", to: "carol")
+        _ = try await friends.sendFriendRequest(from: "dave", to: "alice")
+        let bobRequest = try await friends.sendFriendRequest(from: "alice", to: "bob")
+        try await friends.respondToFriendRequest(bobRequest.id, accept: true, respondingUserID: "bob")
+
+        try await AccountDeletionCoordinator.deleteAllData(
+            for: "alice",
+            modelContext: context,
+            groupsService: InMemoryGroupsService(),
+            entitlementService: InMemoryEntitlementService(),
+            userProfileService: InMemoryUserProfileService(),
+            friendsService: friends
+        )
+
+        #expect(try await friends.fetchFriendRequests(forRecipient: "carol").isEmpty)
+        #expect(try await friends.fetchFriendRequests(forRecipient: "alice").isEmpty)
+        #expect(try await friends.fetchFriends(forUser: "alice").isEmpty)
+        #expect(try await friends.fetchFriends(forUser: "bob").isEmpty)
     }
 }

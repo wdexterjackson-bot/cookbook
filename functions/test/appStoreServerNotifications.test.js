@@ -215,3 +215,35 @@ test('an unresolvable originalTransactionId (no matching entitlement) is logged,
     signedPayload: 'stub',
   }));
 });
+
+test('a renewal updates every entitlement doc sharing one originalTransactionId (Family Sharing)', async () => {
+  // Under Apple's default Family Sharing for auto-renewable subscriptions,
+  // each family member's device independently submits its own purchaseClaims
+  // doc for the same underlying subscription, so more than one entitlements
+  // doc can carry the same originalTransactionId. A DID_RENEW must not
+  // stamp just one of them — see the real bug this guards against in
+  // findEntitlementsByOriginalTransactionID's own doc comment.
+  await seedEntitlement('helen', { annualProMembershipOriginalTransactionID: 'orig-family' });
+  await seedEntitlement('irene', { annualProMembershipOriginalTransactionID: 'orig-family' });
+  await seedEntitlement('june', { annualProMembershipOriginalTransactionID: 'other-transaction' });
+  const expiresMs = Date.parse('2027-09-01T00:00:00.000Z');
+
+  await handleAppStoreServerNotification({
+    db,
+    decodeAndVerifyNotification: fakeDecoder({
+      notificationType: 'DID_RENEW',
+      notificationUUID: 'n10',
+      originalTransactionId: 'orig-family',
+      productId: 'VibeApp.cookbook.annualProMembership',
+      expiresDate: expiresMs,
+    }),
+    signedPayload: 'stub',
+  });
+
+  const helen = (await db.collection('entitlements').doc('helen').get()).data();
+  const irene = (await db.collection('entitlements').doc('irene').get()).data();
+  const june = (await db.collection('entitlements').doc('june').get()).data();
+  assert.equal(helen.annualProMembershipExpiresAt.toMillis(), expiresMs);
+  assert.equal(irene.annualProMembershipExpiresAt.toMillis(), expiresMs);
+  assert.equal(june.annualProMembershipExpiresAt, undefined);
+});

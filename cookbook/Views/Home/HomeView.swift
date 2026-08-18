@@ -39,6 +39,10 @@ struct HomeView: View {
 
     @State private var adminPendingJoinRequests: [(request: JoinRequest, group: FamilyGroup)] = []
     @State private var pendingInvitations: [(invitation: Invitation, group: FamilyGroup)] = []
+    @State private var incomingFriendRequests: [FriendRequest] = []
+    @State private var outgoingFriendRequests: [FriendRequest] = []
+    @State private var busyFriendRequestIDs: Set<String> = []
+    @State private var friendRequestErrorMessage: String?
     /// "Decline" on an invitation card only enters this local soft state
     /// (Join/Decline disabled, Reconsider/Delete shown) — see
     /// InvitationCardState's header for why the real backend decline is
@@ -86,6 +90,7 @@ struct HomeView: View {
     private let communityCookbooksAreLive = false
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
+    private let friendsService: FriendsServicing = FirestoreFriendsService()
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
@@ -106,7 +111,7 @@ struct HomeView: View {
     }
 
     private var attentionCount: Int {
-        adminPendingJoinRequests.count + activeInvitations.count
+        adminPendingJoinRequests.count + activeInvitations.count + incomingFriendRequests.count + outgoingFriendRequests.count
     }
 
     /// Real invitations not yet soft-declined or deleted.
@@ -609,6 +614,35 @@ struct HomeView: View {
                     .padding(.horizontal)
                 }
             }
+
+            ForEach(incomingFriendRequests) { request in
+                friendRequestCard(
+                    badge: "FRIEND REQUEST",
+                    title: "Friend request from Member \(request.senderID.suffix(6))"
+                ) {
+                    HStack {
+                        Button("Accept") {
+                            Task { await respondToFriendRequest(request, accept: true) }
+                        }
+                        Button("Decline", role: .destructive) {
+                            Task { await respondToFriendRequest(request, accept: false) }
+                        }
+                    }
+                    .disabled(busyFriendRequestIDs.contains(request.id))
+                }
+            }
+
+            ForEach(outgoingFriendRequests) { request in
+                friendRequestCard(
+                    badge: "FRIEND REQUEST SENT",
+                    title: "Friend request sent to Member \(request.recipientID.suffix(6))"
+                ) {
+                    Button("Cancel", role: .destructive) {
+                        Task { await cancelFriendRequest(request) }
+                    }
+                    .disabled(busyFriendRequestIDs.contains(request.id))
+                }
+            }
         }
         .alert("Couldn't Update Invitation", isPresented: Binding(
             get: { invitationActionErrorMessage != nil },
@@ -618,6 +652,37 @@ struct HomeView: View {
         } message: {
             Text(invitationActionErrorMessage ?? "")
         }
+        .alert("Couldn't Update Friend Request", isPresented: Binding(
+            get: { friendRequestErrorMessage != nil },
+            set: { if !$0 { friendRequestErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(friendRequestErrorMessage ?? "")
+        }
+    }
+
+    /// Same visual language as invitationCard, no soft-decline lifecycle
+    /// — a friend request just quietly disappears on accept/decline/
+    /// cancel, no reconsider step (unlike invitations, which is a
+    /// deliberately richer flow not asked for here).
+    private func friendRequestCard(badge: String, title: String, @ViewBuilder actions: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            messagesPillBadge(badge)
+            Text(title)
+                .font(.potluckSemiboldBody(15))
+                .foregroundStyle(Color.potluckDeepTeal)
+                .fixedSize(horizontal: false, vertical: true)
+            actions()
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+        .potluckCardShadow()
+        .padding(.horizontal)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
     }
 
     /// Real invitations not yet permanently deleted — soft-declined ones
@@ -780,6 +845,30 @@ struct HomeView: View {
             await loadGroupData()
         } catch {
             invitationActionErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func respondToFriendRequest(_ request: FriendRequest, accept: Bool) async {
+        guard let userID = accountState.currentUserID else { return }
+        busyFriendRequestIDs.insert(request.id)
+        defer { busyFriendRequestIDs.remove(request.id) }
+        do {
+            try await friendsService.respondToFriendRequest(request.id, accept: accept, respondingUserID: userID)
+            incomingFriendRequests.removeAll { $0.id == request.id }
+        } catch {
+            friendRequestErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func cancelFriendRequest(_ request: FriendRequest) async {
+        guard let userID = accountState.currentUserID else { return }
+        busyFriendRequestIDs.insert(request.id)
+        defer { busyFriendRequestIDs.remove(request.id) }
+        do {
+            try await friendsService.cancelFriendRequest(request.id, actingUserID: userID)
+            outgoingFriendRequests.removeAll { $0.id == request.id }
+        } catch {
+            friendRequestErrorMessage = error.localizedDescription
         }
     }
 
@@ -1423,6 +1512,8 @@ struct HomeView: View {
             pendingInvitations = []
             joinedGroups = []
             featuredGroups = []
+            incomingFriendRequests = []
+            outgoingFriendRequests = []
             return
         }
         do {
@@ -1459,6 +1550,9 @@ struct HomeView: View {
             let joinedIDs = Set(groups.map { $0.1.id })
             let publicGroups = try await groupsService.fetchPublicGroups(matching: PublicGroupSearchFilter(text: nil, locationText: nil))
             featuredGroups = publicGroups.filter { $0.approvalPolicy == .noApprovalNeeded && !joinedIDs.contains($0.id) }
+
+            incomingFriendRequests = try await friendsService.fetchFriendRequests(forRecipient: userID)
+            outgoingFriendRequests = try await friendsService.fetchFriendRequests(bySender: userID)
         } catch {
             // Home degrades gracefully — sections requiring this data
             // just don't render rather than showing an error banner.

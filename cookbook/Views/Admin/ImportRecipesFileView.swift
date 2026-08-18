@@ -23,6 +23,11 @@ import UIKit
 // complete anyway.
 #if os(iOS) || os(macOS)
 struct ImportRecipesFileView: View {
+    /// Set when this view was opened automatically because a file arrived
+    /// via onOpenURL (dropped onto the app / "Open In…") rather than the
+    /// user tapping "Choose File" themselves — see PendingFileImportState.
+    var initialFileURL: URL?
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
@@ -36,6 +41,7 @@ struct ImportRecipesFileView: View {
     @State private var errorMessage: String?
     @State private var isPresentingAuthorPrompt = false
     @State private var authorPromptWasHandled = false
+    @State private var hasHandledInitialFileURL = false
 
     private let lineImportService: RecipeLineImportServicing = FoundationModelsLineImportService()
     private let userProfileService: UserProfileServicing = FirestoreUserProfileService()
@@ -53,6 +59,13 @@ struct ImportRecipesFileView: View {
                         ForEach(ownedCookbooks) { cookbook in
                             Text(cookbook.title).tag(UUID?.some(cookbook.id))
                         }
+                    }
+                }
+
+                if initialFileURL != nil {
+                    Section {
+                        Text("A file you shared with this app is being imported below.")
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -150,6 +163,17 @@ struct ImportRecipesFileView: View {
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         #endif
+        .task {
+            guard !hasHandledInitialFileURL, let initialFileURL else { return }
+            hasHandledInitialFileURL = true
+            // A lone owned cookbook is the obvious target — pre-select it
+            // so the only thing left for the user to do is review/save.
+            // With more than one, they still have to choose.
+            if selectedCookbookID == nil, ownedCookbooks.count == 1 {
+                selectedCookbookID = ownedCookbooks[0].id
+            }
+            handleFileSelection(.success(initialFileURL))
+        }
     }
 
     private var progressDescription: String? {
@@ -200,13 +224,16 @@ struct ImportRecipesFileView: View {
         case .failure(let error):
             errorMessage = error.localizedDescription
         case .success(let url):
-            guard url.startAccessingSecurityScopedResource() else {
-                errorMessage = "Couldn't open that file."
-                return
-            }
+            // false here doesn't mean "couldn't open" — per Apple's own
+            // docs, it also covers "this URL was never security-scoped in
+            // the first place" (e.g. a file already inside this app's own
+            // container, delivered via onOpenURL rather than the document
+            // picker — see initialFileURL above). Only pair a matching
+            // stopAccessing call when a scope was actually started.
+            let isSecurityScoped = url.startAccessingSecurityScopedResource()
             importSession.phase = .extracting(page: 0, of: 0)
             Task {
-                defer { url.stopAccessingSecurityScopedResource() }
+                defer { if isSecurityScoped { url.stopAccessingSecurityScopedResource() } }
                 do {
                     pendingFileText = try await RecipeFileTextExtractor.extractText(from: url) { page, total in
                         importSession.phase = .extracting(page: page, of: total)
@@ -272,6 +299,11 @@ struct ImportRecipesFileView: View {
 }
 #else
 struct ImportRecipesFileView: View {
+    /// Unused on tvOS (no fileImporter/onOpenURL delivery path here) —
+    /// kept only so RootTabView's top-level pending-import sheet can call
+    /// this initializer the same way on every platform.
+    var initialFileURL: URL?
+
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

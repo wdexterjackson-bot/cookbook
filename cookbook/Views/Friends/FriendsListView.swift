@@ -2,13 +2,15 @@
 //  FriendsListView.swift
 //  cookbook
 //
-//  Accepted friends + pending requests — structurally close to
-//  MessagesView's own inbox-row pattern for the request rows. No
-//  per-user display name shown for the same reason GroupAdminManagementView
-//  doesn't show one either — a live cross-user profile lookup isn't a
-//  capability this app has; findUserByEmail's result (name shown at
-//  request time, in AddFriendView) is the one deliberate exception, since
-//  that's a one-time, rate-limited, opt-in lookup, not a general capability.
+//  Accepted friends only — pending requests (incoming and outgoing) live
+//  in Messages/the Home dashboard instead, same as join requests and
+//  invitations never appear in Family either, only in Messages. No
+//  per-user display name shown for the same reason
+//  GroupAdminManagementView doesn't show one either — a live cross-user
+//  profile lookup isn't a capability this app has; findUserByEmail's
+//  result (name shown at request time, in AddFriendView) is the one
+//  deliberate exception, since that's a one-time, rate-limited, opt-in
+//  lookup, not a general capability.
 //
 
 import SwiftUI
@@ -20,24 +22,25 @@ struct FriendsListView: View {
     @Environment(AccountState.self) private var accountState
     @Environment(\.dismiss) private var dismiss
     @State private var friends: [Friendship] = []
-    @State private var pendingRequests: [FriendRequest] = []
     @State private var isLoading = false
-    @State private var busyIDs: Set<String> = []
     @State private var errorMessage: String?
     @State private var isPresentingAddFriend = false
+    @State private var isPresentingMyQRCode = false
 
     var body: some View {
         NavigationStack {
             List {
-                if !pendingRequests.isEmpty {
-                    Section("Friend Requests") {
-                        ForEach(pendingRequests) { request in
-                            requestRow(request)
-                        }
+                Section {
+                    Button {
+                        isPresentingMyQRCode = true
+                    } label: {
+                        Label("My QR Code", systemImage: "qrcode")
                     }
+                } footer: {
+                    Text("Share this so a friend can add you instantly by scanning it.")
                 }
 
-                Section("Friends") {
+                Section {
                     if friends.isEmpty && !isLoading {
                         Text("No friends yet — add one by email or QR code.")
                             .foregroundStyle(.secondary)
@@ -46,6 +49,8 @@ struct FriendsListView: View {
                             friendRow(friendship)
                         }
                     }
+                } footer: {
+                    Text("Pending friend requests show up in Messages, on the Home dashboard.")
                 }
 
                 if let errorMessage {
@@ -74,6 +79,15 @@ struct FriendsListView: View {
             .sheet(isPresented: $isPresentingAddFriend) {
                 AddFriendView(friendsService: friendsService, friendDiscoveryService: friendDiscoveryService)
             }
+            .sheet(isPresented: $isPresentingMyQRCode) {
+                if let userID = accountState.currentUserID {
+                    QRCodeDisplayView(
+                        payload: .friend(id: userID),
+                        title: "Your Friend Code",
+                        subtitle: "Friends can scan this to send you a friend request."
+                    )
+                }
+            }
             .task {
                 await load()
             }
@@ -89,24 +103,6 @@ struct FriendsListView: View {
     }
 
     @ViewBuilder
-    private func requestRow(_ request: FriendRequest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Friend request from \(shortLabel(request.senderID))")
-                .font(.subheadline)
-            HStack {
-                Button("Accept") {
-                    Task { await respond(request, accept: true) }
-                }
-                Button("Decline", role: .destructive) {
-                    Task { await respond(request, accept: false) }
-                }
-            }
-            .disabled(busyIDs.contains(request.id))
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
     private func friendRow(_ friendship: Friendship) -> some View {
         Text(otherUserLabel(friendship))
             #if !os(tvOS)
@@ -118,16 +114,12 @@ struct FriendsListView: View {
             #endif
     }
 
-    private func shortLabel(_ userID: String) -> String {
-        "Member \(userID.suffix(6))"
-    }
-
     private func otherUserLabel(_ friendship: Friendship) -> String {
         guard let userID = accountState.currentUserID,
               let otherID = friendship.userIDs.first(where: { $0 != userID }) else {
             return "Friend"
         }
-        return shortLabel(otherID)
+        return "Member \(otherID.suffix(6))"
     }
 
     private func load() async {
@@ -135,20 +127,6 @@ struct FriendsListView: View {
         isLoading = true
         defer { isLoading = false }
         friends = (try? await friendsService.fetchFriends(forUser: userID)) ?? []
-        pendingRequests = (try? await friendsService.fetchFriendRequests(forRecipient: userID)) ?? []
-    }
-
-    private func respond(_ request: FriendRequest, accept: Bool) async {
-        guard let userID = accountState.currentUserID else { return }
-        busyIDs.insert(request.id)
-        errorMessage = nil
-        defer { busyIDs.remove(request.id) }
-        do {
-            try await friendsService.respondToFriendRequest(request.id, accept: accept, respondingUserID: userID)
-            await load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
     }
 
     private func remove(_ friendship: Friendship) async {

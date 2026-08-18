@@ -350,6 +350,24 @@ final class InMemoryGroupsService: GroupsServicing {
         memberships[index].leftAt = .now
     }
 
+    func removeMember(groupID: String, userID: String, actingUserID: String) async throws {
+        guard userID != actingUserID else {
+            throw GroupsServiceError.notAuthorized
+        }
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
+        guard let index = memberships.firstIndex(where: { $0.groupID == groupID && $0.userID == userID && $0.status == .active }) else {
+            throw GroupsServiceError.membershipNotFound
+        }
+        if GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
+            throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
+        }
+        memberships[index].status = .suspended
+        memberships[index].leftAt = .now
+    }
+
     func deleteGroupPermanently(groupID: String) async throws {
         groups.removeAll { $0.id == groupID }
         groupCookbooks.removeAll { $0.groupID == groupID }

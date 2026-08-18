@@ -344,14 +344,27 @@ final class FirestoreGroupsService: GroupsServicing {
         guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
             throw GroupsServiceError.notAuthorized
         }
-        guard var membership = groupMemberships.first(where: { $0.userID == userID && $0.status == .active }) else {
+        guard let membership = groupMemberships.first(where: { $0.userID == userID && $0.status == .active }) else {
             throw GroupsServiceError.membershipNotFound
         }
-        if newRole == .member, GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
-            throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
+        // Self-demotion no longer writes directly — firestore.rules'
+        // memberships/update rule excludes self-targeting from the
+        // "admin changing someone's role" branch entirely, since rules
+        // can't cheaply verify another admin remains. changeOwnMembership
+        // (Admin SDK) does that check server-side instead. There's no
+        // realistic self-target-to-.admin case (you're already admin to
+        // call this at all), so that's a no-op rather than a write.
+        if userID == actingUserID {
+            if newRole == .admin { return }
+            if newRole == .member, GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
+                throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
+            }
+            try await changeOwnMembership(groupID: groupID, action: "demote")
+            return
         }
-        membership.role = newRole
-        try db.collection("memberships").document(membership.id).setData(from: membership)
+        var mutableMembership = membership
+        mutableMembership.role = newRole
+        try db.collection("memberships").document(mutableMembership.id).setData(from: mutableMembership)
     }
 
     func leaveGroup(groupID: String, userID: String) async throws {
@@ -363,10 +376,47 @@ final class FirestoreGroupsService: GroupsServicing {
         if GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
             throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
         }
+        guard let membership = groupMemberships.first(where: { $0.userID == userID && $0.status == .active }) else {
+            throw GroupsServiceError.membershipNotFound
+        }
+        // Same reasoning as updateRole above: an active admin leaving no
+        // longer writes directly (firestore.rules now requires
+        // resource.data.role == 'member' on the self-leave branch) — only
+        // a plain member's own leave stays a direct write.
+        if membership.role == .admin {
+            try await changeOwnMembership(groupID: groupID, action: "leave")
+            return
+        }
+        var mutableMembership = membership
+        mutableMembership.status = .left
+        mutableMembership.leftAt = .now
+        try db.collection("memberships").document(mutableMembership.id).setData(from: mutableMembership)
+    }
+
+    /// Backs the two self-targeting membership mutations firestore.rules
+    /// can no longer allow as a direct client write (self-leave-as-admin,
+    /// self-demote) — see changeOwnMembership.js for why rules alone
+    /// can't enforce "the last admin can't leave or be demoted."
+    private func changeOwnMembership(groupID: String, action: String) async throws {
+        let callable = functions.httpsCallable("changeOwnMembership")
+        _ = try await callable.call(["groupID": groupID, "action": action])
+    }
+
+    func removeMember(groupID: String, userID: String, actingUserID: String) async throws {
+        guard userID != actingUserID else {
+            throw GroupsServiceError.notAuthorized
+        }
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
         guard var membership = groupMemberships.first(where: { $0.userID == userID && $0.status == .active }) else {
             throw GroupsServiceError.membershipNotFound
         }
-        membership.status = .left
+        if GroupPolicy.isLastActiveAdmin(userID, in: groupMemberships) {
+            throw GroupsServiceError.lastAdminCannotLeaveOrBeDemoted
+        }
+        membership.status = .suspended
         membership.leftAt = .now
         try db.collection("memberships").document(membership.id).setData(from: membership)
     }

@@ -402,7 +402,7 @@ struct CreateEditRecipeView: View {
                     TextField("Yield (e.g. Serves 6)", text: $yield)
                 }
 
-                if case .create = mode, ownedCookbooks.count > 1 {
+                if offersCookbookChoice, ownedCookbooks.count > 1 {
                     Section("Cookbook") {
                         Picker("Cookbook", selection: cookbookSelectionBinding) {
                             ForEach(ownedCookbooks.sorted { $0.sortOrder < $1.sortOrder }) { cookbook in
@@ -972,12 +972,21 @@ struct CreateEditRecipeView: View {
         allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
     }
 
-    /// In `.create` mode this is whatever the "Cookbook" picker has
-    /// selected (defaulting to the app's active cookbook until the user
-    /// changes it); every other mode keeps the old behavior of always
-    /// following the active cookbook.
+    /// Both `.create` and `.importing` (Discover's "Add to My Cookbook")
+    /// offer a real choice — whatever the "Cookbook" picker has selected,
+    /// defaulting to the app's active cookbook until the user changes it.
+    /// `.edit` keeps the old behavior of always following the active
+    /// cookbook (moving an existing recipe to a different cookbook isn't
+    /// what this picker is for).
+    private var offersCookbookChoice: Bool {
+        switch mode {
+        case .create, .importing: return true
+        case .edit: return false
+        }
+    }
+
     private var effectiveCookbookID: UUID? {
-        if case .create = mode {
+        if offersCookbookChoice {
             return selectedCookbookID ?? activeCookbookState.activeCookbookID
         }
         return activeCookbookState.activeCookbookID
@@ -1104,7 +1113,7 @@ struct CreateEditRecipeView: View {
             }
         case .importing(let discovered):
             recipe = Recipe(ownerID: accountState.currentOwnerID, title: trimmedTitle, sourceType: .webImport)
-            recipe.cookbookID = activeCookbookState.activeCookbookID
+            recipe.cookbookID = effectiveCookbookID
             recipe.authorLineage = authorLineage
             // A Discover download is always an external source, regardless
             // of exactly how authorLineage itself got resolved.

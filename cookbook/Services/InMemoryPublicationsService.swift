@@ -27,7 +27,7 @@ final class InMemoryPublicationsService: PublicationsServicing {
         }
 
         let publication = Publication(
-            id: UUID().uuidString,
+            id: Publication.compositeID(groupID: groupID, cookbookID: cookbookID, sourceRecipeID: sourceRecipeID, ownerUserID: ownerUserID),
             groupID: groupID,
             cookbookID: cookbookID,
             ownerUserID: ownerUserID,
@@ -127,6 +127,10 @@ final class InMemoryPublicationsService: PublicationsServicing {
         publications.filter { $0.groupID == groupID && $0.ownerUserID == ownerUserID }
     }
 
+    func fetchAllPublications(forGroup groupID: String) async throws -> [Publication] {
+        publications.filter { $0.groupID == groupID }
+    }
+
     func tombstoneOwnerAttribution(_ publicationID: String, actingUserID: String) async throws {
         guard let index = publications.firstIndex(where: { $0.id == publicationID }) else {
             throw PublicationsServiceError.publicationNotFound
@@ -136,6 +140,16 @@ final class InMemoryPublicationsService: PublicationsServicing {
         }
         publications[index].content.authorLineage = "Original contributor deleted"
         publications[index].updatedAt = .now
+    }
+
+    func tombstoneCommentAuthorship(_ commentID: String, publicationID: String, actingUserID: String) async throws {
+        guard let index = comments.firstIndex(where: { $0.id == commentID && $0.publicationID == publicationID }) else {
+            throw PublicationsServiceError.commentNotFound
+        }
+        guard comments[index].authorUserID == actingUserID else {
+            throw PublicationsServiceError.notAuthorized
+        }
+        comments[index].authorDisplayName = "Deleted User"
     }
 
     func hasLiked(_ publicationID: String, userID: String) async throws -> Bool {

@@ -29,6 +29,8 @@ final class FirestoreFriendsService: FriendsServicing {
            reverseRequest.status == .pending {
             // Mutual/simultaneous request — accept the existing reverse
             // request instead of creating a second, contradictory doc.
+            // Not rate-limited: this accepts something already sent to
+            // `senderID`, it doesn't send a new one.
             reverseRequest.status = .accepted
             reverseRequest.respondedAt = .now
             let friendship = Friendship(id: friendshipRef.documentID, userIDs: [senderID, recipientID], becameFriendsAt: .now)
@@ -41,11 +43,14 @@ final class FirestoreFriendsService: FriendsServicing {
 
         if let forwardSnapshot = try? await forwardRef.getDocument(),
            var forwardRequest = try forwardSnapshot.data(as: FriendRequest?.self) {
-            if forwardRequest.status == .declined {
+            if forwardRequest.status == .declined || forwardRequest.status == .cancelled {
                 forwardRequest.status = .pending
                 forwardRequest.createdAt = .now
                 forwardRequest.respondedAt = nil
-                try forwardRef.setData(from: forwardRequest)
+                let batch = db.batch()
+                try batch.setData(from: forwardRequest, forDocument: forwardRef)
+                try await payFriendRequestRateLimit(for: senderID, in: batch)
+                try await batch.commit()
             }
             return forwardRequest
         }
@@ -58,8 +63,36 @@ final class FirestoreFriendsService: FriendsServicing {
             createdAt: .now,
             respondedAt: nil
         )
-        try forwardRef.setData(from: request)
+        let batch = db.batch()
+        try batch.setData(from: request, forDocument: forwardRef)
+        try await payFriendRequestRateLimit(for: senderID, in: batch)
+        try await batch.commit()
         return request
+    }
+
+    /// SAFE-002: pairs the actual friendRequests create/reset write with an
+    /// increment to this sender's rolling-window counter, in the same
+    /// batch — firestore.rules' friendRequestRateLimitPaid() rejects the
+    /// whole batch unless this write is present and reflects a real,
+    /// rule-validated increment. See that function's doc comment.
+    private func payFriendRequestRateLimit(for senderID: String, in batch: WriteBatch) async throws {
+        let ref = db.collection("friendRequestRateLimits").document(senderID)
+        let snapshot = try? await ref.getDocument()
+        let windowSeconds: TimeInterval = 3600
+
+        // windowStart must be FieldValue.serverTimestamp() (not a
+        // client-computed Date) whenever it's (re)set — firestore.rules'
+        // create/reset branches require it to equal request.time exactly,
+        // which only a server-resolved sentinel can guarantee given
+        // client/server clock skew.
+        if let data = snapshot?.data(),
+           let windowStart = data["windowStart"] as? Timestamp,
+           let count = data["count"] as? Int,
+           Date().timeIntervalSince(windowStart.dateValue()) <= windowSeconds {
+            batch.setData(["windowStart": windowStart, "count": count + 1], forDocument: ref)
+        } else {
+            batch.setData(["windowStart": FieldValue.serverTimestamp(), "count": 1], forDocument: ref)
+        }
     }
 
     func respondToFriendRequest(_ requestID: String, accept: Bool, respondingUserID: String) async throws {
@@ -89,9 +122,33 @@ final class FirestoreFriendsService: FriendsServicing {
         }
     }
 
+    func cancelFriendRequest(_ requestID: String, actingUserID: String) async throws {
+        let ref = db.collection("friendRequests").document(requestID)
+        guard var request = try await ref.getDocument().data(as: FriendRequest?.self) else {
+            throw FriendsServiceError.requestNotFound
+        }
+        guard request.senderID == actingUserID else {
+            throw FriendsServiceError.notAuthorized
+        }
+        guard request.status == .pending else {
+            throw FriendsServiceError.invalidState
+        }
+        request.status = .cancelled
+        request.respondedAt = .now
+        try ref.setData(from: request)
+    }
+
     func fetchFriendRequests(forRecipient userID: String) async throws -> [FriendRequest] {
         let snapshot = try await db.collection("friendRequests")
             .whereField("recipientID", isEqualTo: userID)
+            .whereField("status", isEqualTo: FriendRequestStatus.pending.rawValue)
+            .getDocuments()
+        return try snapshot.documents.map { try $0.data(as: FriendRequest.self) }
+    }
+
+    func fetchFriendRequests(bySender userID: String) async throws -> [FriendRequest] {
+        let snapshot = try await db.collection("friendRequests")
+            .whereField("senderID", isEqualTo: userID)
             .whereField("status", isEqualTo: FriendRequestStatus.pending.rawValue)
             .getDocuments()
         return try snapshot.documents.map { try $0.data(as: FriendRequest.self) }

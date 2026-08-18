@@ -15,6 +15,53 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Used to scan a Family Cookbook or friend QR code.</string>
+	<!-- Exposes this app's own Documents folder (including Inbox, where a
+	     dropped/"Open In…"-delivered file lands) under Files' "On My
+	     iPhone" — without this, neither Files nor a document picker
+	     (.fileImporter, used by the bulk recipe import screen) has any
+	     way to browse into it, even though the file is really there. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<!-- Required for this app to appear at all in a real device's "Open
+	     In…"/share-sheet list for a PDF or text file — without any
+	     CFBundleDocumentTypes declared, iOS has no way to know this app
+	     can import one, regardless of drag-and-drop behavior in
+	     Simulator. (An earlier attempt at this, 2026-08-18, was reverted
+	     believing that *no* declaration made a direct Simulator drop go
+	     straight to this app — re-verified since: that was never true.
+	     Dropping a PDF with zero document-type declaration anywhere in
+	     the app still opens it in the system's built-in Quick Look
+	     viewer, not this app, so there was nothing to regress back to.)
+	     LSHandlerRank is "Alternate," not "Owner" — this app doesn't own
+	     the PDF/text format, it's one of potentially several apps able
+	     to import one. That only affects which app iOS treats as the
+	     *default* for an unprompted open (e.g. Simulator's own drag-and-
+	     drop, or tapping a file in Files with no explicit chooser) —
+	     Simulator's drag-and-drop may still land on the system default
+	     rather than this app for that reason, a Simulator-only quirk.
+	     The real device share-sheet flow lists every declared handler
+	     and lets the person pick, unaffected by rank. Either way, the
+	     .fileImporter "Choose File" button in the bulk import screen
+	     works regardless of any of this — it's the reliable path for
+	     testing this feature in Simulator. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Recipe Import File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+				<string>public.plain-text</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

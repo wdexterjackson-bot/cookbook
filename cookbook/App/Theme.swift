@@ -98,7 +98,9 @@ extension View {
     }
 
     /// The cream base every tab root already used, plus this launch's
-    /// AppBackground art at 35% opacity filling the screen behind it.
+    /// AppBackground art filling the screen behind it, at `opacity` (30%
+    /// on the tab roots; SignInView uses a lighter 20% so the art stays
+    /// legible behind form fields it doesn't otherwise have a scrim for).
     ///
     /// iPad has portrait/landscape-matched art (each pair rendered at the
     /// device's exact aspect ratio), so `.fill` + `.clipped()` covers the
@@ -109,7 +111,7 @@ extension View {
     /// orientation pairs), so they keep `.fit` — the whole image shows
     /// rather than being cropped/zoomed to cover the frame, and any
     /// letterboxing just reveals the same cream color underneath.
-    func potluckHubBackground() -> some View {
+    func potluckHubBackground(opacity: Double = 0.30) -> some View {
         background {
             GeometryReader { geometry in
                 ZStack {
@@ -121,20 +123,20 @@ extension View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .clipped()
-                            .opacity(0.35)
+                            .opacity(opacity)
                             .accessibilityHidden(true)
                     } else {
                         Image(AppBackground.assetName)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .opacity(0.35)
+                            .opacity(opacity)
                             .accessibilityHidden(true)
                     }
                     #else
                     Image(AppBackground.assetName)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .opacity(0.35)
+                        .opacity(opacity)
                         .accessibilityHidden(true)
                     #endif
                 }

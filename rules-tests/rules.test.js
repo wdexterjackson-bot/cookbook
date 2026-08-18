@@ -9,7 +9,7 @@ import {
   assertSucceeds,
   assertFails,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, deleteDoc, writeBatch, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, writeBatch, Timestamp, serverTimestamp } from 'firebase/firestore';
 
 let testEnv;
 
@@ -473,6 +473,22 @@ describe('groupCookbooks', () => {
     await assertSucceeds(getDoc(doc(mallory, 'groupCookbooks/cb-group1')));
   });
 
+  // Real correctness gap: the founder branch used to be keyed only on
+  // groups/{id}.createdByUserID, which never changes — so a founder who
+  // self-demoted and left could still exploit this branch to inject
+  // cookbooks into a group they're no longer even a member of, forever.
+  it('rejects a departed founder from using the founder branch once their membership doc exists (even left)', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'member',
+        status: 'left', source: 'founder', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'groupCookbooks/cb2'), groupCookbookData({ id: 'cb2', createdByUserID: 'alice' })));
+  });
+
   it('rejects reparenting a cookbook to a different group', async () => {
     await seed(async (db) => {
       await setDoc(doc(db, 'memberships/group1_alice'), {
@@ -702,9 +718,13 @@ describe('memberships', () => {
     }));
   });
 
-  it('under a creatorOnly approval policy, an admin who is not the creator cannot create the resulting membership', async () => {
+  it('under a creatorOnly approval policy, an admin who is not the creator cannot create the resulting membership while the creator is still active', async () => {
     await seed(async (db) => {
       await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
       await setDoc(doc(db, 'memberships/group1_bob'), {
         id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
         status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
@@ -714,6 +734,165 @@ describe('memberships', () => {
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertFails(setDoc(doc(bob, 'memberships/group1_carol'), {
       id: 'group1_carol', groupID: 'group1', userID: 'carol', role: 'member',
+      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('an admin can remove a plain member (marks them suspended)', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'suspended', source: 'request', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+    }));
+  });
+
+  it('a plain member cannot remove anyone', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'memberships/group1_carol'), {
+        id: 'group1_carol', groupID: 'group1', userID: 'carol', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'memberships/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', userID: 'carol', role: 'member',
+      status: 'suspended', source: 'request', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+    }));
+  });
+
+  it('an admin cannot remove themselves this way (must leave or be demoted instead)', async () => {
+    await seed((db) => setDoc(doc(db, 'memberships/group1_alice'), {
+      id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+      status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'memberships/group1_alice'), {
+      id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+      status: 'suspended', source: 'founder', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+    }));
+  });
+
+  // The last-admin invariant (GroupPolicy.isLastActiveAdmin) can't be
+  // enforced here — rules can't cheaply count active admins across a
+  // collection — so a direct client write is no longer trusted with
+  // self-demotion at all, last-admin or not; it must go through the
+  // changeOwnMembership Cloud Function (Admin SDK, re-verifies server
+  // side), covered in functions/test/changeOwnMembership.test.js.
+  it('an admin cannot demote themselves via a direct write, even when another admin exists', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'memberships/group1_alice'), {
+      id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'member',
+      status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('an admin cannot self-leave via a direct write, even when another admin exists', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'memberships/group1_alice'), {
+      id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+      status: 'left', source: 'founder', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+    }));
+  });
+
+  it('a plain member can still self-leave via a direct write, unaffected', async () => {
+    await seed((db) => setDoc(doc(db, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'left', source: 'request', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+    }));
+  });
+
+  it("an admin can still directly promote/demote someone else — provably safe, since the acting admin stays admin", async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
+      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  // Membership.compositeID's own doc comment: status transitions reuse the
+  // same document rather than piling up duplicates — this covers the
+  // "update", not "create", path that reactivation actually takes.
+  it('a decider can reactivate a previously removed/left member by re-approving them', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'anyAdministrator' }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'suspended', source: 'request', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+      status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+    }));
+  });
+
+  it('someone who is not a decider cannot reactivate a removed member themselves', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'anyAdministrator' }));
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'suspended', source: 'request', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'memberships/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
       status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
     }));
   });
@@ -991,6 +1170,49 @@ describe('comments', () => {
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertFails(setDoc(doc(bob, 'publications/pub1/comments/comment1'), commentData({ text: 'Edited' })));
   });
+
+  // The one deliberate exception to "immutable": PublicationsServicing.
+  // tombstoneCommentAuthorship uses this on account deletion so a deleted
+  // user's comments read as "Deleted User" instead of staying attributed
+  // to an account that no longer exists.
+  it('the author can rewrite their own display name on a comment (tombstone), text untouched', async () => {
+    const original = commentData();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1/comments/comment1'), original);
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'publications/pub1/comments/comment1'), { ...original, authorDisplayName: 'Deleted User' }));
+  });
+
+  it('rejects tombstoning display name together with a text change', async () => {
+    const original = commentData();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'member',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1/comments/comment1'), original);
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'publications/pub1/comments/comment1'), { ...original, authorDisplayName: 'Deleted User', text: 'Edited' }));
+  });
+
+  it("rejects someone else rewriting another user's comment display name", async () => {
+    const original = commentData();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'publications/pub1/comments/comment1'), original);
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'publications/pub1/comments/comment1'), { ...original, authorDisplayName: 'Deleted User' }));
+  });
 });
 
 describe('join requests', () => {
@@ -1073,9 +1295,13 @@ describe('join requests', () => {
     }));
   });
 
-  it('under a creatorOnly policy, the creator can approve even without an admin membership', async () => {
+  it('under a creatorOnly policy, the creator can approve while an active member (the normal case, since the founder membership is created atomically with the group)', async () => {
     await seed(async (db) => {
       await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
       await setDoc(doc(db, 'joinRequests/req1'), {
         id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
         state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
@@ -1088,9 +1314,59 @@ describe('join requests', () => {
     }));
   });
 
-  it('under a creatorOnly policy, an admin who is not the creator cannot approve', async () => {
+  // Real correctness gap: creatorOnly used to pin decision power to
+  // createdByUserID with no membership check at all, so a creator who
+  // self-demoted and left could still silently decide forever, while any
+  // admin actually still in the group had no way to decide anything.
+  it('under a creatorOnly policy, once the creator is no longer an active member, any active admin can approve instead', async () => {
     await seed(async (db) => {
       await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'member',
+        status: 'left', source: 'founder', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, 'memberships/group1_bob'), {
+        id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
+        status: 'active', source: 'request', joinedAt: Timestamp.now(), leftAt: null,
+      });
+      await setDoc(doc(db, 'joinRequests/req1'), {
+        id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+      });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'approved', decidedByUserID: 'bob', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+    }));
+  });
+
+  it('under a creatorOnly policy, a departed creator can no longer decide once they have left', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'member',
+        status: 'left', source: 'founder', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, 'joinRequests/req1'), {
+        id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+      });
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'joinRequests/req1'), {
+      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'approved', decidedByUserID: 'alice', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+    }));
+  });
+
+  it('under a creatorOnly policy, an admin who is not the creator cannot approve while the creator is still active', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'groups/group1'), groupData({ approvalPolicy: 'creatorOnly', createdByUserID: 'alice' }));
+      await setDoc(doc(db, 'memberships/group1_alice'), {
+        id: 'group1_alice', groupID: 'group1', userID: 'alice', role: 'admin',
+        status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
+      });
       await setDoc(doc(db, 'memberships/group1_bob'), {
         id: 'group1_bob', groupID: 'group1', userID: 'bob', role: 'admin',
         status: 'active', source: 'founder', joinedAt: Timestamp.now(), leftAt: null,
@@ -1168,21 +1444,95 @@ describe('invitations', () => {
   });
 });
 
+// SAFE-002: sendFriendRequest is a direct client write, gated only by
+// firestore.rules — a sender's UID is visible to every co-member of any
+// group they're in, so this pairs every create/re-request write with a
+// rate-limit-counter increment in the same batch (see
+// friendRequestRateLimitPaid()'s doc comment in firestore.rules).
+function payRateLimitBatch(batch, db, senderID, { windowStart, count } = {}) {
+  batch.set(doc(db, `friendRequestRateLimits/${senderID}`), {
+    windowStart: windowStart ?? serverTimestamp(),
+    count: count ?? 1,
+  });
+}
+
 describe('friendRequests', () => {
-  it('a user can send a friend request', async () => {
+  it('a user can send a friend request, paired with a rate-limit increment', async () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertSucceeds(setDoc(doc(alice, 'friendRequests/alice_bob'), {
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    });
+    payRateLimitBatch(batch, alice, 'alice');
+    await assertSucceeds(batch.commit());
+  });
+
+  it('rejects sending a friend request without the paired rate-limit write', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'friendRequests/alice_bob'), {
       id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
       status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
     }));
   });
 
+  it('rejects a friend request referencing an old, already-paid rate-limit count instead of a fresh increment', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequestRateLimits/alice'), { windowStart: Timestamp.now(), count: 5 }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    });
+    // Not incrementing — just referencing the same count already there.
+    await assertFails(batch.commit());
+  });
+
+  it('rejects a 21st friend request within the same hour (the 20-attempt cap)', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequestRateLimits/alice'), { windowStart: Timestamp.now(), count: 20 }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/alice_carol'), {
+      id: 'alice_carol', senderID: 'alice', recipientID: 'carol',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    });
+    batch.set(doc(alice, 'friendRequestRateLimits/alice'), { windowStart: Timestamp.now(), count: 21 });
+    await assertFails(batch.commit());
+  });
+
+  it('allows a fresh request once the rate-limit window has expired, resetting the count', async () => {
+    const overAnHourAgo = Timestamp.fromMillis(Date.now() - 3601000);
+    await seed((db) => setDoc(doc(db, 'friendRequestRateLimits/alice'), { windowStart: overAnHourAgo, count: 20 }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/alice_carol'), {
+      id: 'alice_carol', senderID: 'alice', recipientID: 'carol',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    });
+    payRateLimitBatch(batch, alice, 'alice');
+    await assertSucceeds(batch.commit());
+  });
+
   it("rejects sending a friend request on someone else's behalf", async () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertFails(setDoc(doc(alice, 'friendRequests/bob_carol'), {
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/bob_carol'), {
       id: 'bob_carol', senderID: 'bob', recipientID: 'carol',
       status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
-    }));
+    });
+    payRateLimitBatch(batch, alice, 'bob');
+    await assertFails(batch.commit());
+  });
+
+  it('rejects a self-friend-request', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/alice_alice'), {
+      id: 'alice_alice', senderID: 'alice', recipientID: 'alice',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    });
+    payRateLimitBatch(batch, alice, 'alice');
+    await assertFails(batch.commit());
   });
 
   it('the recipient can accept a pending request', async () => {
@@ -1209,16 +1559,70 @@ describe('friendRequests', () => {
     }));
   });
 
-  it('the original sender can re-request after an earlier decline', async () => {
+  it('the original sender can re-request after an earlier decline, paired with a rate-limit increment', async () => {
     await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
       id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
       status: 'declined', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
     }));
     const alice = testEnv.authenticatedContext('alice').firestore();
-    await assertSucceeds(setDoc(doc(alice, 'friendRequests/alice_bob'), {
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    });
+    payRateLimitBatch(batch, alice, 'alice');
+    await assertSucceeds(batch.commit());
+  });
+
+  it('rejects re-requesting after a decline without the paired rate-limit write', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'declined', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'friendRequests/alice_bob'), {
       id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
       status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
     }));
+  });
+
+  it('the sender can cancel their own pending request', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'cancelled', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+  });
+
+  it('the recipient cannot cancel a request sent to them', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'cancelled', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+  });
+
+  it('the original sender can re-request after cancelling, paired with a rate-limit increment', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'cancelled', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'friendRequests/alice_bob'), {
+      id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+      status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+    });
+    payRateLimitBatch(batch, alice, 'alice');
+    await assertSucceeds(batch.commit());
   });
 });
 
@@ -1244,6 +1648,17 @@ describe('friendships', () => {
     const alice = testEnv.authenticatedContext('alice').firestore();
     await assertFails(setDoc(doc(alice, 'friendships/alice_bob'), {
       id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+  });
+
+  it('rejects a self-friendship (both userIDs the same)', async () => {
+    await seed((db) => setDoc(doc(db, 'friendRequests/alice_alice'), {
+      id: 'alice_alice', senderID: 'alice', recipientID: 'alice',
+      status: 'accepted', createdAt: Timestamp.now(), respondedAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'friendships/alice_alice'), {
+      id: 'alice_alice', userIDs: ['alice', 'alice'], becameFriendsAt: Timestamp.now(),
     }));
   });
 

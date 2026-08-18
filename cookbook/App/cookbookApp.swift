@@ -18,6 +18,7 @@ struct cookbookApp: App {
     @State private var accountState: AccountState
     @State private var activeCookbookState = ActiveCookbookState()
     @State private var cookingSessionState = CookingSessionState()
+    @State private var pendingFileImportState = PendingFileImportState()
 
     init() {
         FirebaseApp.configure()
@@ -48,7 +49,16 @@ struct cookbookApp: App {
             AuthGatedRootView()
                 #if os(iOS)
                 .onOpenURL { url in
-                    GIDSignIn.sharedInstance.handle(url)
+                    // A file dropped onto the app (Simulator drag-and-drop,
+                    // or "Open In…" on a real device) arrives as a file://
+                    // URL into this app's own Documents/Inbox — route it to
+                    // the bulk recipe import flow. Anything else (Google
+                    // Sign-In's redirect) goes to GIDSignIn as before.
+                    if url.isFileURL {
+                        pendingFileImportState.url = url
+                    } else {
+                        GIDSignIn.sharedInstance.handle(url)
+                    }
                 }
                 #endif
                 // Sketch C "Potluck" has no dark-mode variant — screens
@@ -65,5 +75,6 @@ struct cookbookApp: App {
         .environment(accountState)
         .environment(activeCookbookState)
         .environment(cookingSessionState)
+        .environment(pendingFileImportState)
     }
 }

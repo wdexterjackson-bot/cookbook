@@ -41,6 +41,17 @@ protocol PublicationsServicing {
     /// tombstoned rather than left pointing at a deleted account).
     func fetchPublications(forOwner ownerUserID: String, groupID: String) async throws -> [Publication]
 
+    /// Every publication in `groupID`, any owner, any state — unlike
+    /// `fetchPublications(forGroup:)` (published-only, backs the visible
+    /// cookbook list) and `fetchPublications(forOwner:groupID:)` (one
+    /// owner only). Used exclusively by AccountDeletionCoordinator, which
+    /// needs to find comments the deleting user left on *other* people's
+    /// publications, not just their own — there's no per-author comment
+    /// query available without a Firestore collection-group index this
+    /// app doesn't have, so it walks every publication in each group
+    /// instead.
+    func fetchAllPublications(forGroup groupID: String) async throws -> [Publication]
+
     /// Called once per publication during account deletion (see
     /// AccountDeletionCoordinator), before the underlying auth account is
     /// actually removed — the caller's owner-authorization window is still
@@ -55,6 +66,16 @@ protocol PublicationsServicing {
     /// request.resource.data.ownerUserID` invariant firestore.rules relies
     /// on for every other publication-update path.
     func tombstoneOwnerAttribution(_ publicationID: String, actingUserID: String) async throws
+
+    /// Same shape/reasoning as `tombstoneOwnerAttribution`, but for a
+    /// single comment rather than a publication — called once per
+    /// still-attributed comment during account deletion (see
+    /// AccountDeletionCoordinator), not just ones on publications the
+    /// user owns. Only `authorDisplayName` changes; `authorUserID`,
+    /// `text`, and everything else are left as-is, matching
+    /// firestore.rules' comments/update rule, which pins every field
+    /// except the display name.
+    func tombstoneCommentAuthorship(_ commentID: String, publicationID: String, actingUserID: String) async throws
 
     /// Whether `userID` has already liked this publication — drives
     /// GroupCookbookView's like button state.

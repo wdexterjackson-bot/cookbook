@@ -76,6 +76,31 @@ test('deletes the group, its memberships, cookbooks, publications, and photos', 
   assert.equal(bucket.deleted.length, 2);
 });
 
+// Real correctness gap: plain docSnap.ref.delete() doesn't cascade to
+// subcollections, so a publication's comments (and likes/ratings) used to
+// survive as permanent, unreachable orphans after the group itself was
+// deleted. recursiveDelete closes this.
+test("deletes a publication's comments/likes/ratings subcollections, not just the publication doc itself", async () => {
+  const groupID = 'group-1b';
+  await seedGroup({
+    groupID,
+    memberships: [{ id: 'm1', groupID, userID: 'alice', status: 'active' }],
+  });
+  await db.collection('publications').doc('p1').set({ groupID, sourceRecipeID: 'r1' });
+  await db.collection('publications').doc('p1').collection('comments').doc('c1').set({
+    publicationID: 'p1', groupID, authorUserID: 'bob', text: 'Great recipe!',
+  });
+  await db.collection('publications').doc('p1').collection('likes').doc('bob').set({ userID: 'bob' });
+  await db.collection('publications').doc('p1').collection('ratings').doc('bob').set({ userID: 'bob', rating: 5 });
+  const bucket = fakeBucket({ [`publications/${groupID}/`]: [] });
+
+  await deleteGroupPermanently({ db, bucket, groupID, callerUserID: 'alice' });
+
+  assert.equal((await db.collection('publications').doc('p1').collection('comments').doc('c1').get()).exists, false);
+  assert.equal((await db.collection('publications').doc('p1').collection('likes').doc('bob').get()).exists, false);
+  assert.equal((await db.collection('publications').doc('p1').collection('ratings').doc('bob').get()).exists, false);
+});
+
 test('rejects a caller who is not an active member of the group', async () => {
   const groupID = 'group-2';
   await seedGroup({

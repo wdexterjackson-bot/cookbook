@@ -118,3 +118,17 @@ struct Publication: Codable, Identifiable, Equatable {
     /// read time rather than each comment carrying its own visibility.
     var commentsEnabled: Bool = false
 }
+
+extension Publication {
+    /// One publication document per (group, cookbook, source recipe,
+    /// owner) tuple, id'd deterministically rather than by a random UUID —
+    /// closes a check-then-act race where two concurrent publish() calls
+    /// for the same recipe (a double-tap, or a retry after an ambiguous
+    /// network response) could each miss the other's write and create two
+    /// separate, duplicate publication docs. With a deterministic ID, both
+    /// calls converge on the same document — worst case is a harmless
+    /// last-write-wins overwrite, never a duplicate.
+    static func compositeID(groupID: String, cookbookID: String, sourceRecipeID: String, ownerUserID: String) -> String {
+        "\(groupID)_\(cookbookID)_\(sourceRecipeID)_\(ownerUserID)"
+    }
+}

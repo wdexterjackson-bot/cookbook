@@ -103,7 +103,13 @@ enum GroupPolicy {
     static func canDecideJoinRequest(_ userID: String, group: FamilyGroup, memberships: [Membership]) -> Bool {
         switch group.approvalPolicy {
         case .creatorOnly:
-            return userID == group.createdByUserID
+            if isActiveMember(group.createdByUserID, in: memberships) {
+                return userID == group.createdByUserID
+            }
+            // Fallback once the creator is no longer an active member —
+            // must stay in lock-step with firestore.rules' matching
+            // fallback in canDecideJoinRequest(), see its comment.
+            return isActiveAdmin(userID, in: memberships)
         case .anyAdministrator:
             return isActiveAdmin(userID, in: memberships)
         case .anyUser:
@@ -174,6 +180,15 @@ protocol GroupsServicing {
     /// `.lastAdminCannotLeaveOrBeDemoted` under the same rule as before —
     /// a populated-but-adminless group is still not allowed.
     func leaveGroup(groupID: String, userID: String) async throws
+    /// An admin evicting someone else — unlike `leaveGroup`, this can't
+    /// target the acting user themselves (use `leaveGroup`/`updateRole`
+    /// for self-service). Marks the membership `.suspended` (distinct from
+    /// a voluntary `.left`) but doesn't ban them permanently: they can
+    /// still be re-invited or file a fresh join request afterward, same as
+    /// anyone else who isn't currently a member. Throws
+    /// `.lastAdminCannotLeaveOrBeDemoted` if `userID` is the group's last
+    /// active admin (GRP-008), same invariant as `updateRole`/`leaveGroup`.
+    func removeMember(groupID: String, userID: String, actingUserID: String) async throws
     /// Permanently deletes a group and everything tied to it — memberships,
     /// cookbooks, published recipes, and their photos. Client-side rules
     /// block direct deletes on every one of those collections

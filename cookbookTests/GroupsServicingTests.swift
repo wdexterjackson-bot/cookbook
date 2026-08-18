@@ -288,6 +288,61 @@ struct GroupsServicingTests {
         #expect(memberships.first { $0.userID == "alice" }?.status == .left)
     }
 
+    @Test func anAdminCanRemoveAPlainMember() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
+
+        try await service.removeMember(groupID: group.id, userID: "bob", actingUserID: "alice")
+
+        let memberships = try await service.fetchMemberships(forGroup: group.id)
+        #expect(memberships.first { $0.userID == "bob" }?.status == .suspended)
+    }
+
+    @Test func aPlainMemberCannotRemoveAnyone() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+        let bobRequest = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(bobRequest.id, approve: true, decidedByUserID: "alice")
+        let carolRequest = try await service.requestToJoin(groupID: group.id, requesterID: "carol", note: nil)
+        try await service.decideJoinRequest(carolRequest.id, approve: true, decidedByUserID: "alice")
+
+        await #expect(throws: GroupsServiceError.notAuthorized) {
+            try await service.removeMember(groupID: group.id, userID: "carol", actingUserID: "bob")
+        }
+    }
+
+    @Test func anAdminCannotRemoveThemselves() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+
+        await #expect(throws: GroupsServiceError.notAuthorized) {
+            try await service.removeMember(groupID: group.id, userID: "alice", actingUserID: "alice")
+        }
+    }
+
+    /// Removal isn't a permanent ban — a removed member can file a fresh
+    /// join request and be re-approved, same as anyone else who isn't
+    /// currently a member.
+    @Test func aRemovedMemberCanRejoinAfterBeingReapproved() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+        let firstRequest = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(firstRequest.id, approve: true, decidedByUserID: "alice")
+        try await service.removeMember(groupID: group.id, userID: "bob", actingUserID: "alice")
+
+        let secondRequest = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(secondRequest.id, approve: true, decidedByUserID: "alice")
+
+        let memberships = try await service.fetchMemberships(forGroup: group.id)
+        #expect(memberships.first { $0.userID == "bob" }?.status == .active)
+    }
+
     @Test func adminCanAddAFurtherCookbookToAnExistingGroup() async throws {
         let service = InMemoryGroupsService()
         service.tier2CreditsByUserID["alice"] = 1

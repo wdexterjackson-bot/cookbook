@@ -78,15 +78,20 @@ struct AccountView: View {
                         if let saveNameErrorMessage {
                             Text(saveNameErrorMessage).foregroundStyle(.red)
                         }
-                        Button {
-                            isPresentingFriendQRCode = true
-                        } label: {
-                            Label("Share My QR Code", systemImage: "qrcode")
-                        }
                         Button("Sign Out", role: .destructive) {
                             signOut()
                         }
                         .buttonStyle(.borderedProminent)
+                    }
+
+                    Section {
+                        Button {
+                            isPresentingFriendQRCode = true
+                        } label: {
+                            Label("My QR Code", systemImage: "qrcode")
+                        }
+                    } footer: {
+                        Text("Share this so a friend can add you instantly by scanning it — also available from the Friends screen.")
                     }
 
                     Section {

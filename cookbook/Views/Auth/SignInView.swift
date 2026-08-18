@@ -152,7 +152,12 @@ struct SignInView: View {
                 }
             }
             .potluckHiddenScrollBackground()
-            .background(Color.potluckCream)
+            // Lighter than the tab roots' 30% (potluckHubBackground's
+            // default) — this screen has form fields sitting directly on
+            // top with no card/scrim behind them, so the art needs to stay
+            // subtle enough not to compete with input legibility while
+            // still reading as visible, not just a tint.
+            .potluckHubBackground(opacity: 0.20)
             .navigationTitle(isDismissable ? "Sign In" : "Welcome")
             .toolbar {
                 if isDismissable {

@@ -22,12 +22,20 @@
 
 const ANNUAL_PRO_MEMBERSHIP_PRODUCT_ID = 'VibeApp.cookbook.annualProMembership';
 
-async function findEntitlementByOriginalTransactionID(db, originalTransactionId) {
+// Not `.limit(1)`: under Apple's default Family Sharing for auto-renewable
+// subscriptions, each family member's own device independently submits its
+// own purchaseClaims doc for the *same* originalTransactionId (deduped only
+// per-transaction, not per-originalTransactionId — see applyPurchaseClaim.js)
+// resulting in several entitlements docs sharing one originalTransactionId.
+// A renewal/cancellation notification has to update all of them, or every
+// family member but the first ever resolved gets silently stranded on a
+// stale expiry and eventually swept as lapsed despite an actively-renewing
+// subscription.
+async function findEntitlementsByOriginalTransactionID(db, originalTransactionId) {
   const snapshot = await db.collection('entitlements')
     .where('annualProMembershipOriginalTransactionID', '==', originalTransactionId)
-    .limit(1)
     .get();
-  return snapshot.empty ? null : snapshot.docs[0];
+  return snapshot.docs;
 }
 
 async function handleAppStoreServerNotification({ db, decodeAndVerifyNotification, signedPayload }) {
@@ -54,11 +62,11 @@ async function handleAppStoreServerNotification({ db, decodeAndVerifyNotificatio
     return;
   }
 
-  const entitlementDoc = decoded.originalTransactionId
-    ? await findEntitlementByOriginalTransactionID(db, decoded.originalTransactionId)
-    : null;
+  const entitlementDocs = decoded.originalTransactionId
+    ? await findEntitlementsByOriginalTransactionID(db, decoded.originalTransactionId)
+    : [];
 
-  if (!entitlementDoc) {
+  if (entitlementDocs.length === 0) {
     // No account resolved to this originalTransactionId yet — most likely
     // the very first SUBSCRIBED notification racing ahead of
     // applyPurchaseClaim.js's own claim-submission path, or a notification
@@ -72,7 +80,7 @@ async function handleAppStoreServerNotification({ db, decodeAndVerifyNotificatio
 
   const updates = updatesFor(decoded);
   if (updates) {
-    await entitlementDoc.ref.update(updates);
+    await Promise.all(entitlementDocs.map((doc) => doc.ref.update(updates)));
   }
 
   await processedRef.set({

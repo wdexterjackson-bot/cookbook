@@ -2,13 +2,18 @@
 //  AddFriendView.swift
 //  cookbook
 //
-//  Two discovery methods, per FEATURE 2's design: exact-email search
-//  (silent no-match either way — see FriendDiscoveryServicing) and QR
-//  code (iOS-only, camera-based). Both funnel into the same
+//  Three discovery methods, per FEATURE 2's design (email search, plus
+//  QR by camera and by image file): exact-email search (silent no-match
+//  either way — see FriendDiscoveryServicing), a live camera scan
+//  (VisionKit, iOS-only), and picking an existing QR code image (Vision's
+//  static-image barcode detection — no camera needed, so this one also
+//  works on macOS) for when a friend shared their code as a picture
+//  instead of showing it in person. All three funnel into the same
 //  FriendsServicing.sendFriendRequest call, enforced by the normal rules.
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AddFriendView: View {
     let friendsService: FriendsServicing
@@ -25,6 +30,9 @@ struct AddFriendView: View {
     @State private var statusMessage: String?
     #if os(iOS)
     @State private var isPresentingScanner = false
+    #endif
+    #if os(iOS) || os(macOS)
+    @State private var isPresentingImagePicker = false
     #endif
 
     var body: some View {
@@ -45,12 +53,19 @@ struct AddFriendView: View {
                     Text("Friends can also add you via your QR code — from your own profile.")
                 }
 
-                #if os(iOS)
+                #if os(iOS) || os(macOS)
                 Section {
+                    #if os(iOS)
                     Button {
                         isPresentingScanner = true
                     } label: {
                         Label("Scan a Friend's QR Code", systemImage: "qrcode.viewfinder")
+                    }
+                    #endif
+                    Button {
+                        isPresentingImagePicker = true
+                    } label: {
+                        Label("Choose a QR Code Image", systemImage: "photo")
                     }
                 }
                 #endif
@@ -95,6 +110,11 @@ struct AddFriendView: View {
                 }
             }
             #endif
+            #if os(iOS) || os(macOS)
+            .fileImporter(isPresented: $isPresentingImagePicker, allowedContentTypes: [.image]) { result in
+                handleImageFileSelection(result)
+            }
+            #endif
         }
     }
 
@@ -132,7 +152,29 @@ struct AddFriendView: View {
         }
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(macOS)
+    private func handleImageFileSelection(_ result: Result<URL, Error>) {
+        errorMessage = nil
+        statusMessage = nil
+        switch result {
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        case .success(let url):
+            let isSecurityScoped = url.startAccessingSecurityScopedResource()
+            defer { if isSecurityScoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url), let stringValue = QRCodeImageDecoder.decode(from: data) else {
+                errorMessage = "Couldn't find a QR code in that image."
+                return
+            }
+            guard let payload = QRCodePayload(stringValue: stringValue) else {
+                errorMessage = "That QR code isn't from this app."
+                return
+            }
+            Task { await handleScannedPayload(payload) }
+        }
+    }
+    #endif
+
     private func handleScannedPayload(_ payload: QRCodePayload) async {
         guard let currentUserID = accountState.currentUserID, case .friend(let friendUserID) = payload else {
             errorMessage = "That QR code isn't a friend code."
@@ -152,7 +194,6 @@ struct AddFriendView: View {
             errorMessage = error.localizedDescription
         }
     }
-    #endif
 }
 
 #Preview {

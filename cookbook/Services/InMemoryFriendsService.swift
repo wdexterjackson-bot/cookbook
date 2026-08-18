@@ -28,7 +28,7 @@ final class InMemoryFriendsService: FriendsServicing {
         }
 
         if var forwardRequest = friendRequests[forwardID] {
-            if forwardRequest.status == .declined {
+            if forwardRequest.status == .declined || forwardRequest.status == .cancelled {
                 forwardRequest.status = .pending
                 forwardRequest.createdAt = .now
                 forwardRequest.respondedAt = nil
@@ -66,8 +66,27 @@ final class InMemoryFriendsService: FriendsServicing {
         }
     }
 
+    func cancelFriendRequest(_ requestID: String, actingUserID: String) async throws {
+        guard var request = friendRequests[requestID] else {
+            throw FriendsServiceError.requestNotFound
+        }
+        guard request.senderID == actingUserID else {
+            throw FriendsServiceError.notAuthorized
+        }
+        guard request.status == .pending else {
+            throw FriendsServiceError.invalidState
+        }
+        request.status = .cancelled
+        request.respondedAt = .now
+        friendRequests[requestID] = request
+    }
+
     func fetchFriendRequests(forRecipient userID: String) async throws -> [FriendRequest] {
         friendRequests.values.filter { $0.recipientID == userID && $0.status == .pending }
+    }
+
+    func fetchFriendRequests(bySender userID: String) async throws -> [FriendRequest] {
+        friendRequests.values.filter { $0.senderID == userID && $0.status == .pending }
     }
 
     func fetchFriends(forUser userID: String) async throws -> [Friendship] {

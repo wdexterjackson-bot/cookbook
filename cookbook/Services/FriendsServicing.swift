@@ -22,8 +22,9 @@ protocol FriendsServicing {
     /// - A reverse request (`recipientID` → `senderID`) is already
     ///   pending: accepts it instead of creating a second, contradictory
     ///   doc — returns the now-accepted reverse request.
-    /// - This same forward request was previously declined: resets it to
-    ///   `.pending` with a fresh `createdAt` rather than erroring.
+    /// - This same forward request was previously declined or cancelled:
+    ///   resets it to `.pending` with a fresh `createdAt` rather than
+    ///   erroring.
     /// Calling this while an identical forward request is already
     /// `.pending` is a no-op — returns the existing request unchanged.
     @discardableResult
@@ -35,8 +36,18 @@ protocol FriendsServicing {
     /// the request accepted.
     func respondToFriendRequest(_ requestID: String, accept: Bool, respondingUserID: String) async throws
 
-    /// Pending requests awaiting `userID`'s decision.
+    /// Only the original sender may cancel, and only while still
+    /// `.pending` — the recipient never sees it again once cancelled (it
+    /// simply stops showing up as pending), same quiet no-further-action
+    /// ending as a decline.
+    func cancelFriendRequest(_ requestID: String, actingUserID: String) async throws
+
+    /// Pending requests awaiting `userID`'s decision (incoming).
     func fetchFriendRequests(forRecipient userID: String) async throws -> [FriendRequest]
+
+    /// Pending requests `userID` has sent, awaiting someone else's
+    /// decision (outgoing) — what a "Cancel" affordance operates on.
+    func fetchFriendRequests(bySender userID: String) async throws -> [FriendRequest]
 
     func fetchFriends(forUser userID: String) async throws -> [Friendship]
 

@@ -141,6 +141,21 @@ struct PublicationsServicingTests {
         #expect(try await service.fetchPublication(id: publication.id) == nil)
     }
 
+    // Real correctness gap from the plan review: Firestore never
+    // cascade-deletes subcollections, so without explicit cleanup a
+    // publication's comments would survive as permanent, unreachable
+    // orphans after the publication itself is gone.
+    @Test func deletingAPublicationAlsoDeletesItsComments() async throws {
+        let service = InMemoryPublicationsService()
+        let publication = try await service.publish(makeContent(), sourceRecipeID: "recipe-1", to: "group-1", cookbookID: "cb-1", ownerUserID: "alice")
+        try await service.setCommentsEnabled(publication.id, enabled: true, actingUserID: "alice")
+        _ = try await service.addComment(publication.id, authorUserID: "bob", authorDisplayName: "Bob", text: "Yum!")
+
+        try await service.deletePublication(publication.id, actingUserID: "alice")
+
+        #expect(try await service.fetchComments(publication.id).isEmpty)
+    }
+
     @Test func adminCanDeleteSomeoneElsesPublication() async throws {
         let groups = InMemoryGroupsService()
         groups.tier2CreditsByUserID["alice"] = 1

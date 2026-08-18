@@ -218,9 +218,24 @@ service cloud.firestore {
     // 'noApprovalNeeded' — that policy never produces a pending
     // joinRequest in the first place (memberships/create's 'auto' branch
     // handles it directly), so there's nothing for this to authorize.
+    function creatorIsActiveMember(groupID) {
+      let creatorID = fetchGroup(groupID).createdByUserID;
+      return exists(membershipPath(groupID, creatorID))
+        && get(membershipPath(groupID, creatorID)).data.status == 'active';
+    }
+
     function canDecideJoinRequest(groupID) {
       return (fetchGroup(groupID).approvalPolicy == 'creatorOnly'
-          && request.auth.uid == fetchGroup(groupID).createdByUserID)
+          && (
+            (request.auth.uid == fetchGroup(groupID).createdByUserID && isMember(groupID))
+            ||
+            // Fallback once the creator is no longer an active member of
+            // their own group (self-demoted and left) — otherwise a
+            // creatorOnly group becomes permanently undecidable by anyone
+            // actually still in it, while the departed creator would
+            // retain sole, invisible decision power forever.
+            (isAdmin(groupID) && !creatorIsActiveMember(groupID))
+          ))
         || (fetchGroup(groupID).approvalPolicy == 'anyAdministrator' && isAdmin(groupID))
         || (fetchGroup(groupID).approvalPolicy == 'anyUser' && isMember(groupID));
     }
@@ -234,6 +249,32 @@ service cloud.firestore {
     // checked without repeating the concatenation.
     function friendRequestPath(senderID, recipientID) {
       return /databases/$(database)/documents/friendRequests/$(senderID + '_' + recipientID);
+    }
+
+    function friendRequestRateLimitPath(userID) {
+      return /databases/$(database)/documents/friendRequestRateLimits/$(userID);
+    }
+
+    // SAFE-002: sendFriendRequest is a direct client write (unlike
+    // findUserByEmail, which goes through a rate-limited Cloud Function) —
+    // this is what actually enforces a per-sender cap, since a sender's
+    // UID is visible to every co-member of any group they're in. Requires
+    // proof that a real, rule-validated increment to the sibling
+    // friendRequestRateLimits/{senderID} doc happened in THIS SAME
+    // transaction — comparing get() (pre-transaction) against getAfter()
+    // (post-transaction) rather than just checking getAfter()'s value in
+    // isolation, so a client can't send a doc referencing an old,
+    // already-legitimate count without actually paying for a fresh
+    // increment. The math itself (window/cap) is validated by
+    // friendRequestRateLimits' own create/update rules below — this only
+    // confirms that write actually happened and actually changed
+    // something, not what it changed it to.
+    function friendRequestRateLimitPaid(senderID) {
+      let path = friendRequestRateLimitPath(senderID);
+      return exists(path)
+        ? (getAfter(path).data.windowStart != get(path).data.windowStart
+            || getAfter(path).data.count > get(path).data.count)
+        : getAfter(path).data.count == 1;
     }
 
     function sortedFriendshipID(userIDs) {
@@ -459,8 +500,17 @@ service cloud.firestore {
           ||
           // The founder creating the group's very first cookbook in the
           // same transaction as the group itself — see the founder-branch
-          // design note at the top of this file.
-          getAfter(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.createdByUserID == request.auth.uid
+          // design note at the top of this file. Self-limiting the same
+          // way memberships/create's own founder branch is: gated on the
+          // founder's membership doc not existing yet in the PRE-batch
+          // state (get(), not getAfter()) — true only during the actual
+          // founding write, and permanently false afterward since that
+          // membership doc is created in the same batch and never
+          // deleted (only soft-left). Without this, a founder who later
+          // demotes themselves and leaves could still call this branch
+          // forever, since createdByUserID never changes.
+          (getAfter(/databases/$(database)/documents/groups/$(request.resource.data.groupID)).data.createdByUserID == request.auth.uid
+            && !exists(/databases/$(database)/documents/memberships/$(request.resource.data.groupID + '_' + request.auth.uid)))
         );
 
       // Admin-only, and can't be reparented to a different group.
@@ -520,15 +570,67 @@ service cloud.firestore {
         && resource.data.groupID == request.resource.data.groupID
         && resource.data.userID == request.resource.data.userID
         && (
-          // Leaving, on one's own.
-          (request.auth.uid == resource.data.userID && request.resource.data.status == 'left')
+          // Leaving, on one's own — only a plain member. An active admin
+          // must go through the changeOwnMembership callable instead
+          // (functions/changeOwnMembership.js), which re-verifies
+          // server-side that another admin remains before allowing it —
+          // rules alone can't count active admins across a collection to
+          // enforce "the last admin can't leave."
+          (request.auth.uid == resource.data.userID
+            && request.resource.data.status == 'left'
+            && resource.data.role == 'member')
           ||
-          // An admin changing someone's role. (The "last admin can't be
-          // demoted" invariant is enforced app-side, not here — rules can't
-          // cheaply count active admins across a collection.)
+          // An admin changing *someone else's* role — provably safe with
+          // no invariant to check, since the acting admin stays admin, so
+          // the group never drops to zero admins. Self-demotion is
+          // excluded here for the same reason as self-leave above: it
+          // must go through changeOwnMembership instead.
           (isAdmin(resource.data.groupID)
+            && request.auth.uid != resource.data.userID
             && request.resource.data.status == resource.data.status
             && request.resource.data.role in ['member', 'admin'])
+          ||
+          // An admin removing someone else from the group — distinct
+          // status ('suspended') from a voluntary 'left', so the removed
+          // member's own UI can tell "you left" from "you were removed."
+          // Can't target yourself this way (use the leaving branch above,
+          // or updateRole to demote); the "last admin can't be removed"
+          // invariant is enforced app-side, same as the role-change branch.
+          (isAdmin(resource.data.groupID)
+            && request.auth.uid != resource.data.userID
+            && request.resource.data.status == 'suspended'
+            && request.resource.data.role == resource.data.role)
+          ||
+          // Reactivating a previously left/suspended membership doc.
+          // Membership.compositeID's own doc comment says status
+          // transitions are meant to reuse the same document rather than
+          // pile up duplicates — but a rejoin write lands on a doc that
+          // already exists, so it's an `update` to Firestore, not a
+          // `create`, and none of memberships/create's three self-service
+          // branches (decider approval / invite accept / auto-approve)
+          // would ever apply here. Mirrors those same three branches
+          // (everything except the one-shot founder branch, which by
+          // definition can't apply to a rejoin) so leaving/being removed
+          // was never a permanent dead end.
+          (resource.data.status in ['left', 'suspended']
+            && request.resource.data.status == 'active'
+            && (
+              (canDecideJoinRequest(resource.data.groupID)
+                && request.resource.data.source == 'request'
+                && request.resource.data.role == 'member'
+                && request.auth.uid != resource.data.userID
+                && isProOrMFB(resource.data.userID, resource.data.groupID))
+              ||
+              (request.auth.uid == resource.data.userID
+                && request.resource.data.source == 'invite'
+                && isProOrMFB(resource.data.userID, resource.data.groupID))
+              ||
+              (request.auth.uid == resource.data.userID
+                && request.resource.data.source == 'auto'
+                && request.resource.data.role == 'member'
+                && fetchGroup(resource.data.groupID).approvalPolicy == 'noApprovalNeeded'
+                && isProOrMFB(resource.data.userID, resource.data.groupID))
+            ))
         );
 
       allow delete: if false;
@@ -590,14 +692,45 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Sibling to friendRequests below — see friendRequestRateLimitPaid()'s
+    // doc comment for why this collection exists at all. windowMs (1 hour)
+    // and maxAttempts (20) match findUserByEmailAttempts' own budget.
+    match /friendRequestRateLimits/{userID} {
+      allow read: if isSignedIn() && request.auth.uid == userID;
+
+      allow create: if isSignedIn()
+        && request.auth.uid == userID
+        && request.resource.data.windowStart == request.time
+        && request.resource.data.count == 1;
+
+      allow update: if isSignedIn()
+        && request.auth.uid == userID
+        && (
+          // Window (1hr = 3600000ms) expired — reset.
+          (request.time.toMillis() - resource.data.windowStart.toMillis() > 3600000
+            && request.resource.data.windowStart == request.time
+            && request.resource.data.count == 1)
+          ||
+          // Still inside the window — increment, capped at 20.
+          (request.time.toMillis() - resource.data.windowStart.toMillis() <= 3600000
+            && resource.data.count < 20
+            && request.resource.data.windowStart == resource.data.windowStart
+            && request.resource.data.count == resource.data.count + 1)
+        );
+
+      allow delete: if false;
+    }
+
     match /friendRequests/{requestID} {
       allow read: if isSignedIn()
         && (request.auth.uid == resource.data.senderID || request.auth.uid == resource.data.recipientID);
 
       allow create: if isSignedIn()
         && request.auth.uid == request.resource.data.senderID
+        && request.resource.data.senderID != request.resource.data.recipientID
         && requestID == request.resource.data.senderID + '_' + request.resource.data.recipientID
-        && request.resource.data.status == 'pending';
+        && request.resource.data.status == 'pending'
+        && friendRequestRateLimitPaid(request.resource.data.senderID);
 
       allow update: if isSignedIn()
         && resource.data.senderID == request.resource.data.senderID
@@ -608,14 +741,24 @@ service cloud.firestore {
             && resource.data.status == 'pending'
             && request.resource.data.status in ['accepted', 'declined'])
           ||
-          // The original sender re-requesting after an earlier decline —
-          // same doc ID (senderID_recipientID), reset back to pending
-          // rather than erroring on "already exists." The other direction
-          // (the original recipient choosing to send their own request)
-          // is a different doc ID and just goes through create instead.
+          // The original sender withdrawing their own pending request —
+          // quiet, no-further-action, same shape as a decline but
+          // distinguishable in the doc's own history (see
+          // FriendRequestStatus.cancelled's doc comment).
           (request.auth.uid == resource.data.senderID
-            && resource.data.status == 'declined'
-            && request.resource.data.status == 'pending')
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'cancelled')
+          ||
+          // The original sender re-requesting after an earlier decline or
+          // a cancel — same doc ID (senderID_recipientID), reset back to
+          // pending rather than erroring on "already exists." The other
+          // direction (the original recipient choosing to send their own
+          // request) is a different doc ID and just goes through create
+          // instead.
+          (request.auth.uid == resource.data.senderID
+            && resource.data.status in ['declined', 'cancelled']
+            && request.resource.data.status == 'pending'
+            && friendRequestRateLimitPaid(resource.data.senderID))
         );
 
       allow delete: if false;
@@ -631,6 +774,7 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.auth.uid in request.resource.data.userIDs
         && request.resource.data.userIDs.size() == 2
+        && request.resource.data.userIDs[0] != request.resource.data.userIDs[1]
         && friendshipID == sortedFriendshipID(request.resource.data.userIDs)
         && (
           getAfter(friendRequestPath(request.resource.data.userIDs[0], request.resource.data.userIDs[1])).data.status == 'accepted'
@@ -698,7 +842,7 @@ service cloud.firestore {
     // A publication's comments — gated on the parent publication's own
     // commentsEnabled flag at create time, not a per-comment isHidden
     // field (there isn't one; the whole list is hidden together when
-    // comments are off). Immutable once posted.
+    // comments are off). Otherwise immutable once posted.
     match /publications/{publicationID}/comments/{commentID} {
       allow read: if isMember(resource.data.groupID);
 
@@ -707,7 +851,20 @@ service cloud.firestore {
         && request.auth.uid == request.resource.data.authorUserID
         && get(/databases/$(database)/documents/publications/$(publicationID)).data.commentsEnabled == true;
 
-      allow update: if false;
+      // The one exception to "immutable": a comment's own author
+      // rewriting their own displayed name on it — everything else is
+      // pinned equal. This is what tombstoneCommentAuthorship uses on
+      // account deletion (PublicationsServicing) so a deleted user's
+      // comments read as "Deleted User" rather than staying attributed
+      // to an account that no longer exists, same reasoning as
+      // publications' own tombstoneOwnerAttribution.
+      allow update: if isSignedIn()
+        && request.auth.uid == resource.data.authorUserID
+        && request.resource.data.authorUserID == resource.data.authorUserID
+        && request.resource.data.publicationID == resource.data.publicationID
+        && request.resource.data.groupID == resource.data.groupID
+        && request.resource.data.text == resource.data.text
+        && request.resource.data.createdAt == resource.data.createdAt;
 
       // Owner-or-admin, same shape as publication delete above — the
       // minimum moderation capability a group needs from day one, not

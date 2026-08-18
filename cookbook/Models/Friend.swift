@@ -9,6 +9,12 @@ enum FriendRequestStatus: String, Codable {
     case pending
     case accepted
     case declined
+    /// The *sender* withdrew it before the recipient responded —
+    /// distinct from `declined` (the recipient said no) so a request's
+    /// history says who actually ended it. Both are otherwise treated the
+    /// same way: a quiet, no-further-action end state that a fresh
+    /// `sendFriendRequest` can reset back to `.pending` later.
+    case cancelled
 }
 
 /// Doc ID is `{senderID}_{recipientID}` — direction-sensitive, unlike
@@ -18,8 +24,8 @@ enum FriendRequestStatus: String, Codable {
 /// - Mutual/simultaneous requests (A→B while B→A is already pending)
 ///   resolve to one Friendship via a transaction, not two racing/
 ///   contradictory docs.
-/// - Re-requesting after a decline updates this same doc back to
-///   `.pending` rather than erroring on "already exists" — the reverse
+/// - Re-requesting after a decline or a cancel updates this same doc back
+///   to `.pending` rather than erroring on "already exists" — the reverse
 ///   direction (the original recipient choosing to send their own
 ///   request) is a different doc ID and just goes through create.
 struct FriendRequest: Codable, Identifiable, Equatable {

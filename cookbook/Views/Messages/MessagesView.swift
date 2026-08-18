@@ -18,11 +18,14 @@ struct MessagesView: View {
     @State private var adminPendingJoinRequests: [(request: JoinRequest, group: FamilyGroup)] = []
     @State private var ownJoinRequests: [(request: JoinRequest, group: FamilyGroup)] = []
     @State private var pendingInvitations: [(invitation: Invitation, group: FamilyGroup)] = []
+    @State private var incomingFriendRequests: [FriendRequest] = []
+    @State private var outgoingFriendRequests: [FriendRequest] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var busyIDs: Set<String> = []
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
+    private let friendsService: FriendsServicing = FirestoreFriendsService()
     private let messagingService: MessagingServicing = FirestoreMessagingService()
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
@@ -48,6 +51,22 @@ struct MessagesView: View {
                     Section("Invitations") {
                         ForEach(pendingInvitations, id: \.invitation.id) { entry in
                             invitationRow(entry)
+                        }
+                    }
+                }
+
+                if !incomingFriendRequests.isEmpty {
+                    Section("Friend Requests") {
+                        ForEach(incomingFriendRequests) { request in
+                            incomingFriendRequestRow(request)
+                        }
+                    }
+                }
+
+                if !outgoingFriendRequests.isEmpty {
+                    Section("Your Friend Requests") {
+                        ForEach(outgoingFriendRequests) { request in
+                            outgoingFriendRequestRow(request)
                         }
                     }
                 }
@@ -100,6 +119,7 @@ struct MessagesView: View {
 
     private var isEverythingEmpty: Bool {
         messages.isEmpty && adminPendingJoinRequests.isEmpty && ownJoinRequests.isEmpty && pendingInvitations.isEmpty
+            && incomingFriendRequests.isEmpty && outgoingFriendRequests.isEmpty
     }
 
     private func statusText(_ state: JoinRequestState) -> String {
@@ -154,6 +174,44 @@ struct MessagesView: View {
         .padding(.vertical, 4)
     }
 
+    /// No sender display name shown, same reasoning as everywhere else in
+    /// this app that surfaces another user's identity minimally (see
+    /// FriendsListView's own doc comment) — findUserByEmail's result is
+    /// the one deliberate exception, shown only at request-sending time.
+    @ViewBuilder
+    private func incomingFriendRequestRow(_ request: FriendRequest) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Friend request from Member \(request.senderID.suffix(6))")
+                .font(.headline)
+            HStack {
+                Button("Accept") {
+                    Task { await respondToFriendRequest(request, accept: true) }
+                }
+                Button("Decline", role: .destructive) {
+                    Task { await respondToFriendRequest(request, accept: false) }
+                }
+            }
+            .disabled(busyIDs.contains(request.id))
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func outgoingFriendRequestRow(_ request: FriendRequest) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Friend request sent to Member \(request.recipientID.suffix(6))")
+                .font(.headline)
+            Text("Waiting for a response")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Cancel", role: .destructive) {
+                Task { await cancelFriendRequest(request) }
+            }
+            .disabled(busyIDs.contains(request.id))
+        }
+        .padding(.vertical, 4)
+    }
+
     private func load() async {
         guard let userID = accountState.currentUserID else { return }
         isLoading = true
@@ -181,6 +239,9 @@ struct MessagesView: View {
             } else {
                 pendingInvitations = []
             }
+
+            incomingFriendRequests = try await friendsService.fetchFriendRequests(forRecipient: userID)
+            outgoingFriendRequests = try await friendsService.fetchFriendRequests(bySender: userID)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -194,6 +255,30 @@ struct MessagesView: View {
             }
         }
         return result
+    }
+
+    private func respondToFriendRequest(_ request: FriendRequest, accept: Bool) async {
+        guard let userID = accountState.currentUserID else { return }
+        busyIDs.insert(request.id)
+        defer { busyIDs.remove(request.id) }
+        do {
+            try await friendsService.respondToFriendRequest(request.id, accept: accept, respondingUserID: userID)
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func cancelFriendRequest(_ request: FriendRequest) async {
+        guard let userID = accountState.currentUserID else { return }
+        busyIDs.insert(request.id)
+        defer { busyIDs.remove(request.id) }
+        do {
+            try await friendsService.cancelFriendRequest(request.id, actingUserID: userID)
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func decide(_ request: JoinRequest, approve: Bool) async {

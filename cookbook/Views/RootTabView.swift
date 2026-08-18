@@ -24,6 +24,7 @@ struct RootTabView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
     @Environment(ActiveCookbookState.self) private var activeCookbookState
+    @Environment(PendingFileImportState.self) private var pendingFileImportState
     @State private var selectedTab: RootTab = .home
     @State private var previousTab: RootTab = .home
     @State private var isPresentingCreate = false
@@ -38,6 +39,28 @@ struct RootTabView: View {
     private let syncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService()
 
     var body: some View {
+        // Split from the rest of the modifier chain below — adding the
+        // pending-file-import sheet as one more link on an already-long
+        // chain pushed the type checker over its time budget on tvOS
+        // (unable to resolve module dependency-style "too complex"
+        // error), even though the two are logically unrelated. Two
+        // separate view expressions type-check independently.
+        tabViewContent
+            .sheet(isPresented: isPresentingPendingFileImportBinding) {
+                if let url = pendingFileImportState.url {
+                    ImportRecipesFileView(initialFileURL: url)
+                }
+            }
+    }
+
+    private var isPresentingPendingFileImportBinding: Binding<Bool> {
+        Binding(
+            get: { pendingFileImportState.url != nil },
+            set: { isPresented in if !isPresented { pendingFileImportState.url = nil } }
+        )
+    }
+
+    private var tabViewContent: some View {
         TabView(selection: $selectedTab) {
             HomeView()
                 .tabItem {
@@ -237,4 +260,5 @@ struct RootTabView: View {
         .environment(AccountState(authService: FakeAuthService()))
         .environment(ActiveCookbookState())
         .environment(CookingSessionState())
+        .environment(PendingFileImportState())
 }

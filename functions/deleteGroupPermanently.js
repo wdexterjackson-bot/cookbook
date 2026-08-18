@@ -20,9 +20,17 @@ const { checkAndRecordRateLimit, RateLimitExceededError } = require('./rateLimit
 const DELETE_GROUP_RATE_LIMIT_MAX_ATTEMPTS = 5;
 const DELETE_GROUP_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
+// recursiveDelete (Admin SDK only, bypasses rules the same as everything
+// else here) — plain docSnap.ref.delete() doesn't cascade to
+// subcollections, so without this every comment/like/rating ever left on
+// one of this group's publications would survive as a permanent orphan:
+// unreachable once memberships are gone (comments/likes/ratings reads
+// require isMember/isSignedIn checks that resolve against data that no
+// longer exists), but never actually cleaned up or stopped being billed
+// for.
 async function deletePublicationsForGroup(db, groupID) {
   const snapshot = await db.collection('publications').where('groupID', '==', groupID).get();
-  await Promise.all(snapshot.docs.map((docSnap) => docSnap.ref.delete()));
+  await Promise.all(snapshot.docs.map((docSnap) => db.recursiveDelete(docSnap.ref)));
 }
 
 async function deleteGroupCookbooksForGroup(db, groupID) {

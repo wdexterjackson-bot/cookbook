@@ -1,9 +1,14 @@
 {
   "images" : [
     {
-      "filename" : "Blank-1x.png",
+      "filename" : "Content-1x.png",
       "idiom" : "tv",
       "scale" : "1x"
+    },
+    {
+      "filename" : "Content-2x.png",
+      "idiom" : "tv",
+      "scale" : "2x"
     }
   ],
   "info" : {

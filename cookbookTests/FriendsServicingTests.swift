@@ -155,4 +155,61 @@ struct FriendsServicingTests {
             try await service.removeFriend(friendshipID, actingUserID: "carol")
         }
     }
+
+    @Test func senderCanCancelTheirOwnPendingRequest() async throws {
+        let service = InMemoryFriendsService()
+        let request = try await service.sendFriendRequest(from: "alice", to: "bob")
+
+        try await service.cancelFriendRequest(request.id, actingUserID: "alice")
+
+        // Quietly disappears from both sides — no further action for
+        // either party.
+        #expect(try await service.fetchFriendRequests(forRecipient: "bob").isEmpty)
+        #expect(try await service.fetchFriendRequests(bySender: "alice").isEmpty)
+    }
+
+    @Test func recipientCannotCancelARequestSentToThem() async throws {
+        let service = InMemoryFriendsService()
+        let request = try await service.sendFriendRequest(from: "alice", to: "bob")
+
+        await #expect(throws: FriendsServiceError.notAuthorized) {
+            try await service.cancelFriendRequest(request.id, actingUserID: "bob")
+        }
+    }
+
+    @Test func cannotCancelAnAlreadyDecidedRequest() async throws {
+        let service = InMemoryFriendsService()
+        let request = try await service.sendFriendRequest(from: "alice", to: "bob")
+        try await service.respondToFriendRequest(request.id, accept: true, respondingUserID: "bob")
+
+        await #expect(throws: FriendsServiceError.invalidState) {
+            try await service.cancelFriendRequest(request.id, actingUserID: "alice")
+        }
+    }
+
+    @Test func reRequestingAfterACancelResetsToPending() async throws {
+        let service = InMemoryFriendsService()
+        let request = try await service.sendFriendRequest(from: "alice", to: "bob")
+        try await service.cancelFriendRequest(request.id, actingUserID: "alice")
+
+        let resent = try await service.sendFriendRequest(from: "alice", to: "bob")
+
+        #expect(resent.id == request.id)
+        #expect(resent.status == .pending)
+        let pendingForBob = try await service.fetchFriendRequests(forRecipient: "bob")
+        #expect(pendingForBob.map(\.id) == [resent.id])
+    }
+
+    @Test func fetchFriendRequestsBySenderOnlyReturnsPendingOutgoingOnes() async throws {
+        let service = InMemoryFriendsService()
+        let toBob = try await service.sendFriendRequest(from: "alice", to: "bob")
+        _ = try await service.sendFriendRequest(from: "alice", to: "carol")
+        try await service.respondToFriendRequest(toBob.id, accept: false, respondingUserID: "bob")
+
+        let outgoing = try await service.fetchFriendRequests(bySender: "alice")
+
+        // Bob's is declined (decided), so only the still-pending one to
+        // Carol shows up as an outgoing request awaiting a decision.
+        #expect(outgoing.map(\.recipientID) == ["carol"])
+    }
 }

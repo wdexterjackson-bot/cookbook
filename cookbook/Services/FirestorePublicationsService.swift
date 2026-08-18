@@ -17,34 +17,27 @@ final class FirestorePublicationsService: PublicationsServicing {
     }
 
     func publish(_ content: PublicationContentSnapshot, sourceRecipeID: String, to groupID: String, cookbookID: String, ownerUserID: String) async throws -> Publication {
-        let existingSnapshot = try await db.collection("publications")
-            .whereField("groupID", isEqualTo: groupID)
-            .whereField("cookbookID", isEqualTo: cookbookID)
-            .whereField("sourceRecipeID", isEqualTo: sourceRecipeID)
-            .whereField("ownerUserID", isEqualTo: ownerUserID)
-            .getDocuments()
-
-        if let existingDocument = existingSnapshot.documents.first,
-           var existing = try existingDocument.data(as: Publication?.self) {
-            existing.content = content
-            existing.state = .published
-            existing.updatedAt = .now
-            try existingDocument.reference.setData(from: existing)
-            return existing
-        }
+        let ref = db.collection("publications").document(
+            Publication.compositeID(groupID: groupID, cookbookID: cookbookID, sourceRecipeID: sourceRecipeID, ownerUserID: ownerUserID)
+        )
+        let existing = try? await ref.getDocument().data(as: Publication?.self)
 
         let publication = Publication(
-            id: db.collection("publications").document().documentID,
+            id: ref.documentID,
             groupID: groupID,
             cookbookID: cookbookID,
             ownerUserID: ownerUserID,
             sourceRecipeID: sourceRecipeID,
             state: .published,
-            publishedAt: .now,
+            publishedAt: existing?.publishedAt ?? .now,
             updatedAt: .now,
-            content: content
+            content: content,
+            likeCount: existing?.likeCount,
+            ratingSum: existing?.ratingSum,
+            ratingCount: existing?.ratingCount,
+            commentsEnabled: existing?.commentsEnabled ?? false
         )
-        try db.collection("publications").document(publication.id).setData(from: publication)
+        try ref.setData(from: publication)
         return publication
     }
 
@@ -83,6 +76,17 @@ final class FirestorePublicationsService: PublicationsServicing {
             guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
                 throw PublicationsServiceError.notAuthorized
             }
+        }
+        // Firestore never cascade-deletes subcollections — without this,
+        // every comment ever posted here would survive as an orphan,
+        // unreachable once the parent publication is gone from the UI but
+        // still sitting there forever. Owner-or-admin (just proven above)
+        // is exactly who comments/delete already lets delete any comment
+        // here, so this is never blocked by rules the caller hasn't
+        // already cleared.
+        let commentsSnapshot = try await ref.collection("comments").getDocuments()
+        for commentDoc in commentsSnapshot.documents {
+            try await commentDoc.reference.delete()
         }
         try await ref.delete()
     }
@@ -149,6 +153,13 @@ final class FirestorePublicationsService: PublicationsServicing {
         return try snapshot.documents.map { try $0.data(as: Publication.self) }
     }
 
+    func fetchAllPublications(forGroup groupID: String) async throws -> [Publication] {
+        let snapshot = try await db.collection("publications")
+            .whereField("groupID", isEqualTo: groupID)
+            .getDocuments()
+        return try snapshot.documents.map { try $0.data(as: Publication.self) }
+    }
+
     func tombstoneOwnerAttribution(_ publicationID: String, actingUserID: String) async throws {
         let ref = db.collection("publications").document(publicationID)
         guard var publication = try await ref.getDocument().data(as: Publication?.self) else {
@@ -160,6 +171,18 @@ final class FirestorePublicationsService: PublicationsServicing {
         publication.content.authorLineage = "Original contributor deleted"
         publication.updatedAt = .now
         try ref.setData(from: publication)
+    }
+
+    func tombstoneCommentAuthorship(_ commentID: String, publicationID: String, actingUserID: String) async throws {
+        let ref = db.collection("publications").document(publicationID).collection("comments").document(commentID)
+        guard var comment = try await ref.getDocument().data(as: RecipeComment?.self) else {
+            throw PublicationsServiceError.commentNotFound
+        }
+        guard comment.authorUserID == actingUserID else {
+            throw PublicationsServiceError.notAuthorized
+        }
+        comment.authorDisplayName = "Deleted User"
+        try ref.setData(from: comment)
     }
 
     func hasLiked(_ publicationID: String, userID: String) async throws -> Bool {
