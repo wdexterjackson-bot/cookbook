@@ -10,6 +10,14 @@ enum TVPairingServiceError: Error {
     case malformedResponse
 }
 
+extension TVPairingServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .malformedResponse: return "Something went wrong. Try again."
+        }
+    }
+}
+
 final class FirebaseTVPairingService: TVPairingServicing {
     private let functions = Functions.functions()
 

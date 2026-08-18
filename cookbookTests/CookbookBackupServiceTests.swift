@@ -360,6 +360,7 @@ struct CookbookBackupServiceTests {
             "sections",            // -> chapters
             "isCloudSynced",       // device/cloud-linkage state, not backup content — a restored cookbook always lands as .local
             "lastSyncedAt",        // device/cloud-linkage state, same reasoning — a restored cookbook has never been synced from this device
+            "lastKnownRemoteUpdatedAt", // same reasoning — sync-conflict bookkeeping, not backup content
         ]
 
         let uncovered = cookbookProperties.subtracting(payloadProperties).subtracting(deliberatelyExcludedOrRenamed)

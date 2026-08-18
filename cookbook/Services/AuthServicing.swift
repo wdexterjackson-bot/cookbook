@@ -27,6 +27,16 @@ enum AuthServiceError: Error, Equatable {
     case requiresRecentLogin
 }
 
+extension AuthServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .notSignedIn: return "You're not signed in."
+        case .invalidCredential: return "That email or password isn't right."
+        case .requiresRecentLogin: return "For your security, sign out and back in before trying this again."
+        }
+    }
+}
+
 protocol AuthServicing {
     var currentUserID: String? { get }
     /// Used to look up invitations addressed to this user (Invitation's

@@ -37,6 +37,16 @@ enum EntitlementServiceError: Error, Equatable {
     case discountCodeAlreadyRedeemed
 }
 
+extension EntitlementServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .creditExpired: return "That credit has expired."
+        case .invalidDiscountCode: return "That discount code isn't valid."
+        case .discountCodeAlreadyRedeemed: return "You've already redeemed that code."
+        }
+    }
+}
+
 protocol EntitlementServicing {
     func fetchEntitlement(userID: String) async throws -> Entitlement?
     func isProUser(userID: String) async throws -> Bool

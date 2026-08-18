@@ -12,15 +12,38 @@ import Foundation
 final class FirestorePersonalCookbookSyncService: PersonalCookbookSyncServicing {
     private let db = Firestore.firestore()
 
-    func push(_ cookbook: PersonalCookbookDoc, recipes: [PersonalCookbookRecipeDoc]) async throws {
+    func push(_ cookbook: PersonalCookbookDoc, recipes: [PersonalCookbookRecipeDoc], expectedRemoteUpdatedAt: Date?) async throws {
         let cookbookRef = db.collection("personalCookbooks").document(cookbook.id.uuidString)
-        let batch = db.batch()
-        try batch.setData(from: cookbook, forDocument: cookbookRef)
-        for recipe in recipes {
-            let recipeRef = cookbookRef.collection("recipes").document(recipe.id.uuidString)
-            try batch.setData(from: recipe, forDocument: recipeRef)
+        // A transaction, not a plain batch — the precondition check below
+        // (has the remote doc changed since this device last saw it?)
+        // needs to read and write atomically, or two devices pushing at
+        // nearly the same moment could both pass the check against a
+        // stale read before either write lands.
+        _ = try await db.runTransaction { [db] transaction, errorPointer -> Any? in
+            do {
+                if let expectedRemoteUpdatedAt {
+                    let existing = try transaction.getDocument(cookbookRef).data(as: PersonalCookbookDoc?.self)
+                    // A tolerance, not exact equality — Swift Date <->
+                    // Firestore Timestamp round-tripping can introduce
+                    // sub-millisecond floating-point noise; a genuine
+                    // conflicting edit differs by real seconds, not that.
+                    let matchesExpected = existing.map { abs($0.updatedAt.timeIntervalSince(expectedRemoteUpdatedAt)) < 0.001 } ?? false
+                    guard matchesExpected else {
+                        errorPointer?.pointee = PersonalCookbookSyncError.remoteChangedSinceLastSync as NSError
+                        return nil
+                    }
+                }
+                try transaction.setData(from: cookbook, forDocument: cookbookRef)
+                for recipe in recipes {
+                    let recipeRef = cookbookRef.collection("recipes").document(recipe.id.uuidString)
+                    try transaction.setData(from: recipe, forDocument: recipeRef)
+                }
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            return nil
         }
-        try await batch.commit()
     }
 
     func fetchSyncedCookbooks(forUser userID: String) async throws -> [PersonalCookbookSummary] {

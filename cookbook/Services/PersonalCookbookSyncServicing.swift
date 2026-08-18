@@ -15,13 +15,32 @@ import Foundation
 
 enum PersonalCookbookSyncError: Error, Equatable {
     case notFound
+    /// The remote cookbook doc's `updatedAt` no longer matches what this
+    /// device last knew (`expectedRemoteUpdatedAt`) — another device
+    /// pushed a change this device never pulled. Thrown instead of
+    /// silently overwriting that other device's edits.
+    case remoteChangedSinceLastSync
+}
+
+extension PersonalCookbookSyncError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .notFound: return "That cookbook isn't synced to the cloud."
+        case .remoteChangedSinceLastSync: return "This cookbook was updated on another device — pull the latest version before syncing again."
+        }
+    }
 }
 
 protocol PersonalCookbookSyncServicing {
     /// Writes the cookbook doc and every recipe subdoc as one atomic
-    /// batch — a partial sync (cookbook doc written, some recipes not, or
-    /// vice versa) would be worse than the write simply failing outright.
-    func push(_ cookbook: PersonalCookbookDoc, recipes: [PersonalCookbookRecipeDoc]) async throws
+    /// transaction — a partial sync (cookbook doc written, some recipes
+    /// not, or vice versa) would be worse than the write simply failing
+    /// outright. `expectedRemoteUpdatedAt` is this device's last known
+    /// value of the remote doc's own `updatedAt` (nil if this cookbook
+    /// has never been successfully synced before) — checked inside the
+    /// same transaction before writing; a mismatch throws
+    /// `.remoteChangedSinceLastSync` instead of proceeding.
+    func push(_ cookbook: PersonalCookbookDoc, recipes: [PersonalCookbookRecipeDoc], expectedRemoteUpdatedAt: Date?) async throws
 
     /// Lightweight listing for the "Restore from Cloud" picker and the
     /// post-sign-in "cookbooks available on another device" prompt.

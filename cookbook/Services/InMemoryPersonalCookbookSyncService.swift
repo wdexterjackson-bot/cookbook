@@ -10,8 +10,16 @@ final class InMemoryPersonalCookbookSyncService: PersonalCookbookSyncServicing {
     private(set) var recipesByCookbookID: [UUID: [PersonalCookbookRecipeDoc]] = [:]
     var stubbedError: Error?
 
-    func push(_ cookbook: PersonalCookbookDoc, recipes: [PersonalCookbookRecipeDoc]) async throws {
+    func push(_ cookbook: PersonalCookbookDoc, recipes: [PersonalCookbookRecipeDoc], expectedRemoteUpdatedAt: Date?) async throws {
         if let stubbedError { throw stubbedError }
+        if let expectedRemoteUpdatedAt {
+            let matchesExpected = cookbooksByID[cookbook.id].map {
+                abs($0.updatedAt.timeIntervalSince(expectedRemoteUpdatedAt)) < 0.001
+            } ?? false
+            guard matchesExpected else {
+                throw PersonalCookbookSyncError.remoteChangedSinceLastSync
+            }
+        }
         cookbooksByID[cookbook.id] = cookbook
         recipesByCookbookID[cookbook.id] = recipes
     }

@@ -76,6 +76,16 @@ enum PurchaseServiceError: Error, Equatable {
     case claimSubmissionFailed
 }
 
+extension PurchaseServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .productNotFound: return "That item isn't available right now."
+        case .verificationFailed: return "We couldn't verify that purchase."
+        case .claimSubmissionFailed: return "Purchase completed but couldn't confirm right away — this will resolve automatically."
+        }
+    }
+}
+
 protocol PurchaseServicing {
     func fetchProducts() async throws -> [PurchasableProduct]
     func purchase(productID: String) async throws -> PurchaseOutcome

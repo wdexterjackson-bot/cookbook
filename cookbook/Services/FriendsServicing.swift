@@ -15,6 +15,17 @@ enum FriendsServiceError: Error, Equatable {
     case alreadyFriends
 }
 
+extension FriendsServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .requestNotFound: return "That friend request isn't there anymore."
+        case .notAuthorized: return "You don't have permission to do that."
+        case .invalidState: return "That request has already been decided."
+        case .alreadyFriends: return "You're already friends."
+        }
+    }
+}
+
 protocol FriendsServicing {
     /// Sends a friend request from `senderID` to `recipientID`. Three
     /// special cases, all handled here rather than left to the caller:

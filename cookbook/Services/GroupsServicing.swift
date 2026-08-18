@@ -28,6 +28,24 @@ enum GroupsServiceError: Error, Equatable {
     case invalidState
 }
 
+extension GroupsServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .insufficientCredits: return "You don't have a credit available for this."
+        case .creditExpired: return "That credit has expired."
+        case .groupNotFound: return "That cookbook group isn't there anymore."
+        case .groupCookbookNotFound: return "That cookbook isn't there anymore."
+        case .membershipNotFound: return "That membership isn't there anymore."
+        case .joinRequestNotFound: return "That join request isn't there anymore."
+        case .invitationNotFound: return "That invitation isn't there anymore."
+        case .notAuthorized: return "You don't have permission to do that."
+        case .lastAdminCannotLeaveOrBeDemoted: return "You're the last administrator — promote someone else first."
+        case .alreadyMember: return "You're already a member of this group."
+        case .invalidState: return "That action isn't available right now."
+        }
+    }
+}
+
 struct NewGroupDetails {
     var name: String
     var description: String

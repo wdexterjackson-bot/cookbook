@@ -13,6 +13,15 @@ enum MessagingServiceError: Error, Equatable {
     case notAuthorized
 }
 
+extension MessagingServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .messageNotFound: return "That message isn't there anymore."
+        case .notAuthorized: return "You don't have permission to do that."
+        }
+    }
+}
+
 protocol MessagingServicing {
     @discardableResult
     func send(type: MessageType, senderID: String, recipientID: String, payloadReference: String, expiresAt: Date?) async throws -> Message

@@ -180,6 +180,13 @@ enum RecipeFileImportCoordinator {
             try modelContext.save()
             return .success(drafts.count)
         } catch {
+            // Every insert() above already ran, even though the batch save
+            // that was supposed to persist them failed — without this,
+            // those still-live-in-the-ModelContext drafts would silently
+            // get flushed by the next unrelated save() anywhere else in
+            // the app (e.g. editing a completely different recipe), long
+            // after the user was told this import failed.
+            modelContext.rollback()
             return .failure(error)
         }
     }

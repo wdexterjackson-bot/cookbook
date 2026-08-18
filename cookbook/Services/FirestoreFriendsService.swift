@@ -25,19 +25,42 @@ final class FirestoreFriendsService: FriendsServicing {
         let reverseRef = db.collection("friendRequests").document(FriendRequest.compositeID(senderID: recipientID, recipientID: senderID))
 
         if let reverseSnapshot = try? await reverseRef.getDocument(),
-           var reverseRequest = try reverseSnapshot.data(as: FriendRequest?.self),
-           reverseRequest.status == .pending {
+           let peek = try reverseSnapshot.data(as: FriendRequest?.self),
+           peek.status == .pending {
             // Mutual/simultaneous request — accept the existing reverse
             // request instead of creating a second, contradictory doc.
             // Not rate-limited: this accepts something already sent to
             // `senderID`, it doesn't send a new one.
-            reverseRequest.status = .accepted
-            reverseRequest.respondedAt = .now
-            let friendship = Friendship(id: friendshipRef.documentID, userIDs: [senderID, recipientID], becameFriendsAt: .now)
-            let batch = db.batch()
-            try batch.setData(from: reverseRequest, forDocument: reverseRef)
-            try batch.setData(from: friendship, forDocument: friendshipRef)
-            try await batch.commit()
+            //
+            // Wrapped in a transaction with a fresh in-transaction read —
+            // the plain read-then-write this used to be could race
+            // against the *other* party independently acting on the same
+            // reverse request at nearly the same moment (respondToFriendRequest/
+            // cancelFriendRequest, called from another of their own
+            // signed-in devices, or as part of AccountDeletionCoordinator's
+            // best-effort cleanup) — leaving the request's final status
+            // inconsistent with whether a friendships doc actually exists.
+            let result: Any = try await db.runTransaction { [db] transaction, errorPointer -> Any? in
+                do {
+                    guard var reverseRequest = try transaction.getDocument(reverseRef).data(as: FriendRequest?.self),
+                          reverseRequest.status == .pending else {
+                        errorPointer?.pointee = FriendsServiceError.invalidState as NSError
+                        return nil
+                    }
+                    reverseRequest.status = .accepted
+                    reverseRequest.respondedAt = .now
+                    let friendship = Friendship(id: friendshipRef.documentID, userIDs: [senderID, recipientID], becameFriendsAt: .now)
+                    try transaction.setData(from: reverseRequest, forDocument: reverseRef)
+                    try transaction.setData(from: friendship, forDocument: friendshipRef)
+                    return reverseRequest
+                } catch {
+                    errorPointer?.pointee = error as NSError
+                    return nil
+                }
+            }
+            guard let reverseRequest = result as? FriendRequest else {
+                throw FriendsServiceError.invalidState
+            }
             return reverseRequest
         }
 
@@ -95,47 +118,72 @@ final class FirestoreFriendsService: FriendsServicing {
         }
     }
 
+    /// Transactional, with a fresh in-transaction read of `request` — a
+    /// plain read-then-write here let two independent actors racing on
+    /// the same request (the other party responding at the exact moment
+    /// AccountDeletionCoordinator's best-effort cleanup cancels it, or the
+    /// same account acting from two signed-in devices at once — a phone
+    /// and a TV-paired session, both showing the same stale pending
+    /// request) leave the request's final status inconsistent with
+    /// whether a friendships doc actually got created.
     func respondToFriendRequest(_ requestID: String, accept: Bool, respondingUserID: String) async throws {
         let ref = db.collection("friendRequests").document(requestID)
-        guard var request = try await ref.getDocument().data(as: FriendRequest?.self) else {
-            throw FriendsServiceError.requestNotFound
-        }
-        guard request.recipientID == respondingUserID else {
-            throw FriendsServiceError.notAuthorized
-        }
-        guard request.status == .pending else {
-            throw FriendsServiceError.invalidState
-        }
-
-        request.status = accept ? .accepted : .declined
-        request.respondedAt = .now
-
-        if accept {
-            let friendshipRef = db.collection("friendships").document(Friendship.compositeID([request.senderID, request.recipientID]))
-            let friendship = Friendship(id: friendshipRef.documentID, userIDs: [request.senderID, request.recipientID], becameFriendsAt: .now)
-            let batch = db.batch()
-            try batch.setData(from: request, forDocument: ref)
-            try batch.setData(from: friendship, forDocument: friendshipRef)
-            try await batch.commit()
-        } else {
-            try ref.setData(from: request)
+        _ = try await db.runTransaction { [db] transaction, errorPointer -> Any? in
+            do {
+                guard var request = try transaction.getDocument(ref).data(as: FriendRequest?.self) else {
+                    errorPointer?.pointee = FriendsServiceError.requestNotFound as NSError
+                    return nil
+                }
+                guard request.recipientID == respondingUserID else {
+                    errorPointer?.pointee = FriendsServiceError.notAuthorized as NSError
+                    return nil
+                }
+                guard request.status == .pending else {
+                    errorPointer?.pointee = FriendsServiceError.invalidState as NSError
+                    return nil
+                }
+                request.status = accept ? .accepted : .declined
+                request.respondedAt = .now
+                try transaction.setData(from: request, forDocument: ref)
+                if accept {
+                    let friendshipRef = db.collection("friendships").document(Friendship.compositeID([request.senderID, request.recipientID]))
+                    let friendship = Friendship(id: friendshipRef.documentID, userIDs: [request.senderID, request.recipientID], becameFriendsAt: .now)
+                    try transaction.setData(from: friendship, forDocument: friendshipRef)
+                }
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            return nil
         }
     }
 
+    /// Transactional for the same reason as respondToFriendRequest above.
     func cancelFriendRequest(_ requestID: String, actingUserID: String) async throws {
         let ref = db.collection("friendRequests").document(requestID)
-        guard var request = try await ref.getDocument().data(as: FriendRequest?.self) else {
-            throw FriendsServiceError.requestNotFound
+        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+            do {
+                guard var request = try transaction.getDocument(ref).data(as: FriendRequest?.self) else {
+                    errorPointer?.pointee = FriendsServiceError.requestNotFound as NSError
+                    return nil
+                }
+                guard request.senderID == actingUserID else {
+                    errorPointer?.pointee = FriendsServiceError.notAuthorized as NSError
+                    return nil
+                }
+                guard request.status == .pending else {
+                    errorPointer?.pointee = FriendsServiceError.invalidState as NSError
+                    return nil
+                }
+                request.status = .cancelled
+                request.respondedAt = .now
+                try transaction.setData(from: request, forDocument: ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            return nil
         }
-        guard request.senderID == actingUserID else {
-            throw FriendsServiceError.notAuthorized
-        }
-        guard request.status == .pending else {
-            throw FriendsServiceError.invalidState
-        }
-        request.status = .cancelled
-        request.respondedAt = .now
-        try ref.setData(from: request)
     }
 
     func fetchFriendRequests(forRecipient userID: String) async throws -> [FriendRequest] {

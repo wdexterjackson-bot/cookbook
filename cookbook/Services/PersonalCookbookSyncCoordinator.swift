@@ -91,8 +91,9 @@ enum PersonalCookbookSyncCoordinator {
             recipeDocs.append(doc)
         }
 
-        try await syncService.push(cookbookDoc, recipes: recipeDocs)
+        try await syncService.push(cookbookDoc, recipes: recipeDocs, expectedRemoteUpdatedAt: cookbook.lastKnownRemoteUpdatedAt)
         cookbook.lastSyncedAt = Date()
+        cookbook.lastKnownRemoteUpdatedAt = cookbookDoc.updatedAt
     }
 
     private static func makeRecipeDoc(
@@ -221,6 +222,7 @@ enum PersonalCookbookSyncCoordinator {
         cookbook.updatedAt = cookbookDoc.updatedAt
         cookbook.isCloudSynced = true
         cookbook.lastSyncedAt = Date()
+        cookbook.lastKnownRemoteUpdatedAt = cookbookDoc.updatedAt
 
         if let coverImageURLString = cookbookDoc.coverImageURL,
            let data = await downloadImageData(from: coverImageURLString) {

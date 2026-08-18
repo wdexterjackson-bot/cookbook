@@ -78,6 +78,17 @@ final class Cookbook {
     /// rather than round-tripping a server timestamp.
     var lastSyncedAt: Date? = nil
 
+    /// The remote doc's own `updatedAt` value as of this device's last
+    /// successful push or pull — the optimistic-concurrency token `push()`
+    /// compares against before writing, so two devices editing the same
+    /// cloud-synced cookbook without pulling each other's changes first
+    /// get a clear rejection instead of one silently overwriting the
+    /// other's edits. Deliberately separate from `updatedAt` above, which
+    /// tracks this cookbook's own content changing *locally* (any local
+    /// edit bumps it) — conflating the two would make an ordinary push
+    /// right after a local edit look like a false conflict every time.
+    var lastKnownRemoteUpdatedAt: Date? = nil
+
     /// On-device-only (default) vs. pushed to Firestore/Storage via
     /// Personal Cookbook Cloud Sync — see StorageMode.swift and
     /// `isCloudSynced`'s comment for why this is computed, not stored
@@ -115,6 +126,7 @@ final class Cookbook {
         self.chaptersManuallyReordered = false
         self.isCloudSynced = false
         self.lastSyncedAt = nil
+        self.lastKnownRemoteUpdatedAt = nil
         self.sections = []
     }
 }

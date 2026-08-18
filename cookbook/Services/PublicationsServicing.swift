@@ -12,6 +12,17 @@ enum PublicationsServiceError: Error, Equatable {
     case notAuthorized
 }
 
+extension PublicationsServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .publicationNotFound: return "That recipe isn't published here anymore."
+        case .commentNotFound: return "That comment isn't there anymore."
+        case .commentsDisabled: return "Comments are turned off for this recipe."
+        case .notAuthorized: return "You don't have permission to do that."
+        }
+    }
+}
+
 protocol PublicationsServicing {
     /// Publishing the same `sourceRecipeID` to the same `groupID` *and*
     /// `cookbookID` again updates the existing Publication in place — an

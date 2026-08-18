@@ -298,6 +298,17 @@ struct CreateEditRecipeView: View {
     #endif
     @State private var heroImageData: Data?
     @State private var removesExistingPhoto = false
+    /// Captured once, the first time this view appears (after `init` has
+    /// fully populated every @State field for whichever Mode this is) —
+    /// nil until then. Cancel compares `draftSignature` against this to
+    /// decide whether there's anything real to lose; a plain
+    /// `dismiss()` with no confirmation at all previously discarded a
+    /// long, fully-typed recipe on a single mistaken/habitual tap (the
+    /// swipe-to-dismiss gesture was already guarded via
+    /// `.interactiveDismissDisabled()`, this closes the same gap for the
+    /// toolbar button).
+    @State private var initialDraftSignature: String?
+    @State private var isPresentingCancelConfirmation = false
 
     @FocusState private var focusedStepRowID: UUID?
 
@@ -393,6 +404,26 @@ struct CreateEditRecipeView: View {
         }.map { DraftStepRow(text: $0.text) }
     }
 
+    /// A cheap "did anything change" fingerprint, not a real diff — good
+    /// enough to gate a confirmation dialog, not meant to be precise about
+    /// exactly what changed. Deliberately built the same way regardless of
+    /// Mode, so Cancel's logic doesn't need its own per-mode branching.
+    private var draftSignature: String {
+        [
+            title, summary, yield, notes,
+            ingredientRows.map { "\($0.name)|\(String(describing: $0.quantity))|\($0.unit)|\($0.isOptional)" }.joined(separator: ";"),
+            stepRows.map(\.text).joined(separator: ";"),
+            tags.joined(separator: ";"),
+            videoURLs.joined(separator: ";"),
+            heroImageData == nil ? "no-photo" : "has-photo",
+        ].joined(separator: "\u{1}")
+    }
+
+    private var hasUnsavedChanges: Bool {
+        guard let initialDraftSignature else { return false }
+        return draftSignature != initialDraftSignature
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -459,13 +490,36 @@ struct CreateEditRecipeView: View {
                 selectedChapterID = nil
             }
             .navigationTitle(navigationTitle)
+            .task {
+                // Captured once — after init has fully populated every
+                // @State field, and before any real edit could have
+                // happened — as the baseline hasUnsavedChanges compares
+                // against.
+                if initialDraftSignature == nil {
+                    initialDraftSignature = draftSignature
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        if hasUnsavedChanges {
+                            isPresentingCancelConfirmation = true
+                        } else {
+                            dismiss()
+                        }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
                 }
+            }
+            .confirmationDialog(
+                "Discard changes?",
+                isPresented: $isPresentingCancelConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Discard Changes", role: .destructive) { dismiss() }
+                Button("Keep Editing", role: .cancel) {}
             }
             .sheet(isPresented: $isPresentingAuthorPrompt, onDismiss: {
                 // Swiping the sheet away without an explicit choice still
