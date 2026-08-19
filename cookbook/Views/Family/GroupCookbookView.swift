@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct GroupCookbookView: View {
     let group: FamilyGroup
@@ -18,6 +19,9 @@ struct GroupCookbookView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(AccountState.self) private var accountState
+    @Environment(\.modelContext) private var modelContext
+    @Environment(ActiveCookbookState.self) private var activeCookbookState
+    @Query private var allCookbooks: [Cookbook]
     @State private var publications: [Publication] = []
     @State private var groupMemberships: [Membership] = []
     @State private var isLoading = false
@@ -35,6 +39,8 @@ struct GroupCookbookView: View {
     /// keep-in-sync-locally shape as likedPublicationIDs above.
     @State private var myRatings: [String: Int] = [:]
     @State private var busyRatingPublicationIDs: Set<String> = []
+    @State private var busyCopyPublicationIDs: Set<String> = []
+    @State private var copyStatusMessage: String?
 
     private let publicationsService: PublicationsServicing = FirestorePublicationsService()
     private let photoUploadService: RecipePhotoUploadServicing = FirebaseRecipePhotoUploadService()
@@ -86,6 +92,9 @@ struct GroupCookbookView: View {
 
             if let errorMessage {
                 Text(errorMessage).foregroundStyle(.red)
+            }
+            if let copyStatusMessage {
+                Text(copyStatusMessage).foregroundStyle(Color.potluckSage)
             }
         }
         .potluckHiddenScrollBackground()
@@ -186,6 +195,14 @@ struct GroupCookbookView: View {
                     .font(.caption)
                 }
 
+                Button {
+                    copyToPersonal(publication)
+                } label: {
+                    Label("Copy to Personal", systemImage: "square.and.arrow.down")
+                }
+                .font(.caption)
+                .disabled(busyCopyPublicationIDs.contains(publication.id) || targetCookbook == nil)
+
                 if publication.ownerUserID == accountState.currentUserID {
                     Button("Unpublish", role: .destructive) {
                         Task { await unpublish(publication) }
@@ -196,6 +213,29 @@ struct GroupCookbookView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Whichever of the copier's own cookbooks is currently active
+    /// (ActiveCookbookState — same source CreateEditRecipeView defaults
+    /// to), falling back to their first cookbook if none is active yet.
+    /// No cookbook-picker UI here on purpose — matches the plan's scope
+    /// decision to reuse existing resolution rather than build new UI.
+    private var targetCookbook: Cookbook? {
+        let owned = allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
+        return owned.first { $0.id == activeCookbookState.activeCookbookID } ?? owned.first
+    }
+
+    private func copyToPersonal(_ publication: Publication) {
+        guard let userID = accountState.currentUserID, let cookbook = targetCookbook else { return }
+        busyCopyPublicationIDs.insert(publication.id)
+        errorMessage = nil
+        defer { busyCopyPublicationIDs.remove(publication.id) }
+        switch RecipeCopyCoordinator.copy(publication, forUserID: userID, into: cookbook, modelContext: modelContext) {
+        case .success:
+            copyStatusMessage = "Added \"\(publication.content.title)\" to \(cookbook.title)."
+        case .failure(let error):
+            errorMessage = "Couldn't copy this recipe: \(error.localizedDescription)"
+        }
     }
 
     /// Shared-cookbook-only counterpart to RecipeDetailView's Love button —

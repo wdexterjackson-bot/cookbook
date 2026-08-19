@@ -49,7 +49,7 @@ enum RecipePublishingCoordinator {
             }
         }
 
-        let content = PublicationContentSnapshot.make(from: recipe, coverImageURL: coverImageURL)
+        let content = PublicationContentSnapshot.make(from: recipe, coverImageURL: coverImageURL, groupName: group.name)
         let publication = try await publicationsService.publish(content, sourceRecipeID: recipe.id.uuidString, to: group.id, cookbookID: cookbook.id, ownerUserID: ownerUserID)
         // Best-effort, same non-fatal precedent as the photo upload above
         // — a failure here shouldn't undo an otherwise-successful publish.

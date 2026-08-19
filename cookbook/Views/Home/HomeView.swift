@@ -54,6 +54,12 @@ struct HomeView: View {
     @State private var pendingInvitations: [(invitation: Invitation, group: FamilyGroup)] = []
     @State private var incomingFriendRequests: [FriendRequest] = []
     @State private var outgoingFriendRequests: [FriendRequest] = []
+    /// The one seeded MFB group, if it exists yet (nil before Dexter's
+    /// manual console step — see fetchMFBGroup's own doc comment).
+    @State private var mfbGroup: FamilyGroup?
+    @State private var isMFBMember = false
+    @State private var isJoiningMFB = false
+    @State private var mfbErrorMessage: String?
     @State private var busyFriendRequestIDs: Set<String> = []
     @State private var friendRequestErrorMessage: String?
     /// "Decline" on an invitation card only enters this local soft state
@@ -86,10 +92,6 @@ struct HomeView: View {
     @State private var isPresentingCommunitySearch = false
     @State private var isPresentingGettingStartedVideo = false
     @State private var entitlement: Entitlement?
-
-    /// Synthetic id for the MFB placeholder — it has no real Invitation
-    /// record to key InvitationCardState off of.
-    private static let mfbInvitationID = "mfb"
 
     /// Flip this to true once Community Cookbooks (join requests, real
     /// invitations) actually launches. Until then Messages has nothing
@@ -613,76 +615,41 @@ struct HomeView: View {
 
     // MARK: - Messages
 
-    /// Always visible (unlike the shelves above it) — a standing MFB
-    /// invitation placeholder lives here for every user, so there's
-    /// always at least one card even with zero real join requests/invites.
+    /// One consolidated card (not a stack of separate cards) — MFB always
+    /// first, then a thin green divider, then every other pending item
+    /// (invitations, join requests needing this user's decision, friend
+    /// requests) as rows separated by thin hairline dividers. Always
+    /// visible, same reasoning as before: even with zero real pending
+    /// items there's still the MFB row (once it exists — see mfbRow).
     private var messagesStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Messages", badge: attentionCount)
 
-            // Every new user gets an MFB invitation by default — entirely
-            // static/disabled, since the real join flow doesn't exist yet
-            // (no Join, no Decline, no reconsider/delete lifecycle — that
-            // lifecycle only makes sense once there's a real action
-            // behind at least one of the buttons). Full-width, not part
-            // of the horizontal strip below, since it's a standing
-            // fixture, not one of a scrollable set of equal-weight items.
-            mfbInvitationPlaceholderCard
-
-            ForEach(activeCardInvitations, id: \.invitation.id) { entry in
-                invitationCard(
-                    id: entry.invitation.id,
-                    title: "You've been invited to \(entry.group.name)",
-                    onJoin: { Task { await respondToInvitation(entry.invitation, accept: true) } },
-                    invitation: entry.invitation
-                )
-            }
-
-            if !adminPendingJoinRequests.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(adminPendingJoinRequests, id: \.request.id) { entry in
-                            attentionCard(
-                                kind: "Join Request",
-                                title: "Someone wants to join \(entry.group.name)",
-                                primaryTitle: "Review"
-                            ) {
-                                isPresentingMessages = true
-                            }
-                        }
+            VStack(alignment: .leading, spacing: 12) {
+                if let mfbGroup {
+                    mfbRow(mfbGroup)
+                    if !otherMessageRows.isEmpty {
+                        Rectangle().fill(Color.potluckSage).frame(height: 1.5)
                     }
-                    .padding(.horizontal)
+                }
+
+                ForEach(Array(otherMessageRows.enumerated()), id: \.offset) { index, row in
+                    if index > 0 {
+                        Divider()
+                    }
+                    row
                 }
             }
-
-            ForEach(incomingFriendRequests) { request in
-                friendRequestCard(
-                    badge: "FRIEND REQUEST",
-                    title: "Friend request from Member \(request.senderID.suffix(6))"
-                ) {
-                    HStack {
-                        Button("Accept") {
-                            Task { await respondToFriendRequest(request, accept: true) }
-                        }
-                        Button("Decline", role: .destructive) {
-                            Task { await respondToFriendRequest(request, accept: false) }
-                        }
-                    }
-                    .disabled(busyFriendRequestIDs.contains(request.id))
-                }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
+                    .strokeBorder(Color.potluckSage, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
-
-            ForEach(outgoingFriendRequests) { request in
-                friendRequestCard(
-                    badge: "FRIEND REQUEST SENT",
-                    title: "Friend request sent to Member \(request.recipientID.suffix(6))"
-                ) {
-                    Button("Cancel", role: .destructive) {
-                        Task { await cancelFriendRequest(request) }
-                    }
-                    .disabled(busyFriendRequestIDs.contains(request.id))
-                }
-            }
+            .potluckCardShadow()
+            .padding(.horizontal)
         }
         .alert("Couldn't Update Invitation", isPresented: Binding(
             get: { invitationActionErrorMessage != nil },
@@ -700,13 +667,109 @@ struct HomeView: View {
         } message: {
             Text(friendRequestErrorMessage ?? "")
         }
+        .alert("Couldn't Join", isPresented: Binding(
+            get: { mfbErrorMessage != nil },
+            set: { if !$0 { mfbErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(mfbErrorMessage ?? "")
+        }
     }
 
-    /// Same visual language as invitationCard, no soft-decline lifecycle
-    /// — a friend request just quietly disappears on accept/decline/
-    /// cancel, no reconsider step (unlike invitations, which is a
-    /// deliberately richer flow not asked for here).
-    private func friendRequestCard(badge: String, title: String, @ViewBuilder actions: () -> some View) -> some View {
+    /// Real, working content now — Join Free (instant, no paywall, no
+    /// approval step) or Open once already a member. Renders nothing at
+    /// all (see messagesStrip) when mfbGroup is nil, i.e. before the real
+    /// group has been created and flipped on.
+    @ViewBuilder
+    private func mfbRow(_ mfbGroup: FamilyGroup) -> some View {
+        messageRow(badge: "MFB", title: "Explore \(mfbGroup.name) — Free · Read Only · Sample Family Cookbook") {
+            if isMFBMember, let entry = joinedGroups.first(where: { $0.group.isMFB == true }) {
+                NavigationLink {
+                    GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
+                } label: {
+                    Text("Open")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.potluckSage)
+            } else {
+                Button("Join Free") {
+                    Task { await joinMFB() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.potluckSage)
+                .disabled(isJoiningMFB)
+            }
+        }
+    }
+
+    /// Every non-MFB pending item, in a flat, uniformly-styled list so
+    /// messagesStrip can interleave hairline dividers between all of them
+    /// regardless of which kind they are. AnyView here is a deliberate,
+    /// small-scale trade — this list is short and rebuilt on state change
+    /// anyway, not a hot path worth a bespoke enum for.
+    private var otherMessageRows: [AnyView] {
+        var rows: [AnyView] = []
+        for entry in activeCardInvitations {
+            let isSoftDeclined = softDeclinedInvitationIDs.contains(entry.invitation.id)
+            rows.append(AnyView(
+                messageRow(
+                    badge: "INVITATION",
+                    title: "You've been invited to \(entry.group.name)",
+                    accessibilityHint: isSoftDeclined ? "Declined. Reconsider or delete." : nil
+                ) {
+                    if isSoftDeclined {
+                        HStack {
+                            Button("Reconsider") { reconsiderInvitation(entry.invitation.id) }
+                            Button("Delete", role: .destructive) {
+                                Task { await deleteInvitation(id: entry.invitation.id, invitation: entry.invitation) }
+                            }
+                        }
+                    } else {
+                        HStack {
+                            Button("Join") { Task { await respondToInvitation(entry.invitation, accept: true) } }
+                            Button("Decline", role: .destructive) { declineInvitation(entry.invitation.id) }
+                        }
+                    }
+                }
+            ))
+        }
+        for entry in adminPendingJoinRequests {
+            rows.append(AnyView(
+                messageRow(badge: "JOIN REQUEST", title: "Someone wants to join \(entry.group.name)") {
+                    Button("Review") { isPresentingMessages = true }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.potluckTomato)
+                }
+            ))
+        }
+        for request in incomingFriendRequests {
+            rows.append(AnyView(
+                messageRow(badge: "FRIEND REQUEST", title: "Friend request from Member \(request.senderID.suffix(6))") {
+                    HStack {
+                        Button("Accept") { Task { await respondToFriendRequest(request, accept: true) } }
+                        Button("Decline", role: .destructive) { Task { await respondToFriendRequest(request, accept: false) } }
+                    }
+                    .disabled(busyFriendRequestIDs.contains(request.id))
+                }
+            ))
+        }
+        for request in outgoingFriendRequests {
+            rows.append(AnyView(
+                messageRow(badge: "FRIEND REQUEST SENT", title: "Friend request sent to Member \(request.recipientID.suffix(6))") {
+                    Button("Cancel", role: .destructive) { Task { await cancelFriendRequest(request) } }
+                        .disabled(busyFriendRequestIDs.contains(request.id))
+                }
+            ))
+        }
+        return rows
+    }
+
+    /// Shared row shape for every kind of message — MFB, invitations,
+    /// join requests, friend requests alike. No per-row background/shadow/
+    /// border of its own; messagesStrip's outer card provides that once
+    /// for the whole consolidated list.
+    private func messageRow(badge: String, title: String, accessibilityHint: String? = nil, @ViewBuilder actions: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             messagesPillBadge(badge)
             Text(title)
@@ -715,137 +778,30 @@ struct HomeView: View {
                 .fixedSize(horizontal: false, vertical: true)
             actions()
         }
-        .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
-        .potluckCardShadow()
-        .padding(.horizontal)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
+        .accessibilityLabel(accessibilityHint.map { "\(title). \($0)" } ?? title)
     }
 
     /// Real invitations not yet permanently deleted — soft-declined ones
     /// still render (with Reconsider/Delete), only a real Delete removes
-    /// the card.
+    /// the row.
     private var activeCardInvitations: [(invitation: Invitation, group: FamilyGroup)] {
         pendingInvitations.filter { !deletedInvitationIDs.contains($0.invitation.id) }
     }
 
-    private func attentionCard(kind: String, title: String, primaryTitle: String, action: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(kind.uppercased())
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(Color.potluckSage)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color.potluckSage.opacity(0.15)))
-            Text(title)
-                .font(.potluckSemiboldBody(15))
-                .foregroundStyle(Color.potluckDeepTeal)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(primaryTitle, action: action)
-                .buttonStyle(.borderedProminent)
-                .tint(Color.potluckTomato)
+    private func joinMFB() async {
+        guard let userID = accountState.currentUserID, let group = mfbGroup else { return }
+        isJoiningMFB = true
+        mfbErrorMessage = nil
+        defer { isJoiningMFB = false }
+        do {
+            _ = try await groupsService.requestToJoin(groupID: group.id, requesterID: userID, note: nil)
+            isMFBMember = true
+            await loadGroupData()
+        } catch {
+            mfbErrorMessage = error.localizedDescription
         }
-        .padding()
-        .frame(width: 220, alignment: .leading)
-        .background(Color.white.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
-        .potluckCardShadow()
-    }
-
-    /// Shared by the MFB placeholder and every real invitation. Pending:
-    /// Join (disabled for MFB, since the real join flow doesn't exist
-    /// yet) + Decline, which only enters the soft-declined state below —
-    /// no backend call for a real invitation happens until Delete.
-    /// Soft-declined: both disabled, replaced by Reconsider (undoes the
-    /// soft state, no backend involvement) + Delete (commits the real
-    /// decline for a real invitation, then permanently hides the card).
-    private func invitationCard(id: String, title: String, onJoin: (() -> Void)?, invitation: Invitation?) -> some View {
-        let isSoftDeclined = softDeclinedInvitationIDs.contains(id)
-        return VStack(alignment: .leading, spacing: 10) {
-            messagesPillBadge("INVITATION")
-            Text(title)
-                .font(.potluckSemiboldBody(15))
-                .foregroundStyle(Color.potluckDeepTeal)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if isSoftDeclined {
-                HStack {
-                    Button("Reconsider") {
-                        reconsiderInvitation(id)
-                    }
-                    Button("Delete", role: .destructive) {
-                        Task { await deleteInvitation(id: id, invitation: invitation) }
-                    }
-                }
-            } else {
-                HStack {
-                    Button("Join") { onJoin?() }
-                        .disabled(onJoin == nil)
-                    Button("Decline", role: .destructive) {
-                        declineInvitation(id)
-                    }
-                }
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
-        .potluckCardShadow()
-        .padding(.horizontal)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(isSoftDeclined ? "\(title). Declined. Reconsider or delete." : title)
-    }
-
-    /// Buttons are disabled (not omitted) and the card gets a dashed green
-    /// border — both read as "placeholder, not yet active" on their own —
-    /// since the real MFB join flow doesn't exist yet (no seeded MFB
-    /// group, no auto-invitation system). Unlike a real invitation, there
-    /// is no reconsider/delete lifecycle here — nothing behind either
-    /// button is real yet, so there's nothing for that state machine to
-    /// attach to.
-    private var mfbInvitationPlaceholderCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                messagesPillBadge("INVITATION")
-                messagesPillBadge("COMING SOON")
-            }
-            Text("Join the Memphis Family Barrentine shared recipe & cookbook for free with over 600 southern classics!")
-                .font(.potluckSemiboldBody(15))
-                .foregroundStyle(Color.potluckDeepTeal)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                Button("Join") {}
-                    .disabled(true)
-                Button("Decline", role: .destructive) {}
-                    .disabled(true)
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius)
-                .strokeBorder(Color.potluckSage, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
-        }
-        .potluckCardShadow()
-        .padding(.horizontal)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Invitation, coming soon. Join the Memphis Family Barrentine shared recipe and cookbook for free with over 600 southern classics. Join and Decline are not yet available.")
-        // Both buttons above are permanently disabled, so without this the
-        // whole card has zero focusable elements — tvOS's focus engine is
-        // documented to skip an empty .focusSection(), but in practice
-        // (confirmed live) it doesn't reliably do that inside a
-        // ScrollView: it just stops dead at the boundary instead of
-        // searching past it to content further down. Making the card
-        // itself a focusable (but non-actionable) stop closes that dead
-        // end while keeping Join/Decline genuinely unpressable.
-        .focusable()
     }
 
     private func loadInvitationCardState() {
@@ -1556,6 +1512,11 @@ struct HomeView: View {
     }
 
     private func loadGroupData() async {
+        // Independent of the signed-in user — every account (or none yet)
+        // should be able to see whether MFB exists, same reasoning as its
+        // own doc comment.
+        mfbGroup = try? await groupsService.fetchMFBGroup()
+
         guard let userID = accountState.currentUserID else {
             adminPendingJoinRequests = []
             pendingInvitations = []
@@ -1563,6 +1524,7 @@ struct HomeView: View {
             featuredGroups = []
             incomingFriendRequests = []
             outgoingFriendRequests = []
+            isMFBMember = false
             return
         }
         do {
@@ -1582,6 +1544,7 @@ struct HomeView: View {
             }
             joinedGroups = cookbookEntries
             adminPendingJoinRequests = pendingRequests
+            isMFBMember = mfbGroup.map { group in memberships.contains { $0.groupID == group.id } } ?? false
 
             if let email = accountState.currentUserEmail {
                 let invitations = try await groupsService.fetchInvitations(forInvitee: email)
@@ -1598,7 +1561,9 @@ struct HomeView: View {
 
             let joinedIDs = Set(groups.map { $0.1.id })
             let publicGroups = try await groupsService.fetchPublicGroups(matching: PublicGroupSearchFilter(text: nil, locationText: nil))
-            featuredGroups = publicGroups.filter { $0.approvalPolicy == .noApprovalNeeded && !joinedIDs.contains($0.id) }
+            // MFB gets its own dedicated card in Messages below — omitted
+            // here so it isn't shown twice.
+            featuredGroups = publicGroups.filter { $0.approvalPolicy == .noApprovalNeeded && !joinedIDs.contains($0.id) && $0.isMFB != true }
 
             incomingFriendRequests = try await friendsService.fetchFriendRequests(forRecipient: userID)
             outgoingFriendRequests = try await friendsService.fetchFriendRequests(bySender: userID)

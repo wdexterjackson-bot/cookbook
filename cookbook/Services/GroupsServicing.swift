@@ -172,6 +172,12 @@ protocol GroupsServicing {
     func fetchPublicGroupCookbooks(matching filter: PublicGroupCookbookSearchFilter) async throws -> [GroupCookbook]
 
     func fetchPublicGroups(matching filter: PublicGroupSearchFilter) async throws -> [FamilyGroup]
+    /// The one seeded MFB (Memphis Family Barrentine) group, if it exists
+    /// yet — isMFB is never client-settable (see FamilyGroup.isMFB's own
+    /// doc comment), so this is purely a read. Returns nil gracefully
+    /// before the real group has been created and flipped on, so callers
+    /// (Home's MFB card) can ship ahead of that manual step.
+    func fetchMFBGroup() async throws -> FamilyGroup?
     func fetchGroup(id: String) async throws -> FamilyGroup?
     func fetchMemberships(forGroup groupID: String) async throws -> [Membership]
     func fetchMemberships(forUser userID: String) async throws -> [Membership]

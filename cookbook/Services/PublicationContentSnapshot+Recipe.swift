@@ -11,7 +11,17 @@
 import Foundation
 
 extension PublicationContentSnapshot {
-    static func make(from recipe: Recipe, coverImageURL: String? = nil) -> PublicationContentSnapshot {
+    /// `groupName` is nil only for callers (existing tests) that don't
+    /// care about lineage — every real publish call site has a real
+    /// FamilyGroup.name to pass. See Copy-to-Personal (PRD §6): a future
+    /// copier's `sourceOwnerSnapshot`/`sourceGroupSnapshot` describe *this*
+    /// publish action specifically (this recipe's own authorLineage, this
+    /// destination group), not inherited from wherever this recipe's
+    /// content originally came from — that's what `rootOriginRecipeID`
+    /// alone is for, carried forward from the recipe's existing lineage if
+    /// it has any (it's itself a copy being republished), or seeded from
+    /// its own id if this is an original.
+    static func make(from recipe: Recipe, coverImageURL: String? = nil, groupName: String? = nil) -> PublicationContentSnapshot {
         PublicationContentSnapshot(
             title: recipe.title,
             summary: recipe.summary,
@@ -40,7 +50,10 @@ extension PublicationContentSnapshot {
             notes: recipe.notes,
             tags: recipe.tags,
             coverImageURL: coverImageURL,
-            authorLineage: recipe.authorLineage
+            authorLineage: recipe.authorLineage,
+            rootOriginRecipeID: (recipe.rootOriginRecipeID ?? recipe.id).uuidString,
+            sourceOwnerSnapshot: recipe.authorLineage,
+            sourceGroupSnapshot: groupName
         )
     }
 }

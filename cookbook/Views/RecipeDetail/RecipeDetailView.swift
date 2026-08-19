@@ -203,6 +203,17 @@ struct RecipeDetailView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Credit: \(lineageLabelText)")
+
+            // Copy-to-Personal lineage (PRD §6, LIN-004) — never editable,
+            // never hideable by the owner. Distinct from the credit line
+            // above: that's "who to thank," this is "which cookbook this
+            // was copied from."
+            if let sharedFromText {
+                Label(sharedFromText, systemImage: "arrow.triangle.branch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Shared from: \(sharedFromText)")
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -212,6 +223,16 @@ struct RecipeDetailView: View {
             return "Inspired by \(lineage)"
         }
         return "You"
+    }
+
+    private var sharedFromText: String? {
+        guard let group = recipe.sourceGroupSnapshot?.trimmingCharacters(in: .whitespacesAndNewlines), !group.isEmpty else {
+            return nil
+        }
+        if let owner = recipe.sourceOwnerSnapshot?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty {
+            return "Shared from \(owner) in \(group)"
+        }
+        return "Shared from \(group)"
     }
 
     @ViewBuilder

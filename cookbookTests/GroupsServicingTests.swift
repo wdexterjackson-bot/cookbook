@@ -473,4 +473,38 @@ struct GroupsServicingTests {
         #expect(pendingForDave.count == 1)
         #expect(pendingForCarol.isEmpty)
     }
+
+    // MARK: - fetchMFBGroup
+
+    private func makeMFBGroup() -> FamilyGroup {
+        FamilyGroup(
+            id: "mfb-group", slug: "mfb-group", name: "Memphis Family Barrentine", description: "",
+            type: "Family", locationText: "Memphis, TN", structuredRegion: nil, coverImageURL: nil,
+            visibility: .publicGroup, createdByUserID: "dexter", createdByDisplayName: "Dexter",
+            createdAt: .now, status: .active, allowsMemberInvites: false, approvalPolicy: .noApprovalNeeded,
+            isMFB: true
+        )
+    }
+
+    @Test func fetchMFBGroupFindsTheOneSeededGroup() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        _ = try await createTestGroup(service) // an ordinary group, isMFB false
+        service.seedMFBGroup(makeMFBGroup())
+
+        let found = try await service.fetchMFBGroup()
+
+        #expect(found?.id == "mfb-group")
+        #expect(found?.isMFB == true)
+    }
+
+    @Test func fetchMFBGroupReturnsNilBeforeOneExists() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        _ = try await createTestGroup(service)
+
+        let found = try await service.fetchMFBGroup()
+
+        #expect(found == nil)
+    }
 }

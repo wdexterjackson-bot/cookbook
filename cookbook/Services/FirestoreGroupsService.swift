@@ -163,6 +163,19 @@ final class FirestoreGroupsService: GroupsServicing {
         return try snapshot.data(as: FamilyGroup.self)
     }
 
+    func fetchMFBGroup() async throws -> FamilyGroup? {
+        // visibility == public is included so this query is provable
+        // under groups/read's rule (`visibility == 'public' || isMember`)
+        // without needing isMember for every possible match — same
+        // reasoning fetchPublicGroups already relies on.
+        let snapshot = try await db.collection("groups")
+            .whereField("visibility", isEqualTo: GroupVisibility.publicGroup.rawValue)
+            .whereField("isMFB", isEqualTo: true)
+            .limit(to: 1)
+            .getDocuments()
+        return try snapshot.documents.first.map { try $0.data(as: FamilyGroup.self) }
+    }
+
     func fetchMemberships(forGroup groupID: String) async throws -> [Membership] {
         let snapshot = try await db.collection("memberships").whereField("groupID", isEqualTo: groupID).getDocuments()
         return try snapshot.documents.map { try $0.data(as: Membership.self) }

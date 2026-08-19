@@ -74,4 +74,44 @@ struct PublicationContentSnapshotRecipeTests {
 
         #expect(snapshot.coverImageURL == "https://example.com/photo.jpg")
     }
+
+    // MARK: - Copy-to-Personal lineage (PRD §6)
+
+    @Test func publishingAnOriginalRecipeSeedsItsOwnIDAsTheRootOrigin() {
+        let recipe = Recipe(ownerID: "alice", title: "Alice's Cornbread")
+        recipe.authorLineage = "Alice Barrentine of Memphis, TN"
+        // No prior rootOriginRecipeID — this recipe was never copied from anywhere.
+
+        let snapshot = PublicationContentSnapshot.make(from: recipe, groupName: "Memphis Family Barrentine")
+
+        #expect(snapshot.rootOriginRecipeID == recipe.id.uuidString)
+        #expect(snapshot.sourceOwnerSnapshot == "Alice Barrentine of Memphis, TN")
+        #expect(snapshot.sourceGroupSnapshot == "Memphis Family Barrentine")
+    }
+
+    @Test func republishingAnAlreadyCopiedRecipePreservesTheTrueOriginalRoot() {
+        let recipe = Recipe(ownerID: "carol", title: "Carol's Adapted Cornbread")
+        recipe.authorLineage = "Carol Smith"
+        // Carol's recipe is itself a copy — its root points at Alice's
+        // original, not at Carol's own id.
+        let aliceOriginalID = UUID()
+        recipe.rootOriginRecipeID = aliceOriginalID
+
+        let snapshot = PublicationContentSnapshot.make(from: recipe, groupName: "Cousins Group")
+
+        // Root stays Alice's, even though Carol is republishing.
+        #expect(snapshot.rootOriginRecipeID == aliceOriginalID.uuidString)
+        // But the immediate source for whoever copies THIS publication is
+        // Carol/Cousins Group, not Alice — computed fresh at this publish.
+        #expect(snapshot.sourceOwnerSnapshot == "Carol Smith")
+        #expect(snapshot.sourceGroupSnapshot == "Cousins Group")
+    }
+
+    @Test func groupNameDefaultsToNilForCallersThatDontPassOne() {
+        let recipe = Recipe(ownerID: "alice", title: "Cornbread")
+
+        let snapshot = PublicationContentSnapshot.make(from: recipe)
+
+        #expect(snapshot.sourceGroupSnapshot == nil)
+    }
 }

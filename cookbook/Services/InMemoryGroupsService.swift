@@ -158,6 +158,19 @@ final class InMemoryGroupsService: GroupsServicing {
         groups.first { $0.id == id }
     }
 
+    func fetchMFBGroup() async throws -> FamilyGroup? {
+        groups.first { $0.isMFB == true }
+    }
+
+    /// Test-only seam — isMFB is never client-settable through the normal
+    /// createGroup path (see FamilyGroup.isMFB's own doc comment: "meant
+    /// to be flipped true directly in the console"), so there's no real
+    /// method that produces an MFB group. This mirrors that exact same
+    /// one-time manual step for the fake.
+    func seedMFBGroup(_ group: FamilyGroup) {
+        groups.append(group)
+    }
+
     func fetchMemberships(forGroup groupID: String) async throws -> [Membership] {
         memberships.filter { $0.groupID == groupID }
     }

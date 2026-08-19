@@ -49,6 +49,19 @@ struct PublicationContentSnapshot: Codable, Equatable {
     /// see who a published recipe is credited to. Nil for recipes
     /// published before this field existed.
     var authorLineage: String?
+    /// Copy-to-Personal lineage (PRD §6), snapshotted from the source
+    /// Recipe at publish time — not derived at copy time, so a chain of
+    /// copies (Alice → Bob → this group → Carol) preserves the *true*
+    /// original root rather than resetting to "immediate parent" at every
+    /// hop. `rootOriginRecipeID` is the earliest known recipe in the chain
+    /// (== Publication.sourceRecipeID when the source Recipe was itself an
+    /// original, i.e. had no prior lineage of its own); `sourceOwnerSnapshot`/
+    /// `sourceGroupSnapshot` describe where *this* immediate copy came
+    /// from. All nil for publications created before Copy-to-Personal
+    /// existed.
+    var rootOriginRecipeID: String?
+    var sourceOwnerSnapshot: String?
+    var sourceGroupSnapshot: String?
 
     init(
         title: String,
@@ -60,7 +73,10 @@ struct PublicationContentSnapshot: Codable, Equatable {
         notes: String,
         tags: [String],
         coverImageURL: String? = nil,
-        authorLineage: String? = nil
+        authorLineage: String? = nil,
+        rootOriginRecipeID: String? = nil,
+        sourceOwnerSnapshot: String? = nil,
+        sourceGroupSnapshot: String? = nil
     ) {
         self.title = title
         self.summary = summary
@@ -72,6 +88,9 @@ struct PublicationContentSnapshot: Codable, Equatable {
         self.tags = tags
         self.coverImageURL = coverImageURL
         self.authorLineage = authorLineage
+        self.rootOriginRecipeID = rootOriginRecipeID
+        self.sourceOwnerSnapshot = sourceOwnerSnapshot
+        self.sourceGroupSnapshot = sourceGroupSnapshot
     }
 }
 
