@@ -2,6 +2,7 @@ const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { onObjectFinalized } = require('firebase-functions/v2/storage');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
@@ -18,6 +19,7 @@ const { requestPairingCode, checkPairingStatus, confirmPairingCode } = require('
 const { handleAppStoreServerNotification } = require('./appStoreServerNotifications');
 const { decodeAndVerifyNotification } = require('./appStoreServerNotificationVerifier');
 const { sweepLapsedAnnualProMembers } = require('./sweepLapsedAnnualProMembers');
+const { validateUploadedImage } = require('./validateUploadedImage');
 
 initializeApp();
 
@@ -227,4 +229,24 @@ exports.appStoreServerNotifications = onRequest(async (req, res) => {
 exports.annualProMembershipSweep = onSchedule('every day 03:00', async () => {
   const result = await sweepLapsedAnnualProMembers({ db: getFirestore(), bucket: getStorage().bucket() });
   console.log(`annualProMembershipSweep: swept ${result.swept}, warned75 ${result.warned75}, warned85 ${result.warned85}.`);
+});
+
+// storage.rules can only check the *declared* Content-Type header at write
+// time, not the actual bytes — see validateUploadedImage.js for the full
+// reasoning. Fires once per upload under publications/ or
+// personalCookbooks/ and deletes anything that isn't a real JPEG/PNG.
+exports.validateUploadedImage = onObjectFinalized(async (event) => {
+  const filePath = event.data.name;
+  try {
+    const result = await validateUploadedImage({
+      bucket: getStorage().bucket(event.data.bucket),
+      filePath,
+      contentType: event.data.contentType,
+    });
+    if (result.deleted) {
+      console.warn(`validateUploadedImage: deleted ${filePath} (${result.reason})`);
+    }
+  } catch (error) {
+    console.error(`validateUploadedImage failed for ${filePath}:`, error);
+  }
 });

@@ -212,17 +212,34 @@ struct MessagesView: View {
         .padding(.vertical, 4)
     }
 
+    /// Each inbox section is fetched and applied independently — one
+    /// section throwing (e.g. `messagingService.fetchMessages`, the
+    /// newest/least-exercised of these) used to abort the whole function
+    /// inside a single do/catch, leaving every other section — friend
+    /// requests, invitations, join requests — blank even though their own
+    /// fetches would have succeeded. Now a failure only blanks its own
+    /// section and is folded into one non-blocking summary error.
     private func load() async {
         guard let userID = accountState.currentUserID else { return }
         isLoading = true
-        errorMessage = nil
         defer { isLoading = false }
+
+        var failureMessages: [String] = []
+
         do {
             messages = try await messagingService.fetchMessages(for: userID)
+        } catch {
+            failureMessages.append(error.localizedDescription)
+        }
 
+        do {
             let requests = try await groupsService.fetchJoinRequests(byRequester: userID)
             ownJoinRequests = try await attachGroups(to: requests) { $0.groupID }
+        } catch {
+            failureMessages.append(error.localizedDescription)
+        }
 
+        do {
             let adminMemberships = try await groupsService.fetchMemberships(forUser: userID)
                 .filter { $0.status == .active && $0.role == .admin }
             var pendingRequests: [(JoinRequest, FamilyGroup)] = []
@@ -232,19 +249,30 @@ struct MessagesView: View {
                 pendingRequests.append(contentsOf: pending.map { ($0, group) })
             }
             adminPendingJoinRequests = pendingRequests
+        } catch {
+            failureMessages.append(error.localizedDescription)
+        }
 
+        do {
             if let email = accountState.currentUserEmail {
                 let invitations = try await groupsService.fetchInvitations(forInvitee: email)
                 pendingInvitations = try await attachGroups(to: invitations) { $0.groupID }
             } else {
                 pendingInvitations = []
             }
+        } catch {
+            failureMessages.append(error.localizedDescription)
+        }
 
+        do {
             incomingFriendRequests = try await friendsService.fetchFriendRequests(forRecipient: userID)
             outgoingFriendRequests = try await friendsService.fetchFriendRequests(bySender: userID)
         } catch {
-            errorMessage = error.localizedDescription
+            failureMessages.append(error.localizedDescription)
         }
+
+        errorMessage = failureMessages.isEmpty ? nil
+            : (failureMessages.count == 1 ? failureMessages[0] : "Some of your messages couldn't be loaded. Pull to refresh to try again.")
     }
 
     private func attachGroups<T>(to items: [T], groupID: (T) -> String) async throws -> [(T, FamilyGroup)] {

@@ -199,8 +199,27 @@ final class InMemoryGroupsService: GroupsServicing {
             )
         }
 
+        let requestID = JoinRequest.compositeID(groupID: groupID, requesterID: requesterID)
+        if let existingIndex = joinRequests.firstIndex(where: { $0.id == requestID }) {
+            guard joinRequests[existingIndex].state != .pending else {
+                throw GroupsServiceError.joinRequestAlreadyPending
+            }
+            let request = JoinRequest(
+                id: requestID,
+                groupID: groupID,
+                requesterID: requesterID,
+                note: note,
+                state: .pending,
+                decidedByUserID: nil,
+                createdAt: .now,
+                decidedAt: nil
+            )
+            joinRequests[existingIndex] = request
+            return request
+        }
+
         let request = JoinRequest(
-            id: UUID().uuidString,
+            id: requestID,
             groupID: groupID,
             requesterID: requesterID,
             note: note,

@@ -634,17 +634,34 @@ service cloud.firestore {
 
       allow create: if isSignedIn()
         && request.auth.uid == request.resource.data.requesterID
+        && requestID == request.resource.data.groupID + '_' + request.resource.data.requesterID
         && request.resource.data.state == 'pending'
         && !isMember(request.resource.data.groupID)
         && isProOrMFB(request.resource.data.requesterID, request.resource.data.groupID);
 
       allow update: if isSignedIn()
-        && resource.data.state == 'pending'
-        && request.resource.data.state in ['approved', 'denied']
-        && request.resource.data.decidedByUserID == request.auth.uid
-        && request.resource.data.requesterID == resource.data.requesterID
-        && request.resource.data.groupID == resource.data.groupID
-        && canDecideJoinRequest(resource.data.groupID);
+        && resource.data.requesterID == request.resource.data.requesterID
+        && resource.data.groupID == request.resource.data.groupID
+        && (
+          // An admin deciding a pending request.
+          (resource.data.state == 'pending'
+            && request.resource.data.state in ['approved', 'denied']
+            && request.resource.data.decidedByUserID == request.auth.uid
+            && canDecideJoinRequest(resource.data.groupID))
+          ||
+          // The original requester trying again after an earlier denial,
+          // cancellation, expiry, or an approval whose membership has since
+          // ended (removal isn't a permanent ban) — same doc id
+          // (groupID_requesterID), reset back to pending rather than
+          // erroring on "already exists," mirroring friendRequests' near-
+          // identical re-request path. !isMember() below already rules out
+          // "approved and still an active member."
+          (request.auth.uid == resource.data.requesterID
+            && resource.data.state in ['denied', 'cancelled', 'expired', 'approved']
+            && request.resource.data.state == 'pending'
+            && !isMember(request.resource.data.groupID)
+            && isProOrMFB(request.resource.data.requesterID, request.resource.data.groupID))
+        );
 
       allow delete: if false;
     }

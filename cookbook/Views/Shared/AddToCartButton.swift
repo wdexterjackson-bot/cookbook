@@ -15,6 +15,7 @@ struct AddToCartButton: View {
     let ownerID: String
     let sourceRecipeID: String
     let sourceRecipeTitleSnapshot: String
+    let sourceIngredientID: UUID
     let displayText: String
     let quantityValue: Double?
     let unit: String?
@@ -27,6 +28,7 @@ struct AddToCartButton: View {
         ownerID: String,
         sourceRecipeID: String,
         sourceRecipeTitleSnapshot: String,
+        sourceIngredientID: UUID,
         displayText: String,
         quantityValue: Double?,
         unit: String?
@@ -34,11 +36,12 @@ struct AddToCartButton: View {
         self.ownerID = ownerID
         self.sourceRecipeID = sourceRecipeID
         self.sourceRecipeTitleSnapshot = sourceRecipeTitleSnapshot
+        self.sourceIngredientID = sourceIngredientID
         self.displayText = displayText
         self.quantityValue = quantityValue
         self.unit = unit
         _matchingItems = Query(filter: #Predicate<CartItem> { item in
-            item.ownerID == ownerID && item.sourceRecipeID == sourceRecipeID && item.displayText == displayText
+            item.ownerID == ownerID && item.sourceRecipeID == sourceRecipeID && item.sourceIngredientID == sourceIngredientID
         })
     }
 
@@ -54,6 +57,7 @@ struct AddToCartButton: View {
                     unit: unit,
                     sourceRecipeID: sourceRecipeID,
                     sourceRecipeTitleSnapshot: sourceRecipeTitleSnapshot,
+                    sourceIngredientID: sourceIngredientID,
                     in: modelContext
                 )
             } catch {

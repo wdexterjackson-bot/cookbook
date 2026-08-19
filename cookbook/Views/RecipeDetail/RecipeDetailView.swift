@@ -151,6 +151,7 @@ struct RecipeDetailView: View {
                         unit: ingredient.unit,
                         sourceRecipeID: sourceRecipeID,
                         sourceRecipeTitleSnapshot: recipe.title,
+                        sourceIngredientID: ingredient.id,
                         in: modelContext
                     )
                 }
@@ -266,6 +267,7 @@ struct RecipeDetailView: View {
                         ownerID: accountState.currentOwnerID,
                         sourceRecipeID: recipe.id.uuidString,
                         sourceRecipeTitleSnapshot: recipe.title,
+                        sourceIngredientID: ingredient.id,
                         displayText: ingredient.displayText,
                         quantityValue: ingredient.quantityValue,
                         unit: ingredient.unit

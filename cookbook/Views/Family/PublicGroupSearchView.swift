@@ -194,6 +194,13 @@ struct PublicGroupSearchContent: View {
                 requestedGroupIDs.insert(group.id)
             } catch GroupsServiceError.alreadyMember {
                 errorMessage = "You're already a member of this cookbook."
+            } catch GroupsServiceError.joinRequestAlreadyPending {
+                // Reached when this screen's local "Requested" flag never
+                // saw the first request (e.g. a different screen instance
+                // sent it) — resync the button instead of just showing a
+                // dead-end error over a still-tappable "Request to Join".
+                requestedGroupIDs.insert(group.id)
+                errorMessage = "You already requested to join this cookbook."
             } catch {
                 errorMessage = error.localizedDescription
             }

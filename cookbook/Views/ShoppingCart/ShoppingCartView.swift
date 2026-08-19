@@ -155,6 +155,7 @@ private struct CartItemRow: View {
     @Bindable var item: CartItem
     @Environment(\.modelContext) private var modelContext
     @State private var errorMessage: String?
+    @FocusState private var isEditingText: Bool
 
     var body: some View {
         HStack {
@@ -174,6 +175,20 @@ private struct CartItemRow: View {
             TextField("Item", text: $item.displayText)
                 .strikethrough(item.checked)
                 .foregroundStyle(item.checked ? .secondary : .primary)
+                .focused($isEditingText)
+                .onChange(of: isEditingText) { _, isNowEditing in
+                    // Commit on blur, not per keystroke — trims stray
+                    // whitespace, and removes the row entirely if the user
+                    // cleared it rather than leaving a blank line stuck in
+                    // the cart until manually swiped away.
+                    guard !isNowEditing else { return }
+                    let trimmed = item.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        remove()
+                    } else if trimmed != item.displayText {
+                        item.displayText = trimmed
+                    }
+                }
 
             Button(role: .destructive) {
                 remove()

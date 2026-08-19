@@ -22,6 +22,7 @@ struct CartItemStoreTests {
 
     @Test func addFromRecipeInsertsANewItem() throws {
         let context = try makeInMemoryContext()
+        let ingredientID = UUID()
 
         let item = try CartItemStore.addFromRecipe(
             ownerID: "alice",
@@ -30,6 +31,7 @@ struct CartItemStoreTests {
             unit: "lb",
             sourceRecipeID: "recipe-1",
             sourceRecipeTitleSnapshot: "Sunday Gravy",
+            sourceIngredientID: ingredientID,
             in: context
         )
 
@@ -40,36 +42,65 @@ struct CartItemStoreTests {
 
     @Test func addingTheSameIngredientFromTheSameRecipeTwiceIsANoOp() throws {
         let context = try makeInMemoryContext()
+        let ingredientID = UUID()
 
         let first = try CartItemStore.addFromRecipe(
             ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb",
-            sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context
+            sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", sourceIngredientID: ingredientID, in: context
         )
         let second = try CartItemStore.addFromRecipe(
             ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb",
-            sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context
+            sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", sourceIngredientID: ingredientID, in: context
         )
 
         #expect(first.id == second.id)
         #expect(CartItemStore.fetchAll(ownerID: "alice", in: context).count == 1)
     }
 
+    /// Regression test: dedup used to match on displayText, which the user
+    /// can edit inline in the cart — renaming an item used to desync the
+    /// recipe-detail "already added" button and let a re-tap insert a
+    /// duplicate row. Now identity is the ingredient's own stable id, which
+    /// a text edit never touches.
+    @Test func renamingTheCartItemDoesNotBreakDedupAgainstTheSourceIngredient() throws {
+        let context = try makeInMemoryContext()
+        let ingredientID = UUID()
+
+        let original = try CartItemStore.addFromRecipe(
+            ownerID: "alice", displayText: "2 cups flour", quantityValue: 2, unit: "cups",
+            sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", sourceIngredientID: ingredientID, in: context
+        )
+        original.displayText = "flour, sifted"
+        try context.save()
+
+        #expect(CartItemStore.isInCart(ownerID: "alice", sourceRecipeID: "recipe-1", sourceIngredientID: ingredientID, in: context) == true)
+
+        let again = try CartItemStore.addFromRecipe(
+            ownerID: "alice", displayText: "2 cups flour", quantityValue: 2, unit: "cups",
+            sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", sourceIngredientID: ingredientID, in: context
+        )
+
+        #expect(again.id == original.id)
+        #expect(CartItemStore.fetchAll(ownerID: "alice", in: context).count == 1)
+    }
+
     @Test func sameIngredientTextFromDifferentRecipesAreSeparateRows() throws {
         let context = try makeInMemoryContext()
 
-        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context)
-        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-2", sourceRecipeTitleSnapshot: "Tacos", in: context)
+        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", sourceIngredientID: UUID(), in: context)
+        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "2 lb ground beef", quantityValue: 2, unit: "lb", sourceRecipeID: "recipe-2", sourceRecipeTitleSnapshot: "Tacos", sourceIngredientID: UUID(), in: context)
 
         #expect(CartItemStore.fetchAll(ownerID: "alice", in: context).count == 2)
     }
 
     @Test func isInCartReflectsExistingItems() throws {
         let context = try makeInMemoryContext()
-        #expect(CartItemStore.isInCart(ownerID: "alice", sourceRecipeID: "recipe-1", displayText: "Salt", in: context) == false)
+        let ingredientID = UUID()
+        #expect(CartItemStore.isInCart(ownerID: "alice", sourceRecipeID: "recipe-1", sourceIngredientID: ingredientID, in: context) == false)
 
-        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "Salt", quantityValue: nil, unit: nil, sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", in: context)
+        try CartItemStore.addFromRecipe(ownerID: "alice", displayText: "Salt", quantityValue: nil, unit: nil, sourceRecipeID: "recipe-1", sourceRecipeTitleSnapshot: "Sunday Gravy", sourceIngredientID: ingredientID, in: context)
 
-        #expect(CartItemStore.isInCart(ownerID: "alice", sourceRecipeID: "recipe-1", displayText: "Salt", in: context) == true)
+        #expect(CartItemStore.isInCart(ownerID: "alice", sourceRecipeID: "recipe-1", sourceIngredientID: ingredientID, in: context) == true)
     }
 
     @Test func addManualItemAlwaysInsertsANewRow() throws {

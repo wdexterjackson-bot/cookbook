@@ -152,6 +152,44 @@ struct GroupsServicingTests {
         #expect(!memberships.contains { $0.userID == "bob" })
     }
 
+    /// Regression test: requestToJoin used to generate a random doc id every
+    /// call, so requesting twice (e.g. from two different screens, or a
+    /// second tap before the UI's local "Requested" flag caught up) created
+    /// two separate pending JoinRequest docs — an admin would see the same
+    /// requester twice, and approving one left the other stuck pending
+    /// forever with no way to clear it.
+    @Test func requestingToJoinAgainWhileAlreadyPendingThrowsInsteadOfCreatingADuplicate() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+        _ = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+
+        await #expect(throws: GroupsServiceError.joinRequestAlreadyPending) {
+            try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        }
+
+        let pending = try await service.fetchJoinRequests(forGroup: group.id)
+        #expect(pending.count == 1)
+    }
+
+    /// A denied request isn't a permanent block — retrying resets the same
+    /// (deterministic-id) doc back to pending rather than erroring, mirroring
+    /// FriendsServicing's identical re-request-after-decline behavior.
+    @Test func requestingToJoinAgainAfterAnEarlierDenialResetsTheSameRequestToPending() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+        let firstRequest = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(firstRequest.id, approve: false, decidedByUserID: "alice")
+
+        let secondRequest = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+
+        #expect(secondRequest.id == firstRequest.id)
+        #expect(secondRequest.state == .pending)
+        let pending = try await service.fetchJoinRequests(forGroup: group.id)
+        #expect(pending.count == 1)
+    }
+
     @Test func nonAdminCannotDecideJoinRequestUnderTheDefaultAnyAdministratorPolicy() async throws {
         let service = InMemoryGroupsService()
         service.tier2CreditsByUserID["alice"] = 1

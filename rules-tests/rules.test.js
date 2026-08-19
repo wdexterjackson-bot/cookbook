@@ -1225,8 +1225,8 @@ describe('join requests', () => {
       await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
     });
     const bob = testEnv.authenticatedContext('bob').firestore();
-    await assertFails(setDoc(doc(bob, 'joinRequests/req1'), {
-      id: 'req1', groupID: 'group1', requesterID: 'bob', note: null,
+    await assertFails(setDoc(doc(bob, 'joinRequests/group1_bob'), {
+      id: 'group1_bob', groupID: 'group1', requesterID: 'bob', note: null,
       state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
     }));
   });
@@ -1234,16 +1234,16 @@ describe('join requests', () => {
   it('a Pro User can file a join request', async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 })));
     const carol = testEnv.authenticatedContext('carol').firestore();
-    await assertSucceeds(setDoc(doc(carol, 'joinRequests/req1'), {
-      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+    await assertSucceeds(setDoc(doc(carol, 'joinRequests/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
       state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
     }));
   });
 
   it('a non-Pro user cannot file a join request against a non-MFB group without a Pro credit', async () => {
     const carol = testEnv.authenticatedContext('carol').firestore();
-    await assertFails(setDoc(doc(carol, 'joinRequests/req1'), {
-      id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+    await assertFails(setDoc(doc(carol, 'joinRequests/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
       state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
     }));
   });
@@ -1251,8 +1251,87 @@ describe('join requests', () => {
   it('a non-Pro user can file a join request against the MFB cookbook', async () => {
     await seed((db) => setDoc(doc(db, 'groups/group1'), groupData({ isMFB: true })));
     const carol = testEnv.authenticatedContext('carol').firestore();
-    await assertSucceeds(setDoc(doc(carol, 'joinRequests/req1'), {
+    await assertSucceeds(setDoc(doc(carol, 'joinRequests/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+    }));
+  });
+
+  it('a doc id that does not match groupID_requesterID is rejected even if every other field is valid', async () => {
+    await seed((db) => setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 })));
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertFails(setDoc(doc(carol, 'joinRequests/req1'), {
       id: 'req1', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+    }));
+  });
+
+  // Regression coverage for the duplicate-join-request bug: the deterministic
+  // groupID_requesterID doc id means a second request lands on the same
+  // document, so it goes through the update rule (not create) and must be
+  // explicitly rejected while still pending rather than silently succeeding
+  // as a second write — which is what let an admin see the same requester
+  // twice with one row stuck pending forever.
+  it('requesting to join again while already pending is rejected, not a silent duplicate', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 }));
+      await setDoc(doc(db, 'joinRequests/group1_carol'), {
+        id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+      });
+    });
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertFails(setDoc(doc(carol, 'joinRequests/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: 'again', createdAt: Timestamp.now(),
+      state: 'pending', decidedByUserID: null, decidedAt: null,
+    }));
+  });
+
+  it('re-requesting after an earlier denial resets the same doc back to pending', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 }));
+      await setDoc(doc(db, 'joinRequests/group1_carol'), {
+        id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'denied', decidedByUserID: 'alice', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+      });
+    });
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertSucceeds(setDoc(doc(carol, 'joinRequests/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+    }));
+  });
+
+  it('re-requesting after an earlier approval whose membership has since ended (e.g. removal) also resets to pending', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'entitlements/carol'), entitlementData({ userID: 'carol', isProUser: true, tier1Credits: 0 }));
+      await setDoc(doc(db, 'memberships/group1_carol'), {
+        id: 'group1_carol', groupID: 'group1', userID: 'carol', role: 'member',
+        status: 'left', source: 'request', joinedAt: Timestamp.now(), leftAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, 'joinRequests/group1_carol'), {
+        id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'approved', decidedByUserID: 'alice', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+      });
+    });
+    const carol = testEnv.authenticatedContext('carol').firestore();
+    await assertSucceeds(setDoc(doc(carol, 'joinRequests/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
+      state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
+    }));
+  });
+
+  it('a different user cannot reset someone else\'s denied request back to pending', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'entitlements/bob'), entitlementData({ userID: 'bob', isProUser: true, tier1Credits: 0 }));
+      await setDoc(doc(db, 'joinRequests/group1_carol'), {
+        id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
+        state: 'denied', decidedByUserID: 'alice', createdAt: Timestamp.now(), decidedAt: Timestamp.now(),
+      });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'joinRequests/group1_carol'), {
+      id: 'group1_carol', groupID: 'group1', requesterID: 'carol', note: null,
       state: 'pending', decidedByUserID: null, createdAt: Timestamp.now(), decidedAt: null,
     }));
   });

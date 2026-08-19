@@ -285,6 +285,13 @@ struct CreateEditRecipeView: View {
     @State private var isPresentingAuthorPrompt = false
     @State private var authorPromptWasHandled = false
 
+    // Guards against a double-tap on Save spawning two concurrent saves
+    // (each inserting its own Recipe), and freezes the title that passed
+    // validation so a later async step (location fetch, author prompt)
+    // can't save under a title the user has since cleared or changed.
+    @State private var isSaving = false
+    @State private var pendingSaveTitle = ""
+
     // MARK: - Inspiration credit (Edit mode only — see canOfferInspirationCredit)
     @State private var isAddingInspirationCredit = false
     @State private var inspirationCreditName = ""
@@ -510,7 +517,7 @@ struct CreateEditRecipeView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: save)
+                    Button("Save", action: save).disabled(isSaving)
                 }
             }
             .confirmationDialog(
@@ -1089,6 +1096,8 @@ struct CreateEditRecipeView: View {
     /// they've set one, otherwise the dismissable author prompt (which
     /// itself calls `finishSave` once resolved).
     private func save() {
+        guard !isSaving else { return }
+
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasIngredientContent = ingredientRows.contains { !$0.isBlank }
         let hasStepContent = stepRows.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -1113,6 +1122,8 @@ struct CreateEditRecipeView: View {
             }
         }
         validationMessage = nil
+        isSaving = true
+        pendingSaveTitle = trimmedTitle
 
         guard case .edit = mode else {
             if let importedAuthorLineage {
@@ -1135,7 +1146,16 @@ struct CreateEditRecipeView: View {
     }
 
     private func finishSave(authorLineage: String?) {
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Uses the title validated by save() at the moment Save was tapped,
+        // not whatever's live in the title field now — the author-name
+        // lookup above this can take a network round trip, during which
+        // the user could have cleared or edited the title field.
+        let trimmedTitle = pendingSaveTitle
+        guard !trimmedTitle.isEmpty else {
+            isSaving = false
+            validationMessage = "Give your recipe a title."
+            return
+        }
 
         let recipe: Recipe
         switch mode {
@@ -1213,8 +1233,10 @@ struct CreateEditRecipeView: View {
 
         do {
             try modelContext.save()
+            isSaving = false
             dismiss()
         } catch {
+            isSaving = false
             validationMessage = "Couldn't save this recipe: \(error.localizedDescription)"
         }
     }

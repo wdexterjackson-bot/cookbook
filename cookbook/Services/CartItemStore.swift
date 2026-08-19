@@ -14,10 +14,13 @@ import SwiftData
 enum CartItemStore {
     /// "Second add [from the same recipe] is a no-op with the button
     /// already in its 'added' state — not a duplicate row." Matches on
-    /// (owner, source recipe, display text) — manually-added items
-    /// (sourceRecipeID == nil) are never deduped against each other.
-    static func isInCart(ownerID: String, sourceRecipeID: String, displayText: String, in context: ModelContext) -> Bool {
-        existingItem(ownerID: ownerID, sourceRecipeID: sourceRecipeID, displayText: displayText, in: context) != nil
+    /// (owner, source recipe, source ingredient) — the ingredient's own
+    /// stable id, not its editable displayText (see CartItem.sourceIngredientID)
+    /// — so renaming the item in the cart doesn't desync the "already
+    /// added" button or let a re-tap insert a duplicate. Manually-added
+    /// items (sourceRecipeID == nil) are never deduped against each other.
+    static func isInCart(ownerID: String, sourceRecipeID: String, sourceIngredientID: UUID, in context: ModelContext) -> Bool {
+        existingItem(ownerID: ownerID, sourceRecipeID: sourceRecipeID, sourceIngredientID: sourceIngredientID, in: context) != nil
     }
 
     @discardableResult
@@ -28,9 +31,10 @@ enum CartItemStore {
         unit: String?,
         sourceRecipeID: String,
         sourceRecipeTitleSnapshot: String,
+        sourceIngredientID: UUID,
         in context: ModelContext
     ) throws -> CartItem {
-        if let existing = existingItem(ownerID: ownerID, sourceRecipeID: sourceRecipeID, displayText: displayText, in: context) {
+        if let existing = existingItem(ownerID: ownerID, sourceRecipeID: sourceRecipeID, sourceIngredientID: sourceIngredientID, in: context) {
             return existing
         }
         let item = CartItem(
@@ -39,7 +43,8 @@ enum CartItemStore {
             quantityValue: quantityValue,
             unit: unit,
             sourceRecipeID: sourceRecipeID,
-            sourceRecipeTitleSnapshot: sourceRecipeTitleSnapshot
+            sourceRecipeTitleSnapshot: sourceRecipeTitleSnapshot,
+            sourceIngredientID: sourceIngredientID
         )
         context.insert(item)
         try context.save()
@@ -94,10 +99,10 @@ enum CartItemStore {
         return (try? context.fetch(descriptor)) ?? []
     }
 
-    private static func existingItem(ownerID: String, sourceRecipeID: String, displayText: String, in context: ModelContext) -> CartItem? {
+    private static func existingItem(ownerID: String, sourceRecipeID: String, sourceIngredientID: UUID, in context: ModelContext) -> CartItem? {
         let descriptor = FetchDescriptor<CartItem>(
             predicate: #Predicate { item in
-                item.ownerID == ownerID && item.sourceRecipeID == sourceRecipeID && item.displayText == displayText
+                item.ownerID == ownerID && item.sourceRecipeID == sourceRecipeID && item.sourceIngredientID == sourceIngredientID
             }
         )
         return (try? context.fetch(descriptor))?.first

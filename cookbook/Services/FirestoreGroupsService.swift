@@ -211,8 +211,21 @@ final class FirestoreGroupsService: GroupsServicing {
             )
         }
 
+        // Deterministic id so a second request from this person for this
+        // group lands on the same document — rejected outright while still
+        // pending, or reset to a fresh pending request otherwise (denied,
+        // cancelled, expired, or approved-then-later-removed — the
+        // isActiveMember guard above already ruled out "still an active
+        // member") — instead of creating a duplicate doc an admin would see
+        // as two separate rows, one of them stuck pending forever.
+        let requestID = JoinRequest.compositeID(groupID: groupID, requesterID: requesterID)
+        let requestRef = db.collection("joinRequests").document(requestID)
+        if let existing = try await requestRef.getDocument().data(as: JoinRequest?.self), existing.state == .pending {
+            throw GroupsServiceError.joinRequestAlreadyPending
+        }
+
         let request = JoinRequest(
-            id: db.collection("joinRequests").document().documentID,
+            id: requestID,
             groupID: groupID,
             requesterID: requesterID,
             note: note,
@@ -221,7 +234,7 @@ final class FirestoreGroupsService: GroupsServicing {
             createdAt: .now,
             decidedAt: nil
         )
-        try db.collection("joinRequests").document(request.id).setData(from: request)
+        try requestRef.setData(from: request)
         return request
     }
 

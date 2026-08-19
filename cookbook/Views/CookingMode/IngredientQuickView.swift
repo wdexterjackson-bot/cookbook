@@ -73,6 +73,7 @@ struct IngredientQuickView: View {
                         unit: ingredient.unit,
                         sourceRecipeID: sourceRecipeID,
                         sourceRecipeTitleSnapshot: recipe.title,
+                        sourceIngredientID: ingredient.id,
                         in: modelContext
                     )
                 }
@@ -129,6 +130,7 @@ struct IngredientQuickView: View {
                 ownerID: accountState.currentOwnerID,
                 sourceRecipeID: recipe.id.uuidString,
                 sourceRecipeTitleSnapshot: recipe.title,
+                sourceIngredientID: ingredient.id,
                 displayText: scaledDisplayText,
                 quantityValue: scaledValue,
                 unit: ingredient.unit

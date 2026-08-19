@@ -26,6 +26,7 @@ enum GroupsServiceError: Error, Equatable {
     case lastAdminCannotLeaveOrBeDemoted
     case alreadyMember
     case invalidState
+    case joinRequestAlreadyPending
 }
 
 extension GroupsServiceError: LocalizedError {
@@ -42,6 +43,7 @@ extension GroupsServiceError: LocalizedError {
         case .lastAdminCannotLeaveOrBeDemoted: return "You're the last administrator — promote someone else first."
         case .alreadyMember: return "You're already a member of this group."
         case .invalidState: return "That action isn't available right now."
+        case .joinRequestAlreadyPending: return "You already have a pending request to join this group."
         }
     }
 }

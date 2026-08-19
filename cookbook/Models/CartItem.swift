@@ -35,6 +35,12 @@ final class CartItem {
     /// Captured at add-time so the group label still makes sense if the
     /// source recipe is later renamed, unpublished, or deleted.
     var sourceRecipeTitleSnapshot: String?
+    /// The originating Ingredient's own stable id — identity for dedup
+    /// ("already in cart?") purposes. Deliberately NOT displayText: this
+    /// item's displayText is user-editable in the cart itself, so matching
+    /// on text would let a rename desync the "already added" button on the
+    /// recipe screen and let a re-tap insert a duplicate row.
+    var sourceIngredientID: UUID?
 
     var checked: Bool
     var createdAt: Date
@@ -45,7 +51,8 @@ final class CartItem {
         quantityValue: Double? = nil,
         unit: String? = nil,
         sourceRecipeID: String? = nil,
-        sourceRecipeTitleSnapshot: String? = nil
+        sourceRecipeTitleSnapshot: String? = nil,
+        sourceIngredientID: UUID? = nil
     ) {
         self.id = UUID()
         self.ownerID = ownerID
@@ -54,6 +61,7 @@ final class CartItem {
         self.unit = unit
         self.sourceRecipeID = sourceRecipeID
         self.sourceRecipeTitleSnapshot = sourceRecipeTitleSnapshot
+        self.sourceIngredientID = sourceIngredientID
         self.checked = false
         self.createdAt = .now
     }
