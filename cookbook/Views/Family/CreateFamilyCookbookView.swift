@@ -14,8 +14,8 @@
 import SwiftUI
 
 private enum CreationDestination: String, CaseIterable, Identifiable {
-    case newGroup = "New Group"
-    case existingGroup = "Existing Group"
+    case newGroup = "New Community"
+    case existingGroup = "Existing Community"
     var id: String { rawValue }
 }
 
@@ -63,8 +63,8 @@ struct CreateFamilyCookbookView: View {
                         .pickerStyle(.segmented)
 
                         if destination == .existingGroup {
-                            Picker("Group", selection: $selectedExistingGroupID) {
-                                Text("Choose a Group").tag(String?.none)
+                            Picker("Community Cookbook", selection: $selectedExistingGroupID) {
+                                Text("Choose a Community Cookbook").tag(String?.none)
                                 ForEach(adminGroups) { group in
                                     Text(group.name).tag(String?.some(group.id))
                                 }
@@ -116,7 +116,7 @@ struct CreateFamilyCookbookView: View {
             }
             .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
-            .navigationTitle(destination == .newGroup ? "Create a Family Cookbook" : "Add a Cookbook")
+            .navigationTitle(destination == .newGroup ? "Create a Community Cookbook" : "Add a Cookbook")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -149,11 +149,11 @@ struct CreateFamilyCookbookView: View {
         case .creatorOnly:
             return "Only you can approve join requests."
         case .anyAdministrator:
-            return "Any administrator can approve join requests — the normal setting for a family cookbook."
+            return "Any administrator can approve join requests — the normal setting for a community cookbook."
         case .anyUser:
             return "Any member, not just admins, can approve join requests."
         case .noApprovalNeeded:
-            return "Anyone can join instantly, without approval — meant for a cookbook you want genuinely open to everyone, not a typical family group."
+            return "Anyone can join instantly, without approval — meant for a cookbook you want genuinely open to everyone, not a typical community cookbook."
         }
     }
 
@@ -186,7 +186,11 @@ struct CreateFamilyCookbookView: View {
         switch destination {
         case .newGroup:
             let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
-            await gate.attempt(.groupCreation, outcome: EntitlementGate.forGroupCreation(entitlement)) {
+            await gate.attempt(
+                .groupCreation,
+                outcome: EntitlementGate.forGroupCreation(entitlement),
+                recheck: { EntitlementGate.forGroupCreation($0) }
+            ) {
                 await createNewGroup(userID: userID)
             }
         case .existingGroup:
@@ -224,7 +228,7 @@ struct CreateFamilyCookbookView: View {
             )
             dismiss()
         } catch GroupsServiceError.insufficientCredits {
-            errorMessage = "You don't have a Family Cookbook creation credit available."
+            errorMessage = "You don't have a Community Cookbook creation credit available."
         } catch {
             errorMessage = error.localizedDescription
         }

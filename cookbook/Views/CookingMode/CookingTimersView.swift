@@ -40,7 +40,7 @@ struct CookingTimersView: View {
             }
             .navigationTitle("Timers")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
             }

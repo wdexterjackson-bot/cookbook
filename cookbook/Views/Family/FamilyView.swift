@@ -26,7 +26,7 @@ struct FamilyView: View {
             List {
                 if entries.isEmpty && !isLoading {
                     ContentUnavailableView(
-                        "No Family Cookbooks Yet",
+                        "No Community Cookbooks Yet",
                         systemImage: "person.3",
                         description: Text("Create one, or find an existing one to request to join.")
                     )
@@ -52,24 +52,24 @@ struct FamilyView: View {
             }
             .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
-            .navigationTitle("Family")
+            .navigationTitle("Community Cookbooks")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button {
                             isPresentingCreate = true
                         } label: {
-                            Label("Create a Family Cookbook", systemImage: "plus")
+                            Label("Create a Community Cookbook", systemImage: "plus")
                         }
                         Button {
                             isPresentingSearch = true
                         } label: {
-                            Label("Find a Family Cookbook", systemImage: "magnifyingglass")
+                            Label("Find a Community Cookbook", systemImage: "magnifyingglass")
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
-                    .accessibilityLabel("Family Cookbook actions")
+                    .accessibilityLabel("Community Cookbook actions")
                 }
             }
             .sheet(isPresented: $isPresentingCreate) {

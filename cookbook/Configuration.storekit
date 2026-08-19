@@ -8,7 +8,7 @@
       "internalID" : "83AF5E48-799E-45D8-8631-DCE7BB8CC6A3",
       "localizations" : [
         {
-          "description" : "Lifetime ability to join and connect with unlimited family/friends' cookbooks. One-time purchase, no subscription.",
+          "description" : "Lifetime ability to join and connect with unlimited Community Cookbooks. One-time purchase, no subscription.",
           "displayName" : "Pro User",
           "locale" : "en_US"
         }
@@ -23,13 +23,13 @@
       "internalID" : "351DF1F7-808A-401F-BAD7-E7CDCD9FF624",
       "localizations" : [
         {
-          "description" : "One credit to create a new Family Cookbook you can name, invite people to, and administer.",
-          "displayName" : "Family Cookbook Credit",
+          "description" : "One credit to create a new Community Cookbook you can name, invite people to, and administer.",
+          "displayName" : "Community Cookbook Credit",
           "locale" : "en_US"
         }
       ],
       "productID" : "VibeApp.cookbook.groupCreationCredit",
-      "referenceName" : "Family Cookbook Credit",
+      "referenceName" : "Community Cookbook Credit",
       "type" : "Consumable"
     }
   ],
@@ -58,7 +58,7 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "A year of the same ability to join and connect with unlimited family/friends' cookbooks that the lifetime Pro User purchase grants. Auto-renews yearly unless cancelled.",
+              "description" : "A year of the same ability to join and connect with unlimited Community Cookbooks that the lifetime Pro User purchase grants. Auto-renews yearly unless cancelled.",
               "displayName" : "Annual Pro Membership",
               "locale" : "en_US"
             }

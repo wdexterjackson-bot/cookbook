@@ -113,7 +113,7 @@ struct RecipeDetailView: View {
                     Button {
                         isPresentingPublish = true
                     } label: {
-                        Label("Publish to a Family Cookbook", systemImage: "person.3")
+                        Label("Publish to a Community Cookbook", systemImage: "person.3")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -132,7 +132,8 @@ struct RecipeDetailView: View {
                 recipe: recipe,
                 groupsService: FirestoreGroupsService(),
                 publicationsService: FirestorePublicationsService(),
-                photoUploadService: FirebaseRecipePhotoUploadService()
+                photoUploadService: FirebaseRecipePhotoUploadService(),
+                entitlementService: FirestoreEntitlementService()
             )
         }
         .cartToast($cartToastMessage)

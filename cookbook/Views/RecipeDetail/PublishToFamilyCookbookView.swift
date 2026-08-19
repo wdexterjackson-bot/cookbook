@@ -16,6 +16,7 @@ struct PublishToFamilyCookbookView: View {
     let groupsService: GroupsServicing
     let publicationsService: PublicationsServicing
     let photoUploadService: RecipePhotoUploadServicing
+    let entitlementService: EntitlementServicing
 
     @Environment(AccountState.self) private var accountState
     @Environment(\.dismiss) private var dismiss
@@ -27,15 +28,18 @@ struct PublishToFamilyCookbookView: View {
     @State private var errorMessage: String?
     @State private var statusMessage: String?
     @State private var allowComments = false
+    /// Photo upload is Annual Pro Membership-exclusive — see
+    /// RecipePublishingCoordinator's header comment.
+    @State private var isActiveAnnualProMember = false
 
     var body: some View {
         NavigationStack {
             List {
                 if eligibleCookbooks.isEmpty && !isLoading {
                     ContentUnavailableView(
-                        "No Family Cookbooks to Publish To",
+                        "No Community Cookbooks to Publish To",
                         systemImage: "person.3",
-                        description: Text("Join or create a Family Cookbook first, or ask an admin to allow member publishing.")
+                        description: Text("Join or create a Community Cookbook first, or ask an admin to allow member publishing.")
                     )
                 } else {
                     Section {
@@ -72,7 +76,7 @@ struct PublishToFamilyCookbookView: View {
             }
             .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
-            .navigationTitle("Publish to a Family Cookbook")
+            .navigationTitle("Publish to a Community Cookbook")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -83,6 +87,10 @@ struct PublishToFamilyCookbookView: View {
             }
             .task {
                 await loadEligibleCookbooks()
+                if let userID = accountState.currentUserID {
+                    let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+                    isActiveAnnualProMember = entitlement?.isActiveAnnualProMember == true
+                }
             }
         }
     }
@@ -130,6 +138,7 @@ struct PublishToFamilyCookbookView: View {
         do {
             let photoUploadSucceeded = try await RecipePublishingCoordinator.publish(
                 recipe, to: entry.group, cookbook: entry.cookbook, ownerUserID: userID, commentsEnabled: allowComments,
+                isActiveAnnualProMember: isActiveAnnualProMember,
                 publicationsService: publicationsService, photoUploadService: photoUploadService
             )
             publishedCookbookIDs.insert(entry.cookbook.id)
@@ -148,7 +157,8 @@ struct PublishToFamilyCookbookView: View {
         recipe: recipe,
         groupsService: InMemoryGroupsService(),
         publicationsService: InMemoryPublicationsService(),
-        photoUploadService: FakeRecipePhotoUploadService()
+        photoUploadService: FakeRecipePhotoUploadService(),
+        entitlementService: InMemoryEntitlementService()
     )
     .environment(AccountState(authService: FakeAuthService()))
 }

@@ -35,6 +35,7 @@ struct PublishCookbookToFamilyCookbookView: View {
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let publicationsService: PublicationsServicing = FirestorePublicationsService()
     private let photoUploadService: RecipePhotoUploadServicing = FirebaseRecipePhotoUploadService()
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
 
     private var ownedCookbooks: [Cookbook] {
         allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
@@ -89,11 +90,11 @@ struct PublishCookbookToFamilyCookbookView: View {
                         if isLoadingGroups {
                             ProgressView()
                         } else if eligibleCookbooks.isEmpty {
-                            Text("No Family Cookbooks you can publish to yet.")
+                            Text("No Community Cookbooks you can publish to yet.")
                                 .foregroundStyle(.secondary)
                         } else {
-                            Picker("Family Cookbook", selection: $selectedGroupCookbookID) {
-                                Text("Choose a Family Cookbook").tag(String?.none)
+                            Picker("Community Cookbook", selection: $selectedGroupCookbookID) {
+                                Text("Choose a Community Cookbook").tag(String?.none)
                                 ForEach(eligibleCookbooks, id: \.cookbook.id) { entry in
                                     Text(entry.cookbook.cookbookName).tag(String?.some(entry.cookbook.id))
                                 }
@@ -180,10 +181,16 @@ struct PublishCookbookToFamilyCookbookView: View {
         failedTitles = []
         titlesWithFailedPhotos = []
 
+        // Fetched once and reused for every recipe in this batch, not
+        // per-recipe — the publisher's membership doesn't change mid-run.
+        let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+        let isActiveAnnualProMember = entitlement?.isActiveAnnualProMember == true
+
         for recipe in recipesInSelectedCookbook {
             do {
                 let photoUploadSucceeded = try await RecipePublishingCoordinator.publish(
                     recipe, to: group, cookbook: entry.cookbook, ownerUserID: userID,
+                    isActiveAnnualProMember: isActiveAnnualProMember,
                     publicationsService: publicationsService, photoUploadService: photoUploadService
                 )
                 publishedCount += 1

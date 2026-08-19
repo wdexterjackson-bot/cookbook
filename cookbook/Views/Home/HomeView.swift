@@ -488,7 +488,7 @@ struct HomeView: View {
                 }
 
                 gettingStartedRow(
-                    message: "Search for a public Family Cookbook and join it.",
+                    message: "Search for a public Community Cookbook and join it.",
                     buttonTitle: "Connect to a Community Cookbook"
                 ) {
                     isPresentingCommunitySearch = true
@@ -683,7 +683,7 @@ struct HomeView: View {
     /// group has been created and flipped on.
     @ViewBuilder
     private func mfbRow(_ mfbGroup: FamilyGroup) -> some View {
-        messageRow(badge: "MFB", title: "Explore \(mfbGroup.name) — Free · Read Only · Sample Family Cookbook") {
+        messageRow(badge: "MFB", title: "Explore \(mfbGroup.name) — Free · Read Only · Sample Community Cookbook") {
             if isMFBMember, let entry = joinedGroups.first(where: { $0.group.isMFB == true }) {
                 NavigationLink {
                     GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
@@ -1134,7 +1134,7 @@ struct HomeView: View {
             try await PersonalCookbookSyncCoordinator.push(
                 cookbook, recipes: recipesInCookbook, ownerUserID: ownerUserID,
                 syncService: syncService, photoUploadService: photoUploadService,
-                isActiveProMember: entitlement?.isEffectivelyProUser ?? false
+                isActiveProMember: entitlement?.isActiveAnnualProMember == true
             )
             try? modelContext.save()
             await loadCloudSummaries()
@@ -1201,7 +1201,11 @@ struct HomeView: View {
         defer { busyFeaturedGroupIDs.remove(group.id) }
 
         let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
-        await gate.attempt(.groupJoin, outcome: EntitlementGate.forGroupJoin(entitlement, group: group)) {
+        await gate.attempt(
+            .groupJoin,
+            outcome: EntitlementGate.forGroupJoin(entitlement, group: group),
+            recheck: { EntitlementGate.forGroupJoin($0, group: group) }
+        ) {
             do {
                 _ = try await groupsService.requestToJoin(groupID: group.id, requesterID: userID, note: nil)
                 await loadGroupData()

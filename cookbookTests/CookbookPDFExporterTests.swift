@@ -60,25 +60,58 @@ struct CookbookPDFExporterTests {
         #expect(document?.pageCount == 2)
     }
 
-    @Test func includesRecipeIdentifierUnderTheName() {
+    @Test func omitsTheRecipeIdentifierEntirely() {
         let cookbook = Cookbook(ownerID: "owner-1", title: "Test Cookbook")
         let recipe = makeRecipe(cookbookID: cookbook.id, title: "Cornbread")
 
         let data = CookbookPDFExporter.generatePDF(for: cookbook, recipes: [recipe])
         let text = extractedText(from: data)
 
-        #expect(text.contains(recipe.id.uuidString))
+        #expect(!text.contains(recipe.id.uuidString))
     }
 
-    @Test func omitsNotesEvenWhenPresent() {
+    @Test func includesNotesWhenPresent() {
         let cookbook = Cookbook(ownerID: "owner-1", title: "Test Cookbook")
-        let recipe = makeRecipe(cookbookID: cookbook.id, title: "Cornbread", notes: "SEKRIT_NOTE_TEXT")
+        let recipe = makeRecipe(cookbookID: cookbook.id, title: "Cornbread", notes: "Best served warm.")
 
         let data = CookbookPDFExporter.generatePDF(for: cookbook, recipes: [recipe])
         let text = extractedText(from: data)
 
-        #expect(!text.contains("SEKRIT_NOTE_TEXT"))
-        #expect(!text.contains("Notes"))
+        #expect(text.contains("Notes:"))
+        #expect(text.contains("Best served warm."))
+    }
+
+    @Test func alwaysShowsNotesAndVideosHeadingsEvenWhenEmpty() {
+        let cookbook = Cookbook(ownerID: "owner-1", title: "Test Cookbook")
+        let recipe = makeRecipe(cookbookID: cookbook.id, title: "Cornbread", notes: "")
+
+        let data = CookbookPDFExporter.generatePDF(for: cookbook, recipes: [recipe])
+        let text = extractedText(from: data)
+
+        #expect(text.contains("Notes:"))
+        #expect(text.contains("Videos:"))
+    }
+
+    @Test func includesVideoURLsWhenPresent() {
+        let cookbook = Cookbook(ownerID: "owner-1", title: "Test Cookbook")
+        let recipe = makeRecipe(cookbookID: cookbook.id, title: "Cornbread")
+        recipe.videoURLs = ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+
+        let data = CookbookPDFExporter.generatePDF(for: cookbook, recipes: [recipe])
+        let text = extractedText(from: data)
+
+        #expect(text.contains("Videos:"))
+        #expect(text.contains("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+    }
+
+    @Test func bulletsEachIngredientLine() {
+        let cookbook = Cookbook(ownerID: "owner-1", title: "Test Cookbook")
+        let recipe = makeRecipe(cookbookID: cookbook.id, title: "Cornbread", ingredient: "2 cups cornmeal")
+
+        let data = CookbookPDFExporter.generatePDF(for: cookbook, recipes: [recipe])
+        let text = extractedText(from: data)
+
+        #expect(text.contains("•"))
     }
 
     @Test func ordersRecipesByChapterThenAlphabeticallyThenUnfiledLast() {
@@ -108,7 +141,7 @@ struct CookbookPDFExporterTests {
         }
     }
 
-    @Test func includesIngredientsAndStepsButNoNotesLabel() {
+    @Test func includesIngredientsAndStepsInSamplePDFFormat() {
         let cookbook = Cookbook(ownerID: "owner-1", title: "Test Cookbook")
         let recipe = makeRecipe(
             cookbookID: cookbook.id,
@@ -121,12 +154,12 @@ struct CookbookPDFExporterTests {
         let data = CookbookPDFExporter.generatePDF(for: cookbook, recipes: [recipe])
         let text = extractedText(from: data)
 
-        #expect(text.contains("Cornbread"))
-        #expect(text.contains("Mary Jackson of Memphis, TN"))
+        #expect(text.contains("Name: Cornbread"))
+        #expect(text.contains("By: Mary Jackson of Memphis, TN"))
         #expect(text.contains("2 cups cornmeal"))
         #expect(text.contains("Bake at"))
-        #expect(text.contains("Ingredients"))
-        #expect(text.contains("Directions"))
+        #expect(text.contains("Ingredients:"))
+        #expect(text.contains("Directions:"))
     }
 
     @Test func emptyRecipeListProducesNoRecipeContent() {

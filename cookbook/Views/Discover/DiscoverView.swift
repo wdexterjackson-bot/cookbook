@@ -19,6 +19,8 @@ struct DiscoverView: View {
         var id: String { rawValue }
     }
 
+    @Environment(\.dismiss) private var dismiss
+
     @State private var sourceMode: SourceMode = .browse
     @State private var query = ""
     @State private var diet: DietPreference = DietaryPreferencesStore.current().defaultDiet
@@ -61,6 +63,9 @@ struct DiscoverView: View {
             .background(Color.potluckCream)
             .navigationTitle("Discover")
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
                 if sourceMode == .browse {
                     ToolbarItem(placement: .primaryAction) {
                         Button {

@@ -18,15 +18,30 @@ struct MembershipSummaryView: View {
 
     private var isProUser: Bool { entitlement?.isProUser ?? false }
 
+    /// Three levels: Standard, Pro User, Annual Pro Membership. An active
+    /// Annual Pro Membership takes precedence over the plain lifetime Pro
+    /// User flag when both happen to be true — it's the more specific,
+    /// currently-active status of the two, and the one worth surfacing
+    /// while it hasn't expired.
+    private var membershipLevelLabel: String {
+        if entitlement?.isActiveAnnualProMember == true {
+            return "Annual Pro Membership"
+        } else if isProUser {
+            return "Pro User"
+        } else {
+            return "Standard User"
+        }
+    }
+
     var body: some View {
-        LabeledContent("Membership Level", value: isProUser ? "Pro User" : "Standard User")
+        LabeledContent("Membership Level", value: membershipLevelLabel)
         if let tier1Credits = entitlement?.tier1Credits, tier1Credits > 0 {
             LabeledContent("Pro User Credits") {
                 creditValueText(count: tier1Credits, expiresAt: entitlement?.tier1ExpiresAt)
             }
         }
         if let tier2Credits = entitlement?.tier2Credits, tier2Credits > 0 {
-            LabeledContent("Family Cookbook Credits") {
+            LabeledContent("Community Cookbook Credits") {
                 creditValueText(count: tier2Credits, expiresAt: entitlement?.tier2ExpiresAt)
             }
         }

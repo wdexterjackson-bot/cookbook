@@ -11,6 +11,16 @@
 //  the existing Publication in place (LIN-001) — never worries about
 //  create-vs-update.
 //
+//  Photo upload is Annual Pro Membership-exclusive (storing an image in
+//  the cloud, same rule PersonalCookbookSyncCoordinator already enforces
+//  for cloud-synced personal cookbooks) — a non-Annual publisher's recipe
+//  still publishes normally, just without a new photo attached. A
+//  republish by someone who was Annual at an earlier publish but has
+//  since lapsed never strips the photo already there — it carries the
+//  existing Publication's coverImageURL forward unchanged, matching the
+//  sync coordinator's own "never delete already-synced state just
+//  because the gate check ran mid-lapse" precedent.
+//
 
 import Foundation
 
@@ -27,12 +37,13 @@ enum RecipePublishingCoordinator {
         cookbook: GroupCookbook,
         ownerUserID: String,
         commentsEnabled: Bool = false,
+        isActiveAnnualProMember: Bool,
         publicationsService: PublicationsServicing,
         photoUploadService: RecipePhotoUploadServicing
     ) async throws -> Bool {
         var coverImageURL: String?
         var photoUploadSucceeded = true
-        if let filename = recipe.heroPhotoFilename, let imageData = PhotoStore.data(for: filename) {
+        if isActiveAnnualProMember, let filename = recipe.heroPhotoFilename, let imageData = PhotoStore.data(for: filename) {
             // Best-effort: a photo upload hiccup shouldn't block publishing
             // the recipe's text content — but it's still worth reporting
             // back to the caller rather than silently pretending it worked.
@@ -47,6 +58,11 @@ enum RecipePublishingCoordinator {
             } catch {
                 photoUploadSucceeded = false
             }
+        } else if !isActiveAnnualProMember {
+            let existingID = Publication.compositeID(
+                groupID: group.id, cookbookID: cookbook.id, sourceRecipeID: recipe.id.uuidString, ownerUserID: ownerUserID
+            )
+            coverImageURL = try? await publicationsService.fetchPublication(id: existingID)?.content.coverImageURL
         }
 
         let content = PublicationContentSnapshot.make(from: recipe, coverImageURL: coverImageURL, groupName: group.name)

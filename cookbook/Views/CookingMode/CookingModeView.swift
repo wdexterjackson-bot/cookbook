@@ -391,7 +391,7 @@ private struct CookingModeVideoSheet: View {
             .navigationTitle("Video")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
             }

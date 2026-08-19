@@ -188,7 +188,11 @@ struct PublicGroupSearchContent: View {
     private func requestToJoin(_ group: FamilyGroup) async {
         guard let userID = accountState.currentUserID else { return }
         let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
-        await gate.attempt(.groupJoin, outcome: EntitlementGate.forGroupJoin(entitlement, group: group)) {
+        await gate.attempt(
+            .groupJoin,
+            outcome: EntitlementGate.forGroupJoin(entitlement, group: group),
+            recheck: { EntitlementGate.forGroupJoin($0, group: group) }
+        ) {
             do {
                 _ = try await groupsService.requestToJoin(groupID: group.id, requesterID: userID, note: nil)
                 requestedGroupIDs.insert(group.id)

@@ -133,12 +133,13 @@ struct AccountView: View {
 
                     Section("Membership") {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(entitlement?.isProUser == true ? "Pro User" : "Standard User")
+                            Text(membershipStatusLabel)
                                 .font(.subheadline.weight(.semibold))
-                            Button(entitlement?.isProUser == true ? "Purchases" : "Upgrade") {
+                            Button("Upgrade") {
                                 isPresentingMembership = true
                             }
                             .buttonStyle(.bordered)
+                            .disabled(entitlement?.isEffectivelyProUser == true)
                         }
                         .padding(.vertical, 2)
 
@@ -147,7 +148,7 @@ struct AccountView: View {
                         // same reasoning MembershipSummaryView already
                         // uses elsewhere. Not shown once already Pro —
                         // nothing left to spend it on.
-                        if let tier1Credits = entitlement?.tier1Credits, tier1Credits > 0, entitlement?.isProUser != true {
+                        if let tier1Credits = entitlement?.tier1Credits, tier1Credits > 0, entitlement?.isEffectivelyProUser != true {
                             membershipCreditRow(
                                 title: "Pro User Credit",
                                 count: tier1Credits,
@@ -174,7 +175,7 @@ struct AccountView: View {
 
                         if let tier2Credits = entitlement?.tier2Credits, tier2Credits > 0 {
                             membershipCreditRow(
-                                title: "Family Cookbook Credits",
+                                title: "Community Cookbook Credits",
                                 count: tier2Credits,
                                 expiresAt: entitlement?.tier2ExpiresAt,
                                 isBusy: false
@@ -249,7 +250,7 @@ struct AccountView: View {
                         }
                         .disabled(isDeletingAccount)
                     } footer: {
-                        Text("Permanently deletes your account and everything tied to it — recipes, cookbooks, and Family Cookbook memberships. This cannot be undone.")
+                        Text("Permanently deletes your account and everything tied to it — recipes, cookbooks, and Community Cookbook memberships. This cannot be undone.")
                     }
 
                     if isDeletingAccount {
@@ -280,7 +281,7 @@ struct AccountView: View {
             .background(Color.potluckCream)
             .navigationTitle("Account")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -341,6 +342,21 @@ struct AccountView: View {
                     Task { await loadEntitlement() }
                 }
             }
+        }
+    }
+
+    /// Three levels: Standard, Pro User, Annual Pro Membership. An active
+    /// Annual Pro Membership takes precedence over the plain lifetime Pro
+    /// User flag when both happen to be true — it's the more specific,
+    /// currently-active status of the two, and the one worth surfacing
+    /// while it hasn't expired.
+    private var membershipStatusLabel: String {
+        if entitlement?.isActiveAnnualProMember == true {
+            return "Annual Pro Membership"
+        } else if entitlement?.isProUser == true {
+            return "Pro User"
+        } else {
+            return "Standard User"
         }
     }
 
@@ -552,7 +568,7 @@ private struct DeleteAccountConfirmationView: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("This permanently deletes your account and everything tied to it — your personal recipes, cookbooks, and Family Cookbook memberships. This cannot be undone.")
+                    Text("This permanently deletes your account and everything tied to it — your personal recipes, cookbooks, and Community Cookbook memberships. This cannot be undone.")
                         .foregroundStyle(.secondary)
                 }
                 Section {

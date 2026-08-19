@@ -3,14 +3,18 @@
 //  cookbook
 //
 //  Shared paywall gate for the two actions that cost a credit: creating a
-//  group/Family Cookbook (tier 2) and joining/connecting to one as a
+//  group/Community Cookbook (tier 2) and joining/connecting to one as a
 //  non-MFB cookbook (tier 1, i.e. becoming a Pro User). Every call site
 //  follows the same flow: already covered (MFB group, or already Pro) runs
 //  the action immediately; a spendable credit shows a yes/no confirm before
-//  spending it; no credit presents the purchase sheet instead. A purchase
-//  doesn't auto-resume the original action — the sheet just dismisses, and
-//  the user retries the same button, which by then either succeeds outright
-//  (Pro) or re-evaluates against the freshly bought credit.
+//  spending it; no credit presents the purchase sheet instead. A successful
+//  purchase auto-resumes the original action (see handlePurchaseSucceeded)
+//  rather than leaving the user to retry manually — polling briefly for the
+//  server-side purchase claim to land, since PurchaseCoordinator.purchase
+//  returns as soon as the claim doc is written, not once a Cloud Function
+//  has actually granted the credit. The purchased credit itself never
+//  expires, so a poll timeout just leaves the action pending for the next
+//  manual attempt rather than erroring — nothing is lost.
 //
 
 import SwiftUI
@@ -52,12 +56,13 @@ final class EntitlementGateCoordinator {
     private(set) var pendingKind: Kind?
     private var confirmCreditsAvailable = 0
     private var pendingAction: (() async -> Void)?
+    private var pendingRecheck: ((Entitlement?) -> EntitlementGateOutcome)?
 
     var confirmMessage: String {
         switch pendingKind {
         case .groupCreation:
             let n = confirmCreditsAvailable
-            return "Use one of your \(n) Family Cookbook creation credit\(n == 1 ? "" : "s") to create this cookbook?"
+            return "Use one of your \(n) Community Cookbook creation credit\(n == 1 ? "" : "s") to create this cookbook?"
         case .groupJoin:
             return "Use your free Pro User credit to connect with this family/friends' cookbook?"
         case nil:
@@ -67,10 +72,15 @@ final class EntitlementGateCoordinator {
 
     /// Runs `action` directly if this action is exempt from the gate;
     /// otherwise shows the confirm-or-purchase UI and `action` only runs
-    /// once the user confirms spending a credit.
+    /// once the user confirms spending a credit. `recheck` re-derives the
+    /// same `EntitlementGateOutcome` from a fresh entitlement snapshot —
+    /// needed by `handlePurchaseSucceeded` to know, after a purchase, what
+    /// to do next without the caller having to thread that logic through
+    /// again itself.
     func attempt(
         _ kind: Kind,
         outcome: EntitlementGateOutcome,
+        recheck: @escaping (Entitlement?) -> EntitlementGateOutcome,
         action: @escaping () async -> Void
     ) async {
         errorMessage = nil
@@ -80,11 +90,13 @@ final class EntitlementGateCoordinator {
         case .needsConfirmation(let credits):
             pendingKind = kind
             pendingAction = action
+            pendingRecheck = recheck
             confirmCreditsAvailable = credits
             isPresentingConfirm = true
         case .needsPurchase:
             pendingKind = kind
-            pendingAction = nil
+            pendingAction = action
+            pendingRecheck = recheck
             isPresentingPaywall = true
         }
     }
@@ -94,7 +106,49 @@ final class EntitlementGateCoordinator {
         isPresentingConfirm = false
         isBusy = true
         defer { isBusy = false }
+        await redeemAndRun(kind: kind, action: action, userID: userID, entitlementService: entitlementService)
+    }
 
+    /// Called once a purchase made specifically to unblock the pending
+    /// action reports success. The grant itself happens server-side (a
+    /// Cloud Function reacting to the purchase claim doc), so it may not
+    /// be reflected in the entitlement yet — this polls briefly rather
+    /// than assuming it already landed. On timeout it just leaves the
+    /// action pending for the user's next manual attempt: the credit
+    /// they bought doesn't expire, so nothing is lost by waiting.
+    func handlePurchaseSucceeded(userID: String, entitlementService: EntitlementServicing) async {
+        isPresentingPaywall = false
+        guard let kind = pendingKind, let action = pendingAction, let recheck = pendingRecheck else { return }
+        isBusy = true
+        defer { isBusy = false }
+
+        let maxAttempts = 8
+        for attemptIndex in 0..<maxAttempts {
+            let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+            switch recheck(entitlement) {
+            case .exempt:
+                await action()
+                return
+            case .needsConfirmation:
+                // Already paid specifically for this — spend the credit
+                // automatically instead of asking again.
+                await redeemAndRun(kind: kind, action: action, userID: userID, entitlementService: entitlementService)
+                return
+            case .needsPurchase:
+                if attemptIndex < maxAttempts - 1 {
+                    try? await Task.sleep(for: .seconds(1.5))
+                }
+            }
+        }
+        errorMessage = "Your purchase went through, but it's still applying — this can take a few moments. Your credit won't expire; just try again shortly."
+    }
+
+    private func redeemAndRun(
+        kind: Kind,
+        action: () async -> Void,
+        userID: String,
+        entitlementService: EntitlementServicing
+    ) async {
         switch kind {
         case .groupCreation:
             // tier2Credits is spent atomically inside createGroup itself —
@@ -118,6 +172,7 @@ final class EntitlementGateCoordinator {
         isPresentingConfirm = false
         pendingKind = nil
         pendingAction = nil
+        pendingRecheck = nil
     }
 }
 
@@ -158,7 +213,10 @@ extension View {
                     userID: userID,
                     purchaseService: purchaseService,
                     claimWriter: claimWriter,
-                    entitlementService: entitlementService
+                    entitlementService: entitlementService,
+                    onPurchaseSucceeded: {
+                        await coordinator.handlePurchaseSucceeded(userID: userID, entitlementService: entitlementService)
+                    }
                 )
             }
             .alert(

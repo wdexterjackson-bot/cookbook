@@ -5,10 +5,12 @@
 //  Renders a personal cookbook's recipes into a single PDF from the
 //  Administrator screen's "Export Cookbook to PDF" action — one recipe
 //  per page (chapter order, then alphabetically within a chapter, then
-//  unfiled recipes last), in the same Name:/By:/Section:/Ingredients/
-//  Directions layout Recipe_Import_Format.md documents for bulk import,
-//  since that's the reference format this was asked to match. Deliberately
-//  omits photos (text-only export) and the Notes section.
+//  unfiled recipes last). Layout/styling matches Sample.pdf (bundled in
+//  the app, linked from the Administrator screen) exactly, since that's
+//  also the format Recipe_Import_Format.md documents for bulk import —
+//  Name/By/Section/Ingredients/Directions/Notes/Videos, in that order,
+//  every heading always shown even when its section is empty. Deliberately
+//  omits photos (text-only export).
 //
 //  Pure CoreGraphics + CoreText rather than UIGraphicsPDFRenderer/AppKit
 //  printing APIs, so the same code runs unchanged on iOS, macOS, and
@@ -72,75 +74,79 @@ enum CookbookPDFExporter {
     private static func draw(_ recipe: Recipe, sectionTitle: String?, writer: PageWriter) {
         writer.beginNewPage()
 
-        writer.draw(labelValueLine(label: "Name: ", value: recipe.title), spacingAfter: 2)
-        writer.draw(NSAttributedString(string: recipe.id.uuidString, attributes: idAttributes), spacingAfter: 10)
+        writer.draw(NSAttributedString(string: "Name: \(recipe.title)", attributes: headingAttributes), spacingAfter: 3)
 
         if let author = recipe.authorLineage, !author.isEmpty {
-            writer.draw(labelValueLine(label: "By: ", value: author), spacingAfter: 10)
+            writer.draw(NSAttributedString(string: "By: \(author)", attributes: grayItalicAttributes), spacingAfter: 3)
         }
 
         if let sectionTitle, !sectionTitle.isEmpty {
-            writer.draw(labelValueLine(label: "Section: ", value: sectionTitle), spacingAfter: 14)
+            writer.draw(NSAttributedString(string: "Section: \(sectionTitle)", attributes: grayItalicAttributes), spacingAfter: 3)
         }
+        writer.addGap(8)
 
-        let ingredientSections = recipe.ingredientSections.sorted { $0.sortOrder < $1.sortOrder }
-        if !ingredientSections.isEmpty {
-            writer.draw(NSAttributedString(string: "Ingredients", attributes: headingAttributes), spacingAfter: 8)
-            for section in ingredientSections {
-                if let heading = section.heading, !heading.isEmpty {
-                    writer.draw(NSAttributedString(string: heading, attributes: subheadingAttributes), spacingAfter: 4)
-                }
-                for ingredient in section.ingredients.sorted(by: { $0.sortOrder < $1.sortOrder }) {
-                    writer.draw(NSAttributedString(string: ingredient.displayText, attributes: bodyAttributes), spacingAfter: 4)
-                }
+        writer.draw(NSAttributedString(string: "Ingredients:", attributes: headingAttributes), spacingAfter: 8)
+        for section in recipe.ingredientSections.sorted(by: { $0.sortOrder < $1.sortOrder }) {
+            if let heading = section.heading, !heading.isEmpty {
+                writer.draw(NSAttributedString(string: heading, attributes: subheadingAttributes), spacingAfter: 4)
             }
-            writer.addGap(10)
-        }
-
-        let stepSections = recipe.stepSections.sorted { $0.sortOrder < $1.sortOrder }
-        if !stepSections.isEmpty {
-            writer.draw(NSAttributedString(string: "Directions", attributes: headingAttributes), spacingAfter: 8)
-            var stepNumber = 1
-            for section in stepSections {
-                if let heading = section.heading, !heading.isEmpty {
-                    writer.draw(NSAttributedString(string: heading, attributes: subheadingAttributes), spacingAfter: 4)
-                }
-                for step in section.steps.sorted(by: { $0.sortOrder < $1.sortOrder }) {
-                    writer.draw(NSAttributedString(string: "\(stepNumber). \(step.text)", attributes: bodyAttributes), spacingAfter: 6)
-                    stepNumber += 1
-                }
+            for ingredient in section.ingredients.sorted(by: { $0.sortOrder < $1.sortOrder }) {
+                writer.draw(NSAttributedString(string: "•  \(ingredient.displayText)", attributes: bodyAttributes), spacingAfter: 4)
             }
         }
-    }
+        writer.addGap(10)
 
-    private static func labelValueLine(label: String, value: String) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: label, attributes: boldAttributes)
-        result.append(NSAttributedString(string: value, attributes: bodyAttributes))
-        return result
+        writer.draw(NSAttributedString(string: "Directions:", attributes: headingAttributes), spacingAfter: 8)
+        var stepNumber = 1
+        for section in recipe.stepSections.sorted(by: { $0.sortOrder < $1.sortOrder }) {
+            if let heading = section.heading, !heading.isEmpty {
+                writer.draw(NSAttributedString(string: heading, attributes: subheadingAttributes), spacingAfter: 4)
+            }
+            for step in section.steps.sorted(by: { $0.sortOrder < $1.sortOrder }) {
+                writer.draw(NSAttributedString(string: "\(stepNumber). \(step.text)", attributes: bodyAttributes), spacingAfter: 6)
+                stepNumber += 1
+            }
+        }
+        writer.addGap(10)
+
+        writer.draw(NSAttributedString(string: "Notes:", attributes: headingAttributes), spacingAfter: 6)
+        let trimmedNotes = recipe.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedNotes.isEmpty {
+            writer.draw(NSAttributedString(string: trimmedNotes, attributes: bodyAttributes), spacingAfter: 6)
+        }
+        writer.addGap(10)
+
+        writer.draw(NSAttributedString(string: "Videos:", attributes: headingAttributes), spacingAfter: 6)
+        for videoURL in recipe.videoURLs {
+            writer.draw(NSAttributedString(string: videoURL, attributes: bodyAttributes), spacingAfter: 4)
+        }
+        writer.addGap(14)
+
+        writer.drawDivider()
     }
 
     // MARK: - Styles
 
-    private static func ctFont(size: CGFloat, bold: Bool = false) -> CTFont {
+    private static func ctFont(size: CGFloat, bold: Bool = false, italic: Bool = false) -> CTFont {
         let base = CTFontCreateUIFontForLanguage(.system, size, nil) ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
-        guard bold else { return base }
-        return CTFontCreateCopyWithSymbolicTraits(base, size, nil, .traitBold, .traitBold) ?? base
+        var traits: CTFontSymbolicTraits = []
+        if bold { traits.insert(.traitBold) }
+        if italic { traits.insert(.traitItalic) }
+        guard !traits.isEmpty else { return base }
+        return CTFontCreateCopyWithSymbolicTraits(base, size, nil, traits, traits) ?? base
     }
 
     private static let blackColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
     private static let grayColor = CGColor(red: 0.45, green: 0.45, blue: 0.45, alpha: 1)
     private static let blueColor = CGColor(red: 0.16, green: 0.38, blue: 0.68, alpha: 1)
+    private static let dividerColor = CGColor(red: 0.16, green: 0.38, blue: 0.68, alpha: 0.4)
 
     private static let bodyAttributes: [NSAttributedString.Key: Any] = [
         kCTFontAttributeName as NSAttributedString.Key: ctFont(size: 12),
         kCTForegroundColorAttributeName as NSAttributedString.Key: blackColor,
     ]
-    private static let boldAttributes: [NSAttributedString.Key: Any] = [
-        kCTFontAttributeName as NSAttributedString.Key: ctFont(size: 12, bold: true),
-        kCTForegroundColorAttributeName as NSAttributedString.Key: blackColor,
-    ]
-    private static let idAttributes: [NSAttributedString.Key: Any] = [
-        kCTFontAttributeName as NSAttributedString.Key: ctFont(size: 9),
+    private static let grayItalicAttributes: [NSAttributedString.Key: Any] = [
+        kCTFontAttributeName as NSAttributedString.Key: ctFont(size: 11, italic: true),
         kCTForegroundColorAttributeName as NSAttributedString.Key: grayColor,
     ]
     private static let headingAttributes: [NSAttributedString.Key: Any] = [
@@ -196,6 +202,24 @@ enum CookbookPDFExporter {
             let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil)
             CTFrameDraw(frame, context)
             cursorY = originY - spacingAfter
+        }
+
+        /// A thin horizontal rule spanning the content width, closing out
+        /// one recipe's page — matches Sample.pdf's divider between the
+        /// end of a recipe's content and the page's remaining whitespace.
+        func drawDivider() {
+            let lineWidth: CGFloat = 1
+            if !pageIsOpen || cursorY - lineWidth < margin {
+                beginNewPage()
+            }
+            context.saveGState()
+            context.setStrokeColor(dividerColor)
+            context.setLineWidth(lineWidth)
+            context.move(to: CGPoint(x: margin, y: cursorY))
+            context.addLine(to: CGPoint(x: margin + contentWidth, y: cursorY))
+            context.strokePath()
+            context.restoreGState()
+            cursorY -= lineWidth
         }
     }
 }

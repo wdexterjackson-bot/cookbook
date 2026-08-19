@@ -43,7 +43,7 @@ struct MoreHubView: View {
         MoreMenuItem(title: "Messages", subtitle: "Invitations & requests", systemImage: "tray.fill", tint: .potluckSage),
         MoreMenuItem(title: "Friends", subtitle: "Add friends, manage requests", systemImage: "person.2.fill", tint: .potluckTomato),
         MoreMenuItem(title: "Administrator", subtitle: "Bulk recipe import", systemImage: "wrench.and.screwdriver.fill", tint: .potluckSunflower),
-        MoreMenuItem(title: "Discover New Cookbook Communities", subtitle: "Search & join public Family Cookbooks", systemImage: "person.3.fill", tint: .potluckTomato),
+        MoreMenuItem(title: "Discover New Cookbook Communities", subtitle: "Search & join public Community Cookbooks", systemImage: "person.3.fill", tint: .potluckTomato),
         MoreMenuItem(title: "Discover", subtitle: "Find recipes to import from the web", systemImage: "sparkle.magnifyingglass", tint: .potluckSage),
         MoreMenuItem(title: "Conversion Tool", subtitle: "Convert cooking measurements", systemImage: "arrow.left.arrow.right.circle.fill", tint: .potluckSunflower),
     ]

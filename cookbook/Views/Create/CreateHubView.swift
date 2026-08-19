@@ -62,7 +62,7 @@ struct CreateHubView: View {
                     Button {
                         activeSheet = .newFamilyCookbook
                     } label: {
-                        Label("New Family Cookbook", systemImage: "person.3")
+                        Label("New Community Cookbook", systemImage: "person.3")
                     }
                 }
             }

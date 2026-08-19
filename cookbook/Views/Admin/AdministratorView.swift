@@ -19,6 +19,9 @@ struct AdministratorView: View {
     @State private var isPresentingPublishCookbook = false
     @State private var isPresentingStandardizeRecipes = false
     @State private var isPresentingExportPDF = false
+    #if !os(tvOS)
+    @State private var isPresentingSamplePDF = false
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -31,7 +34,7 @@ struct AdministratorView: View {
                 Button {
                     isPresentingPublishCookbook = true
                 } label: {
-                    Label("Publish a Cookbook to a Family Cookbook", systemImage: "square.and.arrow.up.on.square")
+                    Label("Publish a Cookbook to a Community Cookbook", systemImage: "square.and.arrow.up.on.square")
                 }
                 Button {
                     isPresentingStandardizeRecipes = true
@@ -43,6 +46,20 @@ struct AdministratorView: View {
                 } label: {
                     Label("Export Cookbook to PDF", systemImage: "doc.richtext")
                 }
+
+                // Not available on tvOS — see SamplePDFPreviewView's header
+                // comment for why.
+                #if !os(tvOS)
+                Section {
+                    Button {
+                        isPresentingSamplePDF = true
+                    } label: {
+                        Label("View Sample Import File (Sample.pdf)", systemImage: "doc.text.magnifyingglass")
+                    }
+                } footer: {
+                    Text("If you'd like to see what a properly formatted import file looks like, you can view Sample.pdf.")
+                }
+                #endif
             }
             .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
@@ -68,6 +85,11 @@ struct AdministratorView: View {
         .sheet(isPresented: $isPresentingExportPDF) {
             ExportCookbookPDFView()
         }
+        #if !os(tvOS)
+        .sheet(isPresented: $isPresentingSamplePDF) {
+            SamplePDFPreviewView()
+        }
+        #endif
     }
 }
 

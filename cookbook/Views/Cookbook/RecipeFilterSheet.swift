@@ -41,7 +41,7 @@ struct RecipeFilterSheet: View {
             }
             .navigationTitle("Filters")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
             }

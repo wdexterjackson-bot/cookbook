@@ -159,6 +159,12 @@ service cloud.firestore {
       return ('isProUser' in entitlementData) && entitlementData.isProUser == true;
     }
 
+    // Mirrors Entitlement.isEffectivelyProUser (Swift) — lifetime Pro OR an
+    // unexpired Annual Pro Membership subscription.
+    function isEffectivelyProUserFlag(entitlementData) {
+      return isProUserFlag(entitlementData) || annualExpiresAtOrEpoch(entitlementData) > request.time;
+    }
+
     // Each free launch-promo tier is grantable to, and usable by, new
     // accounts only until its own date (must match
     // LaunchCreditPromo.tier1ExpirationDate/tier2ExpirationDate in
@@ -193,7 +199,7 @@ service cloud.firestore {
     // true directly in the console on the one seeded MFB document.
     function isProOrMFB(userID, groupID) {
       return (exists(/databases/$(database)/documents/entitlements/$(userID))
-          && get(/databases/$(database)/documents/entitlements/$(userID)).data.isProUser == true)
+          && isEffectivelyProUserFlag(get(/databases/$(database)/documents/entitlements/$(userID)).data))
         || (exists(/databases/$(database)/documents/groups/$(groupID))
           && get(/databases/$(database)/documents/groups/$(groupID)).data.isMFB == true);
     }
@@ -926,7 +932,17 @@ service cloud.firestore {
     // against double-charging is the groups/create rule's getAfter() check
     // above; this collection mainly needs to stay immutable once written.
     match /groupCreationRequests/{idempotencyKey} {
-      allow read: if isSignedIn() && request.auth.uid == resource.data.requestedByUserID;
+      // The idempotency-check read in FirestoreGroupsService.createGroup
+      // targets a fresh UUID key on every first-time group creation, so
+      // this document almost always doesn't exist yet — `resource` must be
+      // compared to null (an exists()-based guard doesn't reliably
+      // short-circuit the same way, verified against the rules emulator)
+      // before dereferencing resource.data, or a first-time read throws a
+      // rules evaluation error instead of just returning false, which
+      // Firestore surfaces as a hard permission denial and aborts the
+      // whole transaction before the credit spend.
+      allow read: if isSignedIn()
+        && (resource == null || request.auth.uid == resource.data.requestedByUserID);
       allow create: if isSignedIn() && request.auth.uid == request.resource.data.requestedByUserID;
       allow update: if false;
       allow delete: if false;

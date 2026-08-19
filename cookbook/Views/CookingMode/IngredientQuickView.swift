@@ -46,7 +46,7 @@ struct IngredientQuickView: View {
             .background(Color.potluckCream)
             .navigationTitle("Ingredients")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .cancellationAction) {

@@ -13,6 +13,7 @@ import SwiftUI
 
 struct MessagesView: View {
     @Environment(AccountState.self) private var accountState
+    @Environment(\.dismiss) private var dismiss
 
     @State private var messages: [Message] = []
     @State private var adminPendingJoinRequests: [(request: JoinRequest, group: FamilyGroup)] = []
@@ -101,6 +102,11 @@ struct MessagesView: View {
             .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle("Messages")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .task(id: accountState.currentUserID) {
                 await load()
             }
@@ -337,7 +343,11 @@ struct MessagesView: View {
         }
 
         let entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
-        await gate.attempt(.groupJoin, outcome: EntitlementGate.forGroupJoin(entitlement, group: group)) {
+        await gate.attempt(
+            .groupJoin,
+            outcome: EntitlementGate.forGroupJoin(entitlement, group: group),
+            recheck: { EntitlementGate.forGroupJoin($0, group: group) }
+        ) {
             do {
                 try await groupsService.respondToInvitation(invitation.id, accept: true, respondingUserID: userID)
                 await load()

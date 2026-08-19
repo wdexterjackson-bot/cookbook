@@ -18,6 +18,11 @@ struct MembershipPaywallView: View {
     let purchaseService: PurchaseServicing
     let claimWriter: PurchaseClaimSubmitting
     let entitlementService: EntitlementServicing
+    /// Set only when this paywall was presented by EntitlementGate to
+    /// unblock a specific pending action (e.g. creating a Community
+    /// Cookbook) — nil when reached directly from Account, where there's
+    /// nothing to resume.
+    var onPurchaseSucceeded: (() async -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var entitlement: Entitlement?
@@ -74,7 +79,7 @@ struct MembershipPaywallView: View {
             .background(Color.potluckCream)
             .navigationTitle("Membership")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -118,15 +123,20 @@ struct MembershipPaywallView: View {
             let outcome = try await PurchaseCoordinator.purchase(
                 product, userID: userID, purchaseService: purchaseService, claimWriter: claimWriter
             )
+            var didSucceed = false
             switch outcome {
             case .success:
                 statusMessage = "Purchase complete — your membership will update shortly."
+                didSucceed = true
             case .pending:
                 statusMessage = "Purchase pending approval."
             case .userCancelled:
                 break
             }
             await refresh()
+            if didSucceed, let onPurchaseSucceeded {
+                await onPurchaseSucceeded()
+            }
         } catch PurchaseServiceError.claimSubmissionFailed {
             // Apple has already been paid — this isn't a failed purchase,
             // just an unconfirmed one. PurchaseCoordinator.
@@ -175,7 +185,7 @@ struct MembershipPaywallView: View {
     let purchaseService = FakePurchaseService()
     purchaseService.stubbedProducts = [
         PurchasableProduct(id: StoreProductID.proUserLifetime, displayName: "Pro User", description: "", displayPrice: "$0.99", kind: .nonConsumable),
-        PurchasableProduct(id: StoreProductID.familyCookbookCredit, displayName: "Create a Family Cookbook", description: "", displayPrice: "$1.99", kind: .consumable),
+        PurchasableProduct(id: StoreProductID.familyCookbookCredit, displayName: "Create a Community Cookbook", description: "", displayPrice: "$1.99", kind: .consumable),
     ]
     let entitlementService = InMemoryEntitlementService()
     entitlementService.entitlementsByUserID["preview-user"] = Entitlement(

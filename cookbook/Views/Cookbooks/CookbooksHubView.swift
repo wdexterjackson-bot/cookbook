@@ -83,7 +83,7 @@ struct CookbooksHubView: View {
                     }
                 }
 
-                Section("Personal") {
+                Section("Personal Cookbooks") {
                     ForEach(ownedCookbooks) { cookbook in
                         // A plain value-based NavigationLink, not a
                         // destination-builder one with a .simultaneousGesture
@@ -133,7 +133,7 @@ struct CookbooksHubView: View {
                 }
 
                 if !joinedGroups.isEmpty {
-                    Section("Family Cookbooks") {
+                    Section("Community Cookbooks") {
                         ForEach(joinedGroups, id: \.cookbook.id) { entry in
                             NavigationLink {
                                 GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
@@ -163,7 +163,7 @@ struct CookbooksHubView: View {
                         Button {
                             isPresentingNewFamilyCookbook = true
                         } label: {
-                            Label("New Family Cookbook", systemImage: "person.3")
+                            Label("New Community Cookbook", systemImage: "person.3")
                         }
                         #if !os(tvOS)
                         Button {
@@ -411,7 +411,7 @@ struct CookbooksHubView: View {
             try await PersonalCookbookSyncCoordinator.push(
                 cookbook, recipes: recipesInCookbook, ownerUserID: ownerUserID,
                 syncService: syncService, photoUploadService: photoUploadService,
-                isActiveProMember: entitlement?.isEffectivelyProUser ?? false
+                isActiveProMember: entitlement?.isActiveAnnualProMember == true
             )
             try? modelContext.save()
         } catch {

@@ -469,7 +469,7 @@ struct CookbookConfigurationView: View {
             try await PersonalCookbookSyncCoordinator.push(
                 cookbook, recipes: recipes, ownerUserID: ownerUserID,
                 syncService: syncService, photoUploadService: photoUploadService,
-                isActiveProMember: entitlement?.isEffectivelyProUser ?? false
+                isActiveProMember: entitlement?.isActiveAnnualProMember == true
             )
             try? modelContext.save()
             dismiss()

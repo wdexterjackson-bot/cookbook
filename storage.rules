@@ -15,6 +15,22 @@ rules_version = '2';
 // passes before trusting this file blindly after any future change here.
 service firebase.storage {
   match /b/{bucket}/o {
+    // Storing a photo in the cloud (either path below) is an Annual Pro
+    // Membership perk — client-side gating already skips the upload
+    // attempt (PersonalCookbookSyncCoordinator, RecipePublishingCoordinator),
+    // this is the real enforcement so it can't be bypassed by calling
+    // Storage's API directly. Read access is deliberately NOT gated by
+    // this — once a photo is legitimately stored, it stays viewable by
+    // anyone otherwise authorized to read that path, regardless of their
+    // own membership, and is never retroactively removed just because
+    // the uploader's membership later lapses (that's the 90-day sweep's
+    // job, on its own grace period, not this rule's).
+    function isActiveAnnualProMember(userID) {
+      return firestore.exists(/databases/(default)/documents/entitlements/$(userID))
+        && firestore.get(/databases/(default)/documents/entitlements/$(userID)).data.annualProMembershipExpiresAt is timestamp
+        && firestore.get(/databases/(default)/documents/entitlements/$(userID)).data.annualProMembershipExpiresAt > request.time;
+    }
+
     match /publications/{groupID}/{cookbookID}/{fileName} {
       allow read: if request.auth != null
         && firestore.exists(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid))
@@ -25,18 +41,19 @@ service firebase.storage {
       allow write: if request.auth != null
         && fileName.matches(request.auth.uid + '_.*')
         && request.resource.size < 10 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+        && request.resource.contentType.matches('image/.*')
+        && isActiveAnnualProMember(request.auth.uid);
 
       allow delete: if request.auth != null && fileName.matches(request.auth.uid + '_.*');
     }
 
     // Personal Cookbook Cloud Sync — recipe/cover photos for a cookbook
     // the owner has opted into syncing. Unlike publications above, no
-    // cross-service Firestore lookup is needed: ownership is derivable
-    // straight from the path segment, since this is strictly single-owner
-    // data with no group membership to check. `request.resource` doesn't
-    // exist on a delete request, so — same as the publications block
-    // above — write (create/update) and delete stay as separate
+    // cross-service Firestore lookup is needed for ownership: it's
+    // derivable straight from the path segment, since this is strictly
+    // single-owner data with no group membership to check. `request.resource`
+    // doesn't exist on a delete request, so — same as the publications
+    // block above — write (create/update) and delete stay as separate
     // statements rather than one combined condition that references it.
     match /personalCookbooks/{ownerUserID}/{fileName} {
       allow read: if request.auth != null && request.auth.uid == ownerUserID;
@@ -44,7 +61,8 @@ service firebase.storage {
       allow write: if request.auth != null
         && request.auth.uid == ownerUserID
         && request.resource.size < 10 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+        && request.resource.contentType.matches('image/.*')
+        && isActiveAnnualProMember(ownerUserID);
 
       allow delete: if request.auth != null && request.auth.uid == ownerUserID;
     }

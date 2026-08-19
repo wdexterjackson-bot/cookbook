@@ -397,6 +397,37 @@ describe('group creation', () => {
   });
 });
 
+describe('groupCreationRequests', () => {
+  // PAY-005's idempotency pre-check: FirestoreGroupsService.createGroup
+  // reads this doc by a fresh UUID key before ever creating it, so it
+  // almost always doesn't exist yet. A rule that dereferences
+  // resource.data without first confirming resource != null throws a
+  // rules evaluation error on that read instead of returning false,
+  // which Firestore surfaces as a hard permission-denied and aborts the
+  // whole transaction before the credit spend even runs — this is
+  // exactly the "insufficient privileges" bug reported when spending a
+  // Community Cookbook creation credit for the first time.
+  it("reading a not-yet-created idempotency key succeeds instead of throwing an evaluation error", async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const ref = doc(alice, 'groupCreationRequests/fresh-uuid-key');
+    await assertSucceeds(getDoc(ref));
+    const snap = await getDoc(ref);
+    if (snap.exists()) throw new Error('expected the fresh idempotency key to not exist yet');
+  });
+
+  it('the requester can read their own already-written idempotency record', async () => {
+    await seed((db) => setDoc(doc(db, 'groupCreationRequests/key1'), { requestedByUserID: 'alice' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(getDoc(doc(alice, 'groupCreationRequests/key1')));
+  });
+
+  it("a different user cannot read someone else's idempotency record", async () => {
+    await seed((db) => setDoc(doc(db, 'groupCreationRequests/key1'), { requestedByUserID: 'alice' }));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(getDoc(doc(bob, 'groupCreationRequests/key1')));
+  });
+});
+
 describe('groupCookbooks', () => {
   it("lets the founder create the group's first cookbook in the same batch as the group itself", async () => {
     await seed((db) => setDoc(doc(db, 'entitlements/alice'), entitlementData({ tier2Credits: 1 })));

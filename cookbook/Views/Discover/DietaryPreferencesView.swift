@@ -35,7 +35,7 @@ struct DietaryPreferencesView: View {
             }
             .navigationTitle("Dietary Preferences")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         DietaryPreferencesStore.setCurrent(DietaryPreferences(defaultDiet: diet, excludedAllergens: excludedAllergens))
                         dismiss()
