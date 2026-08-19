@@ -140,6 +140,16 @@ struct SignInView: View {
                 }
                 #endif
 
+                #if os(tvOS)
+                Section {
+                    NavigationLink("Sign In from Your Phone") {
+                        TVPairingSignInView()
+                    }
+                } footer: {
+                    Text("Use the Cookbook app on your phone to sign in without typing on the remote.")
+                }
+                #endif
+
                 if isBusy {
                     ProgressView()
                 }

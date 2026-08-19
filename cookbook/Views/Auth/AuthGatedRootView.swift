@@ -51,11 +51,7 @@ struct AuthGatedRootView: View {
                     )
                 }
         } else {
-            #if os(tvOS)
-            TVPairingSignInView()
-            #else
             SignInView(isDismissable: false)
-            #endif
         }
     }
 }

@@ -2,8 +2,8 @@
 //  TVPairingSignInView.swift
 //  cookbook
 //
-//  tvOS's only sign-in path (see AuthGatedRootView) — the Netflix/
-//  YouTube-TV device-code pattern: show a short code, wait for an
+//  Reached from SignInView's "Sign In from Your Phone" link on tvOS — the
+//  Netflix/YouTube-TV device-code pattern: show a short code, wait for an
 //  already-signed-in phone to confirm it, sign in with the resulting
 //  custom token. No credentials are ever typed via the remote.
 //
