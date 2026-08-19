@@ -19,6 +19,7 @@ const { requestPairingCode, checkPairingStatus, confirmPairingCode } = require('
 const { handleAppStoreServerNotification } = require('./appStoreServerNotifications');
 const { decodeAndVerifyNotification } = require('./appStoreServerNotificationVerifier');
 const { sweepLapsedAnnualProMembers } = require('./sweepLapsedAnnualProMembers');
+const { sweepTVPairingData } = require('./sweepTVPairingData');
 const { validateUploadedImage } = require('./validateUploadedImage');
 
 initializeApp();
@@ -229,6 +230,15 @@ exports.appStoreServerNotifications = onRequest(async (req, res) => {
 exports.annualProMembershipSweep = onSchedule('every day 03:00', async () => {
   const result = await sweepLapsedAnnualProMembers({ db: getFirestore(), bucket: getStorage().bucket() });
   console.log(`annualProMembershipSweep: swept ${result.swept}, warned75 ${result.warned75}, warned85 ${result.warned85}.`);
+});
+
+// Purges Apple TV phone-pairing sign-in data (tvPairingRequests + the
+// rate-limit bookkeeping collections in tvPairing.js) once it's past its
+// useful life — see sweepTVPairingData.js for why this is data-
+// minimization/storage hygiene, not a correctness fix.
+exports.tvPairingDataSweep = onSchedule('every day 03:30', async () => {
+  const result = await sweepTVPairingData({ db: getFirestore() });
+  console.log(`tvPairingDataSweep: deleted ${result.deletedPairingRequests} pairing requests, ${result.deletedRateLimitDocs} rate-limit bookkeeping docs.`);
 });
 
 // storage.rules can only check the *declared* Content-Type header at write
