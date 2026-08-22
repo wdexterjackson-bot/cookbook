@@ -11,6 +11,14 @@
 //  it proves the destination is reachable end-to-end on a truly fresh
 //  account, which is what the race used to interrupt.
 //
+//  Updated 2026-08-21: a fresh account no longer auto-provisions a
+//  "Personal Cookbook" (see CookbookMigrator's own doc comment — removed
+//  2026-08 in favor of the Home dashboard's "Getting Started" card, zero
+//  cookbooks until the user explicitly creates one), so this test now
+//  creates one itself via the same New Cookbook flow
+//  CommunityCookbookRestructureUITests already exercises, before
+//  checking that tapping into it lands cleanly on the recipe list.
+//
 
 import XCTest
 
@@ -55,7 +63,19 @@ final class FreshInstallCookbookNavigationUITests: XCTestCase {
         XCTAssertTrue(cookbooksTab.waitForExistence(timeout: 20))
         XCTAssertTrue(tapWhenHittable(cookbooksTab, in: app))
 
-        let personalCookbookRow = app.buttons["Personal Cookbook"]
+        // A fresh account has zero cookbooks until one is explicitly
+        // created — create the personal cookbook this test needs first.
+        let newCookbookMenu = app.buttons["New Cookbook"]
+        XCTAssertTrue(newCookbookMenu.waitForExistence(timeout: 10))
+        XCTAssertTrue(tapWhenHittable(newCookbookMenu, in: app))
+        let newPersonalCookbook = app.buttons["New Personal Cookbook"]
+        XCTAssertTrue(newPersonalCookbook.waitForExistence(timeout: 5))
+        newPersonalCookbook.tap()
+        let personalDone = app.buttons["Done"]
+        XCTAssertTrue(personalDone.waitForExistence(timeout: 5))
+        personalDone.tap()
+
+        let personalCookbookRow = app.buttons["My Cookbook"]
         XCTAssertTrue(personalCookbookRow.waitForExistence(timeout: 10))
         XCTAssertTrue(tapWhenHittable(personalCookbookRow, in: app))
 
@@ -117,7 +137,12 @@ final class FreshInstallCookbookNavigationUITests: XCTestCase {
     @MainActor
     private func signOutIfAlreadySignedIn(_ app: XCUIApplication) {
         let moreTab = app.tabBars.buttons["More"]
-        guard moreTab.waitForExistence(timeout: 3) else { return }
+        // 3s was too short on a slower cold launch (observed on iPad
+        // Simulator: the tab bar isn't up yet at 3s even though the
+        // account really is signed in) — falsely concluding "not signed
+        // in" here strands every subsequent step, since the sign-up
+        // screen never actually appears either.
+        guard moreTab.waitForExistence(timeout: 10) else { return }
         moreTab.tap()
         let profileCard = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Profile'")).firstMatch
         guard profileCard.waitForExistence(timeout: 3) else { return }

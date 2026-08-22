@@ -53,6 +53,7 @@ struct AccountView: View {
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let userProfileService: UserProfileServicing = FirestoreUserProfileService()
+    private let publicProfileService: PublicProfileServicing = FirestorePublicProfileService()
     private let publicationsService: PublicationsServicing = FirestorePublicationsService()
 
     var body: some View {
@@ -515,6 +516,18 @@ struct AccountView: View {
         defer { isSavingName = false }
         do {
             try await accountState.updateDisplayName(trimmed)
+            // updateDisplayName above only touches Firebase Auth's own
+            // currentUser.displayName — friends read this account's name
+            // from publicProfiles instead (see FriendlyNameDirectory),
+            // which otherwise wouldn't catch up until this account's next
+            // app launch (AuthGatedRootView's own backfill). Best-effort,
+            // same as every other publicProfiles write in this app — a
+            // network hiccup here shouldn't block the rename the user
+            // actually asked for; the next launch's backfill still
+            // catches it eventually.
+            if let userID = accountState.currentUserID {
+                try? await publicProfileService.setDisplayName(trimmed, userID: userID)
+            }
         } catch {
             saveNameErrorMessage = error.localizedDescription
         }

@@ -289,6 +289,24 @@ service cloud.firestore {
         : userIDs[1] + '_' + userIDs[0];
     }
 
+    // Gate for both direct chat and friend-to-friend recipe sharing below
+    // — true only once a Friendship doc for this pair actually exists
+    // (accepted, not just requested).
+    function areFriends(userA, userB) {
+      return exists(/databases/$(database)/documents/friendships/$(sortedFriendshipID([userA, userB])));
+    }
+
+    // Broader than areFriends() — also true while a friend request is
+    // pending (either direction) or already decided (declined/cancelled),
+    // not just once a Friendship exists. Gates publicProfiles/{userID}
+    // reads: a recipient needs to see the sender's name on an incoming
+    // request *before* accepting it, which areFriends() alone would deny.
+    function hasFriendConnection(userA, userB) {
+      return areFriends(userA, userB)
+        || exists(/databases/$(database)/documents/friendRequests/$(userA + '_' + userB))
+        || exists(/databases/$(database)/documents/friendRequests/$(userB + '_' + userA));
+    }
+
     match /entitlements/{userID} {
       allow read: if isSignedIn() && request.auth.uid == userID;
 
@@ -780,7 +798,18 @@ service cloud.firestore {
     }
 
     match /friendships/{friendshipID} {
-      allow read: if isSignedIn() && request.auth.uid in resource.data.userIDs;
+      // resource is null for the extremely common case of "are we already
+      // friends" being checked before any friendship exists yet (every
+      // first-time — or re-sent — friend request starts with exactly this
+      // read, in FirestoreFriendsService.sendFriendRequest). Without the
+      // resource == null guard, dereferencing resource.data on a
+      // nonexistent doc throws a rules-evaluation error rather than just
+      // returning false, which Firestore surfaces as a hard permission
+      // denial and aborted the whole sendFriendRequest call before any
+      // friendRequests doc could be written — same gotcha already fixed
+      // once in this file for groupCreationRequests/read, missed here.
+      allow read: if isSignedIn()
+        && (resource == null || request.auth.uid in resource.data.userIDs);
 
       // Paired with an accepted friendRequests doc in the same
       // transaction (mirrors groups/create's uniqueness-reservation
@@ -928,6 +957,111 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Direct friend-to-friend chat. Flat collection (not a subcollection),
+    // same convention as friendRequests/friendships/messages — gated on
+    // areFriends() at create time, not re-checked on every read (a
+    // friendship being removed later doesn't retroactively hide history
+    // either party can already see, same tombstone-not-erase bias
+    // FriendsServicing.removeFriend documents for itself).
+    //
+    // The read rule checks conversationID, not senderID/recipientID —
+    // this isn't a style choice, it's required. FirestoreChatService.
+    // fetchMessages runs a *list* query filtered on conversationID
+    // (`whereField("conversationID", isEqualTo:)`), and Firestore can
+    // only allow a list query when its security rule is provably
+    // satisfied by the query's own filters — it does NOT evaluate list
+    // rules per-returned-document. A rule based on senderID/recipientID
+    // (neither of which the query filters on) makes every result
+    // unprovable to Firestore, so it rejects the *entire query* with
+    // permission-denied regardless of what the matching documents
+    // actually contain — confirmed live against production (real bug:
+    // create and single-doc update both worked, only the list query
+    // failed). conversationID IS the query's filter field, and it
+    // encodes both participants (see ChatMessage.conversationID /
+    // sortedFriendshipID), so checking membership in that string lets
+    // Firestore verify the rule from the query's constant filter value
+    // alone.
+    function isChatParticipant(conversationID) {
+      let parts = conversationID.split('_');
+      return parts[0] == request.auth.uid || parts[1] == request.auth.uid;
+    }
+
+    match /directMessages/{messageID} {
+      // Second disjunct exists for a different list query shape —
+      // FirestoreChatService.fetchUnreadCounts filters by recipientID (+
+      // isRead), not conversationID, to build the "N unread from X"
+      // dashboard/Messages summary across every conversation at once.
+      // Same "provable from the query's own filters" requirement as
+      // isChatParticipant's own doc comment — recipientID being both the
+      // query's filter and the rule's check is what makes that query
+      // provable, the same way isChatParticipant makes fetchMessages'
+      // conversationID-filtered query provable.
+      allow read: if isSignedIn()
+        && (isChatParticipant(resource.data.conversationID) || request.auth.uid == resource.data.recipientID);
+
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.senderID
+        && request.resource.data.senderID != request.resource.data.recipientID
+        && request.resource.data.conversationID == sortedFriendshipID([request.resource.data.senderID, request.resource.data.recipientID])
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && areFriends(request.resource.data.senderID, request.resource.data.recipientID);
+
+      // Only the recipient, only to flip isRead — everything else pinned.
+      allow update: if isSignedIn()
+        && request.auth.uid == resource.data.recipientID
+        && resource.data.senderID == request.resource.data.senderID
+        && resource.data.recipientID == request.resource.data.recipientID
+        && resource.data.conversationID == request.resource.data.conversationID
+        && resource.data.text == request.resource.data.text
+        && resource.data.sentAt == request.resource.data.sentAt;
+
+      allow delete: if false;
+    }
+
+    // Friend-to-friend recipe sharing — a friendship-gated counterpart to
+    // publications/{id}, minus any group/cookbook involvement. Doc ID is
+    // deterministic (senderID_recipientID_sourceRecipeID, see
+    // SharedRecipe.compositeID) so re-sharing the same recipe with the
+    // same friend updates this doc rather than creating a duplicate.
+    match /sharedRecipes/{sharedRecipeID} {
+      allow read: if isSignedIn()
+        && (request.auth.uid == resource.data.senderID || request.auth.uid == resource.data.recipientID);
+
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.senderID
+        && request.resource.data.senderID != request.resource.data.recipientID
+        && request.resource.data.state == 'pending'
+        && sharedRecipeID == request.resource.data.senderID + '_' + request.resource.data.recipientID + '_' + request.resource.data.sourceRecipeID
+        && areFriends(request.resource.data.senderID, request.resource.data.recipientID);
+
+      // Two distinct actors can legally overwrite an existing doc here:
+      // - The recipient, only pending -> copied/declined; content and
+      //   identity fields pinned so this can't smuggle in a content change.
+      // - The original sender re-sharing the same recipe with the same
+      //   friend after a decline/copy — resets it to pending with
+      //   (possibly updated) content, same "re-request after decline"
+      //   precedent FriendsServicing.sendFriendRequest already
+      //   establishes for friendRequests.
+      allow update: if isSignedIn()
+        && resource.data.senderID == request.resource.data.senderID
+        && resource.data.recipientID == request.resource.data.recipientID
+        && resource.data.sourceRecipeID == request.resource.data.sourceRecipeID
+        && (
+          (request.auth.uid == resource.data.recipientID
+            && resource.data.state == 'pending'
+            && request.resource.data.state in ['copied', 'declined']
+            && resource.data.content == request.resource.data.content)
+          ||
+          (request.auth.uid == resource.data.senderID
+            && resource.data.state in ['declined', 'copied']
+            && request.resource.data.state == 'pending'
+            && areFriends(request.resource.data.senderID, request.resource.data.recipientID))
+        );
+
+      allow delete: if false;
+    }
+
     // PAY-005's idempotency ledger for createGroup. The real protection
     // against double-charging is the groups/create rule's getAfter() check
     // above; this collection mainly needs to stay immutable once written.
@@ -968,6 +1102,19 @@ service cloud.firestore {
     // Cloud Function — the owner manages their own doc directly.
     match /userProfiles/{userID} {
       allow read, write, delete: if isSignedIn() && request.auth.uid == userID;
+    }
+
+    // The friendly-name counterpart to userProfiles — deliberately its own
+    // collection holding nothing but displayName (see
+    // PublicProfileServicing's own doc comment for why): readable by a
+    // friend or pending-request counterpart, unlike userProfiles which
+    // stays owner-only since it also holds email/location.
+    match /publicProfiles/{userID} {
+      allow read: if isSignedIn() && (request.auth.uid == userID || hasFriendConnection(request.auth.uid, userID));
+      allow create, update: if isSignedIn() && request.auth.uid == userID
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0;
+      allow delete: if isSignedIn() && request.auth.uid == userID;
     }
 
     // Personal Cookbook Cloud Sync (opt-in per cookbook, manual "push on

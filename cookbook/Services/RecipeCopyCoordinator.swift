@@ -67,6 +67,7 @@ enum RecipeCopyCoordinator {
         // copier is never silently credited as the author.
         recipe.authorLineage = content.authorLineage
         recipe.authorLineageIsExternal = true
+        recipe.videoURLs = content.videoURLs ?? []
 
         // Lineage — never inherited from the copier's own prior recipes,
         // always freshly stamped from this specific publication.
@@ -75,6 +76,72 @@ enum RecipeCopyCoordinator {
             ?? UUID(uuidString: publication.sourceRecipeID)
         recipe.sourceOwnerSnapshot = content.sourceOwnerSnapshot
         recipe.sourceGroupSnapshot = content.sourceGroupSnapshot
+
+        modelContext.insert(recipe)
+        do {
+            try modelContext.save()
+            return .success(recipe)
+        } catch {
+            modelContext.rollback()
+            return .failure(error)
+        }
+    }
+
+    /// Friend-to-friend recipe sharing's counterpart to the Publication
+    /// overload above — same mapping, same save-or-rollback shape, just
+    /// reading from a SharedRecipe instead. Kept as a separate overload
+    /// rather than generalized over both types: the two source types
+    /// (Publication, SharedRecipe) share a content shape but not an
+    /// identity shape (groupID/cookbookID vs. none), so a shared
+    /// abstraction would need to fake fields that don't apply to a plain
+    /// friend share.
+    static func copy(
+        _ sharedRecipe: SharedRecipe,
+        forUserID copierUserID: String,
+        into cookbook: Cookbook,
+        modelContext: ModelContext
+    ) -> Result<Recipe, Error> {
+        let content = sharedRecipe.content
+        let recipe = Recipe(
+            ownerID: copierUserID,
+            title: content.title,
+            summary: content.summary,
+            yield: content.yield,
+            sourceType: .manual
+        )
+        recipe.cookbookID = cookbook.id
+        recipe.notes = content.notes
+        recipe.tags = content.tags
+        recipe.totalTimeMinutes = content.totalTimeMinutes
+
+        recipe.ingredientSections = content.ingredientSections.enumerated().map { sectionIndex, section in
+            let ingredientSection = IngredientSection(heading: section.heading, sortOrder: sectionIndex)
+            ingredientSection.ingredients = section.ingredients.enumerated().map { index, ingredient in
+                Ingredient(displayText: ingredient.displayText, name: ingredient.displayText, isOptional: ingredient.isOptional, sortOrder: index)
+            }
+            return ingredientSection
+        }
+        recipe.stepSections = content.stepSections.enumerated().map { sectionIndex, section in
+            let stepSection = StepSection(heading: section.heading, sortOrder: sectionIndex)
+            stepSection.steps = section.steps.enumerated().map { index, text in
+                Step(text: text, sortOrder: index)
+            }
+            return stepSection
+        }
+
+        recipe.authorLineage = content.authorLineage
+        recipe.authorLineageIsExternal = true
+        recipe.videoURLs = content.videoURLs ?? []
+
+        recipe.immediateSourceRecipeID = UUID(uuidString: sharedRecipe.sourceRecipeID)
+        recipe.rootOriginRecipeID = content.rootOriginRecipeID.flatMap(UUID.init(uuidString:))
+            ?? UUID(uuidString: sharedRecipe.sourceRecipeID)
+        recipe.sourceOwnerSnapshot = content.sourceOwnerSnapshot
+        // No group involved in a friend-to-friend share — a plain fixed
+        // label rather than nil, so RecipeDetailView's existing
+        // sharedFromText still shows *something* rather than silently
+        // dropping this recipe's lineage.
+        recipe.sourceGroupSnapshot = "a friend"
 
         modelContext.insert(recipe)
         do {

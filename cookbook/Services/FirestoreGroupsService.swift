@@ -365,6 +365,53 @@ final class FirestoreGroupsService: GroupsServicing {
         }
     }
 
+    func updateGroup(
+        _ groupID: String,
+        name: String,
+        locationText: String,
+        visibility: GroupVisibility,
+        approvalPolicy: JoinApprovalPolicy,
+        allowsMemberInvites: Bool,
+        actingUserID: String
+    ) async throws {
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
+        try await db.collection("groups").document(groupID).updateData([
+            "name": name,
+            "locationText": locationText,
+            "visibility": visibility.rawValue,
+            "approvalPolicy": approvalPolicy.rawValue,
+            "allowsMemberInvites": allowsMemberInvites,
+        ])
+    }
+
+    func updateGroupCookbook(
+        _ cookbookID: String,
+        groupID: String,
+        cookbookName: String,
+        allowsMemberPublishing: Bool,
+        commentsAllowed: Bool,
+        coverColorHex: String,
+        coverStyleImageName: String?,
+        coverImageURL: String?,
+        actingUserID: String
+    ) async throws {
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
+        try await db.collection("groupCookbooks").document(cookbookID).updateData([
+            "cookbookName": cookbookName,
+            "allowsMemberPublishing": allowsMemberPublishing,
+            "commentsAllowed": commentsAllowed,
+            "coverColorHex": coverColorHex,
+            "coverStyleImageName": coverStyleImageName as Any? ?? NSNull(),
+            "coverImageURL": coverImageURL as Any? ?? NSNull(),
+        ])
+    }
+
     func updateRole(groupID: String, userID: String, newRole: MembershipRole, actingUserID: String) async throws {
         let groupMemberships = try await fetchMemberships(forGroup: groupID)
         guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
@@ -521,6 +568,7 @@ final class FirestoreGroupsService: GroupsServicing {
             "createdAt": createdAt,
             "coverImageURL": NSNull(),
             "allowsMemberPublishing": details.allowsMemberPublishing,
+            "commentsAllowed": true,
         ]
     }
 

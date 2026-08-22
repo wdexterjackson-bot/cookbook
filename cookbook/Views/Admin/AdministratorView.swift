@@ -15,13 +15,25 @@ import SwiftData
 
 struct AdministratorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AccountState.self) private var accountState
     @State private var isPresentingImport = false
     @State private var isPresentingPublishCookbook = false
+    @State private var isPresentingManageGroups = false
+    @State private var isPresentingManageCommunityCookbooks = false
     @State private var isPresentingStandardizeRecipes = false
     @State private var isPresentingExportPDF = false
+    #if os(iOS)
+    @State private var isPresentingPhotoScan = false
+    #endif
     #if !os(tvOS)
     @State private var isPresentingSamplePDF = false
     #endif
+    /// "Manage Community Cookbooks" is only worth offering (and only ever
+    /// lists anything once opened) if the user is an active admin of at
+    /// least one group — a plain member has nothing to manage there.
+    @State private var isAdminOfAnyCommunityCookbook = false
+
+    private let groupsService: GroupsServicing = FirestoreGroupsService()
 
     var body: some View {
         NavigationStack {
@@ -36,6 +48,39 @@ struct AdministratorView: View {
                 } label: {
                     Label("Publish a Cookbook to a Community Cookbook", systemImage: "square.and.arrow.up.on.square")
                 }
+                #if os(iOS)
+                // Both open the same Photo/Scan screen — it already offers
+                // Take Photo and Choose Photo together (see
+                // RecipePhotoScanView), so either entry point here reaches
+                // the same capture-or-pick-then-OCR flow CreateHubView's
+                // own "Photo / Scan" button uses.
+                Button {
+                    isPresentingPhotoScan = true
+                } label: {
+                    Label("Scan Recipe (Camera)", systemImage: "camera")
+                }
+                Button {
+                    isPresentingPhotoScan = true
+                } label: {
+                    Label("Import Recipe from Picture", systemImage: "photo.on.rectangle")
+                }
+                #endif
+
+                Section("Community Cookbooks") {
+                    Button {
+                        isPresentingManageGroups = true
+                    } label: {
+                        Label("Manage Groups", systemImage: "person.3")
+                    }
+                    if isAdminOfAnyCommunityCookbook {
+                        Button {
+                            isPresentingManageCommunityCookbooks = true
+                        } label: {
+                            Label("Manage Community Cookbooks", systemImage: "person.3.sequence")
+                        }
+                    }
+                }
+
                 Button {
                     isPresentingStandardizeRecipes = true
                 } label: {
@@ -72,6 +117,9 @@ struct AdministratorView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .task {
+                await loadAdminStatus()
+            }
         }
         .sheet(isPresented: $isPresentingImport) {
             ImportRecipesFileView()
@@ -79,17 +127,37 @@ struct AdministratorView: View {
         .sheet(isPresented: $isPresentingPublishCookbook) {
             PublishCookbookToFamilyCookbookView()
         }
+        .sheet(isPresented: $isPresentingManageGroups) {
+            ManageGroupsListView()
+        }
+        .sheet(isPresented: $isPresentingManageCommunityCookbooks) {
+            ManageCommunityCookbooksListView()
+        }
         .sheet(isPresented: $isPresentingStandardizeRecipes) {
             StandardizeRecipesView()
         }
         .sheet(isPresented: $isPresentingExportPDF) {
             ExportCookbookPDFView()
         }
+        #if os(iOS)
+        .sheet(isPresented: $isPresentingPhotoScan) {
+            RecipePhotoScanView()
+        }
+        #endif
         #if !os(tvOS)
         .sheet(isPresented: $isPresentingSamplePDF) {
             SamplePDFPreviewView()
         }
         #endif
+    }
+
+    private func loadAdminStatus() async {
+        guard let userID = accountState.currentUserID else {
+            isAdminOfAnyCommunityCookbook = false
+            return
+        }
+        let memberships = (try? await groupsService.fetchMemberships(forUser: userID)) ?? []
+        isAdminOfAnyCommunityCookbook = memberships.contains { $0.status == .active && $0.role == .admin }
     }
 }
 

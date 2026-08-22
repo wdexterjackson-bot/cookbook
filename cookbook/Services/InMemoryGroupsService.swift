@@ -352,6 +352,55 @@ final class InMemoryGroupsService: GroupsServicing {
         }
     }
 
+    func updateGroup(
+        _ groupID: String,
+        name: String,
+        locationText: String,
+        visibility: GroupVisibility,
+        approvalPolicy: JoinApprovalPolicy,
+        allowsMemberInvites: Bool,
+        actingUserID: String
+    ) async throws {
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else {
+            throw GroupsServiceError.groupNotFound
+        }
+        groups[index].name = name
+        groups[index].locationText = locationText
+        groups[index].visibility = visibility
+        groups[index].approvalPolicy = approvalPolicy
+        groups[index].allowsMemberInvites = allowsMemberInvites
+    }
+
+    func updateGroupCookbook(
+        _ cookbookID: String,
+        groupID: String,
+        cookbookName: String,
+        allowsMemberPublishing: Bool,
+        commentsAllowed: Bool,
+        coverColorHex: String,
+        coverStyleImageName: String?,
+        coverImageURL: String?,
+        actingUserID: String
+    ) async throws {
+        let groupMemberships = try await fetchMemberships(forGroup: groupID)
+        guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {
+            throw GroupsServiceError.notAuthorized
+        }
+        guard let index = groupCookbooks.firstIndex(where: { $0.id == cookbookID }) else {
+            throw GroupsServiceError.groupCookbookNotFound
+        }
+        groupCookbooks[index].cookbookName = cookbookName
+        groupCookbooks[index].allowsMemberPublishing = allowsMemberPublishing
+        groupCookbooks[index].commentsAllowed = commentsAllowed
+        groupCookbooks[index].coverColorHex = coverColorHex
+        groupCookbooks[index].coverStyleImageName = coverStyleImageName
+        groupCookbooks[index].coverImageURL = coverImageURL
+    }
+
     func updateRole(groupID: String, userID: String, newRole: MembershipRole, actingUserID: String) async throws {
         let groupMemberships = try await fetchMemberships(forGroup: groupID)
         guard GroupPolicy.isActiveAdmin(actingUserID, in: groupMemberships) else {

@@ -12,8 +12,7 @@ struct PostSignInCoordinatorTests {
 
     private func makeInMemoryContext() throws -> ModelContext {
         let schema = Schema([Recipe.self, IngredientSection.self, Ingredient.self, StepSection.self, Step.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let container = try TestModelContainer.make(schema: schema)
         return ModelContext(container)
     }
 
@@ -59,5 +58,31 @@ struct PostSignInCoordinatorTests {
         try await PostSignInCoordinator.handle(result, email: nil, modelContext: context, userProfileService: userProfiles)
 
         #expect(userProfiles.emailsByUserID["new-uid"] == nil)
+    }
+
+    @Test func syncsTheAccountsDisplayNameOntoItsPublicProfile() async throws {
+        let context = try makeInMemoryContext()
+        let result = AuthResult(userID: "new-uid", isNewAccount: true)
+        let publicProfiles = InMemoryPublicProfileService()
+
+        try await PostSignInCoordinator.handle(
+            result, email: "new@example.com", displayName: "Dexter Jackson", modelContext: context,
+            userProfileService: InMemoryUserProfileService(), publicProfileService: publicProfiles
+        )
+
+        #expect(publicProfiles.displayNamesByUserID["new-uid"] == "Dexter Jackson")
+    }
+
+    @Test func aNilOrBlankDisplayNameIsSimplySkipped() async throws {
+        let context = try makeInMemoryContext()
+        let result = AuthResult(userID: "new-uid", isNewAccount: true)
+        let publicProfiles = InMemoryPublicProfileService()
+
+        try await PostSignInCoordinator.handle(
+            result, email: "new@example.com", displayName: "   ", modelContext: context,
+            userProfileService: InMemoryUserProfileService(), publicProfileService: publicProfiles
+        )
+
+        #expect(publicProfiles.displayNamesByUserID["new-uid"] == nil)
     }
 }

@@ -89,7 +89,7 @@ protocol PublicationsServicing {
     func tombstoneCommentAuthorship(_ commentID: String, publicationID: String, actingUserID: String) async throws
 
     /// Whether `userID` has already liked this publication — drives
-    /// GroupCookbookView's like button state.
+    /// CommunityCookbookRecipesView's like button state.
     func hasLiked(_ publicationID: String, userID: String) async throws -> Bool
     /// Sets `userID`'s like state and returns the publication's new total
     /// like count. A no-op (returns the current count unchanged) if
@@ -99,7 +99,7 @@ protocol PublicationsServicing {
     func setLiked(_ publicationID: String, userID: String, liked: Bool) async throws -> Int
 
     /// `userID`'s own 1-5 rating for this publication, if they've rated it
-    /// — drives GroupCookbookView's star control.
+    /// — drives CommunityCookbookRecipesView's star control.
     func myRating(_ publicationID: String, userID: String) async throws -> Int?
     /// Sets/replaces `userID`'s 1-5 rating and returns the publication's
     /// new aggregate. An upsert, never additive — replacing an existing

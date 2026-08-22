@@ -67,6 +67,31 @@ service firebase.storage {
       allow delete: if request.auth != null && request.auth.uid == ownerUserID;
     }
 
+    // A Community Cookbook's cover photo — admin-set, group-membership
+    // visible. Unlike publications/ above, fileName can't be checked
+    // against an uploader's own uid (there's no per-recipe ownership
+    // here, just one cover per cookbook), so admin status is the write
+    // gate instead, via the same memberships/{groupID}_{uid} composite-ID
+    // cross-service lookup firestore.rules itself uses.
+    match /groupCookbookCovers/{groupID}/{cookbookID}/{fileName} {
+      allow read: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid))
+        && firestore.get(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid)).data.status == 'active';
+
+      allow write: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid))
+        && firestore.get(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid)).data.status == 'active'
+        && firestore.get(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid)).data.role == 'admin'
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*')
+        && isActiveAnnualProMember(request.auth.uid);
+
+      allow delete: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid))
+        && firestore.get(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid)).data.status == 'active'
+        && firestore.get(/databases/(default)/documents/memberships/$(groupID + '_' + request.auth.uid)).data.role == 'admin';
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

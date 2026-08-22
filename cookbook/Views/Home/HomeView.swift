@@ -54,6 +54,12 @@ struct HomeView: View {
     @State private var pendingInvitations: [(invitation: Invitation, group: FamilyGroup)] = []
     @State private var incomingFriendRequests: [FriendRequest] = []
     @State private var outgoingFriendRequests: [FriendRequest] = []
+    @State private var pendingSharedRecipes: [SharedRecipe] = []
+    @State private var friendlyNames = FriendlyNameDirectory()
+    #if !os(tvOS)
+    @State private var chatUnreadCounts: [String: Int] = [:]
+    @State private var isPresentingChatWithUserID: String?
+    #endif
     /// The one seeded MFB group, if it exists yet (nil before Dexter's
     /// manual console step — see fetchMFBGroup's own doc comment).
     @State private var mfbGroup: FamilyGroup?
@@ -106,6 +112,10 @@ struct HomeView: View {
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let friendsService: FriendsServicing = FirestoreFriendsService()
+    private let sharedRecipesService: SharedRecipesServicing = FirestoreSharedRecipesService()
+    #if !os(tvOS)
+    private let chatService: ChatServicing = FirestoreChatService()
+    #endif
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
@@ -126,7 +136,12 @@ struct HomeView: View {
     }
 
     private var attentionCount: Int {
-        adminPendingJoinRequests.count + activeInvitations.count + incomingFriendRequests.count + outgoingFriendRequests.count
+        var count = adminPendingJoinRequests.count + activeInvitations.count + incomingFriendRequests.count
+            + outgoingFriendRequests.count + pendingSharedRecipes.count
+        #if !os(tvOS)
+        count += chatUnreadCounts.values.reduce(0, +)
+        #endif
+        return count
     }
 
     /// Real invitations not yet soft-declined or deleted.
@@ -228,8 +243,18 @@ struct HomeView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Our Community Cookbook")
-                        .font(.potluckHeadline(18))
+                        // Requested 18 * 1.75 = 31.5 first, then dialed
+                        // back to 24 after review. Weight: Instrument
+                        // Serif ships no bold cut, so the +50% weight —
+                        // 400 (regular) -> 600 (semibold) on the standard
+                        // 100-900 scale — is applied via .fontWeight's
+                        // synthetic emboldening rather than a different
+                        // font file.
+                        .font(.potluckSerif(24))
+                        .fontWeight(.semibold)
                         .foregroundStyle(Color.potluckDeepTeal)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 16) {
@@ -267,6 +292,23 @@ struct HomeView: View {
             .sheet(isPresented: $isPresentingMessages) {
                 MessagesView()
             }
+            #if !os(tvOS)
+            .sheet(isPresented: Binding(
+                get: { isPresentingChatWithUserID != nil },
+                set: { isPresented in if !isPresented { isPresentingChatWithUserID = nil } }
+            )) {
+                if let friendUserID = isPresentingChatWithUserID {
+                    NavigationStack {
+                        ChatView(friendUserID: friendUserID, chatService: chatService)
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("Done") { isPresentingChatWithUserID = nil }
+                                }
+                            }
+                    }
+                }
+            }
+            #endif
             .sheet(isPresented: $isPresentingAccount) {
                 AccountView()
             }
@@ -406,6 +448,7 @@ struct HomeView: View {
                 RecipeDetailView(recipe: recent)
             } label: {
                 HStack {
+                    jumpBackInThumbnail(recent)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("JUMP BACK IN")
                             .font(.caption.weight(.bold))
@@ -686,7 +729,7 @@ struct HomeView: View {
         messageRow(badge: "MFB", title: "Explore \(mfbGroup.name) — Free · Read Only · Sample Community Cookbook") {
             if isMFBMember, let entry = joinedGroups.first(where: { $0.group.isMFB == true }) {
                 NavigationLink {
-                    GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
+                    CommunityCookbookRecipesView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
                 } label: {
                     Text("Open")
                 }
@@ -745,7 +788,7 @@ struct HomeView: View {
         }
         for request in incomingFriendRequests {
             rows.append(AnyView(
-                messageRow(badge: "FRIEND REQUEST", title: "Friend request from Member \(request.senderID.suffix(6))") {
+                messageRow(badge: "FRIEND REQUEST", title: "Friend request from \(friendlyNames.label(for: request.senderID))") {
                     HStack {
                         Button("Accept") { Task { await respondToFriendRequest(request, accept: true) } }
                         Button("Decline", role: .destructive) { Task { await respondToFriendRequest(request, accept: false) } }
@@ -756,12 +799,32 @@ struct HomeView: View {
         }
         for request in outgoingFriendRequests {
             rows.append(AnyView(
-                messageRow(badge: "FRIEND REQUEST SENT", title: "Friend request sent to Member \(request.recipientID.suffix(6))") {
+                messageRow(badge: "FRIEND REQUEST SENT", title: "Friend request sent to \(friendlyNames.label(for: request.recipientID))") {
                     Button("Cancel", role: .destructive) { Task { await cancelFriendRequest(request) } }
                         .disabled(busyFriendRequestIDs.contains(request.id))
                 }
             ))
         }
+        for shared in pendingSharedRecipes {
+            rows.append(AnyView(
+                messageRow(badge: "SHARED RECIPE", title: "\(friendlyNames.label(for: shared.senderID)) shared \"\(shared.content.title)\" with you") {
+                    Button("Review") { isPresentingMessages = true }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.potluckSage)
+                }
+            ))
+        }
+        #if !os(tvOS)
+        for (friendUserID, unreadCount) in chatUnreadCounts.sorted(by: { $0.key < $1.key }) {
+            rows.append(AnyView(
+                messageRow(badge: "MESSAGE", title: "\(unreadCount) unread message\(unreadCount == 1 ? "" : "s") from \(friendlyNames.label(for: friendUserID))") {
+                    Button("Open") { isPresentingChatWithUserID = friendUserID }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.potluckTomato)
+                }
+            ))
+        }
+        #endif
         return rows
     }
 
@@ -912,7 +975,7 @@ struct HomeView: View {
                     }
                     ForEach(joinedGroups, id: \.cookbook.id) { entry in
                         NavigationLink {
-                            GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
+                            CommunityCookbookRecipesView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
                         } label: {
                             cookbookCover(
                                 title: entry.cookbook.cookbookName,
@@ -1282,7 +1345,7 @@ struct HomeView: View {
     }
 
     /// FamilyGroup.coverImageURL has no upload path anywhere in the app
-    /// yet, so this is always nil today — matching GroupCookbookView's
+    /// yet, so this is always nil today — matching CommunityCookbookRecipesView's
     /// own header, which already handles it the same way, so the shelf
     /// picks it up automatically whenever that changes.
     @ViewBuilder
@@ -1450,6 +1513,25 @@ struct HomeView: View {
     /// placeholder always used (140×100, PotluckMetrics.cardCornerRadius)
     /// — falls back to that same placeholder otherwise, same pattern
     /// RecipeRow's thumbnail already uses in RecipeListView.
+    /// "Jump Back In"'s own thumbnail — shown only when the recipe actually
+    /// has a custom photo; renders nothing at all otherwise (that row had
+    /// no image whatsoever before this, just the title/chevron text, so
+    /// there's no existing placeholder to fall back to here the way
+    /// recentlyAddedThumbnail below falls back to one).
+    @ViewBuilder
+    private func jumpBackInThumbnail(_ recipe: Recipe) -> some View {
+        #if os(iOS)
+        if let filename = recipe.heroPhotoFilename, let data = PhotoStore.data(for: filename), let uiImage = UIImage(data: data) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityHidden(true)
+        }
+        #endif
+    }
+
     @ViewBuilder
     private func recentlyAddedThumbnail(_ recipe: Recipe) -> some View {
         #if os(iOS)
@@ -1571,6 +1653,16 @@ struct HomeView: View {
 
             incomingFriendRequests = try await friendsService.fetchFriendRequests(forRecipient: userID)
             outgoingFriendRequests = try await friendsService.fetchFriendRequests(bySender: userID)
+            pendingSharedRecipes = try await sharedRecipesService.fetchSharedRecipes(forRecipient: userID)
+                .filter { $0.state == .pending }
+
+            var namesToLoad = incomingFriendRequests.map(\.senderID) + outgoingFriendRequests.map(\.recipientID)
+                + pendingSharedRecipes.map(\.senderID)
+            #if !os(tvOS)
+            chatUnreadCounts = try await chatService.fetchUnreadCounts(forRecipient: userID)
+            namesToLoad += Array(chatUnreadCounts.keys)
+            #endif
+            await friendlyNames.load(userIDs: namesToLoad)
         } catch {
             // Home degrades gracefully — sections requiring this data
             // just don't render rather than showing an error banner.

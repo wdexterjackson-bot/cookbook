@@ -145,6 +145,12 @@ struct AddFriendView: View {
             try await friendsService.sendFriendRequest(from: currentUserID, to: userID)
             statusMessage = "Friend request sent."
             foundUser = nil
+            // Otherwise searchAttempted staying true with foundUser now nil
+            // would render "No findable user with that email." right above
+            // the success message — that line (and the email field it was
+            // for) belong to the search that's now done with.
+            searchAttempted = false
+            emailInput = ""
         } catch FriendsServiceError.alreadyFriends {
             errorMessage = "You're already friends."
         } catch {

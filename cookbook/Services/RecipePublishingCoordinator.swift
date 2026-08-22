@@ -69,7 +69,10 @@ enum RecipePublishingCoordinator {
         let publication = try await publicationsService.publish(content, sourceRecipeID: recipe.id.uuidString, to: group.id, cookbookID: cookbook.id, ownerUserID: ownerUserID)
         // Best-effort, same non-fatal precedent as the photo upload above
         // — a failure here shouldn't undo an otherwise-successful publish.
-        try? await publicationsService.setCommentsEnabled(publication.id, enabled: commentsEnabled, actingUserID: ownerUserID)
+        // Clamped by the cookbook-wide ceiling (GroupCookbook.commentsAllowed)
+        // regardless of what the caller asked for — a recipe can only ever
+        // have comments on if this specific cookbook still allows them.
+        try? await publicationsService.setCommentsEnabled(publication.id, enabled: commentsEnabled && (cookbook.commentsAllowed ?? true), actingUserID: ownerUserID)
         return photoUploadSucceeded
     }
 }

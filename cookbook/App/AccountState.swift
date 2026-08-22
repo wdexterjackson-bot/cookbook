@@ -60,6 +60,10 @@ final class AccountState {
         try await authService.updateDisplayName(displayName)
     }
 
+    func sendPasswordReset(email: String) async throws {
+        try await authService.sendPasswordReset(email: email)
+    }
+
     @discardableResult
     func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult {
         let result = try await authService.signInWithApple(idToken: idToken, rawNonce: rawNonce)

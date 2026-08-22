@@ -2,7 +2,7 @@
 //  GroupAdminManagementView.swift
 //  cookbook
 //
-//  Reached from GroupCookbookView's settings. Shows each active member's
+//  Reached from CommunityCookbookManageView's settings. Shows each active member's
 //  role with a Make/Remove Administrator action — GroupPolicy.
 //  isLastActiveAdmin blocks demoting the last one, matching the same
 //  invariant leaveGroup already enforces. No per-member display name is

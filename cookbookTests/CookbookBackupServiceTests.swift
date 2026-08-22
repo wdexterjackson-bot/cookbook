@@ -15,8 +15,7 @@ struct CookbookBackupServiceTests {
             Recipe.self, IngredientSection.self, Ingredient.self, StepSection.self, Step.self,
             Cookbook.self, CookbookSection.self,
         ])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let container = try TestModelContainer.make(schema: schema)
         return ModelContext(container)
     }
 

@@ -53,7 +53,25 @@ extension PublicationContentSnapshot {
             authorLineage: recipe.authorLineage,
             rootOriginRecipeID: (recipe.rootOriginRecipeID ?? recipe.id).uuidString,
             sourceOwnerSnapshot: recipe.authorLineage,
-            sourceGroupSnapshot: groupName
+            sourceGroupSnapshot: groupName,
+            videoURLs: recipe.videoURLs
         )
+    }
+}
+
+extension PublicationContentSnapshot {
+    /// Friend-to-friend sharing's attribution rule (ShareRecipeWithFriendView):
+    /// an existing lineage always survives untouched — this only fires
+    /// when there's none at all, meaning the sender's own original
+    /// creation, so the recipient sees "Inspired by {sender}" rather than
+    /// the misleading default "You" (which would wrongly imply *they*
+    /// made it). Never applied to the Community Cookbook publish path,
+    /// which has its own separate, unrelated attribution story.
+    func attributingSenderIfUnattributed(_ senderDisplayName: String?) -> PublicationContentSnapshot {
+        guard authorLineage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true else { return self }
+        var copy = self
+        copy.authorLineage = senderDisplayName
+        copy.sourceOwnerSnapshot = senderDisplayName
+        return copy
     }
 }

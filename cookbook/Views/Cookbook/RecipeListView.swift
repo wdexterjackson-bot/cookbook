@@ -144,6 +144,20 @@ struct RecipeListView: View {
         return groups
     }
 
+    /// Recipe ids actually rendered right now — a collapsed chapter's rows
+    /// aren't in the view tree at all, so ScrollScrubber can't scroll to
+    /// them; it can still land on that chapter's own header row instead
+    /// (group.id), which is always rendered. Feeds ScrollScrubber, iOS
+    /// only (see that type's own doc comment for why).
+    private var visibleScrubberTargetIDs: [AnyHashable] {
+        groupedBySection.flatMap { group -> [AnyHashable] in
+            guard group.title != nil else { return group.recipes.map { AnyHashable($0.id) } }
+            let key = group.section?.id.uuidString ?? group.title ?? ""
+            guard expandedChapterKeys.contains(key) else { return [AnyHashable(group.id)] }
+            return group.recipes.map { AnyHashable($0.id) }
+        }
+    }
+
     var body: some View {
         // No NavigationStack here — this view is always pushed as a
         // destination now (from CookbooksHubView or HomeView's own
@@ -229,57 +243,65 @@ struct RecipeListView: View {
                     description: Text("Try a different search term or clear your filters.")
                 )
             } else {
-                List {
-                    if criteria.hasActiveFilters {
-                        Section {
-                            activeFilterChips
-                        }
-                        .listRowInsets(EdgeInsets())
-                    }
-                    ForEach(groupedBySection) { group in
-                        if let title = group.title {
-                            // A cookbook with configured chapters shows
-                            // each as a collapsed heading by default —
-                            // tap to expand and see its recipes,
-                            // rather than one long scroll of every
-                            // chapter's recipes at once.
-                            //
-                            // Deliberately NOT SwiftUI's DisclosureGroup
-                            // here — a DisclosureGroup placed directly
-                            // in a List, with .swipeActions attached to
-                            // it, leaks those swipe actions onto its
-                            // expanded child rows too (observed
-                            // 2026-08-09: swiping a recipe row showed
-                            // the chapter's own Edit/Delete alongside
-                            // the recipe's own Delete). A plain header
-                            // row plus a conditionally-shown ForEach,
-                            // both direct children of the Section, has
-                            // no such ambiguity — the header's
-                            // .swipeActions can only ever apply to the
-                            // header's own row.
+                ScrollViewReader { scrollProxy in
+                    List {
+                        if criteria.hasActiveFilters {
                             Section {
-                                chapterHeaderRowWithSwipeActions(group: group, title: title)
-                                if expandedChapterKeys.contains(group.section?.id.uuidString ?? title) {
+                                activeFilterChips
+                            }
+                            .listRowInsets(EdgeInsets())
+                        }
+                        ForEach(groupedBySection) { group in
+                            if let title = group.title {
+                                // A cookbook with configured chapters shows
+                                // each as a collapsed heading by default —
+                                // tap to expand and see its recipes,
+                                // rather than one long scroll of every
+                                // chapter's recipes at once.
+                                //
+                                // Deliberately NOT SwiftUI's DisclosureGroup
+                                // here — a DisclosureGroup placed directly
+                                // in a List, with .swipeActions attached to
+                                // it, leaks those swipe actions onto its
+                                // expanded child rows too (observed
+                                // 2026-08-09: swiping a recipe row showed
+                                // the chapter's own Edit/Delete alongside
+                                // the recipe's own Delete). A plain header
+                                // row plus a conditionally-shown ForEach,
+                                // both direct children of the Section, has
+                                // no such ambiguity — the header's
+                                // .swipeActions can only ever apply to the
+                                // header's own row.
+                                Section {
+                                    chapterHeaderRowWithSwipeActions(group: group, title: title)
+                                        .id(group.id)
+                                    if expandedChapterKeys.contains(group.section?.id.uuidString ?? title) {
+                                        recipeRows(group.recipes)
+                                    }
+                                }
+                            } else {
+                                // No chapters configured — today's flat
+                                // list, unchanged.
+                                Section {
                                     recipeRows(group.recipes)
                                 }
                             }
-                        } else {
-                            // No chapters configured — today's flat
-                            // list, unchanged.
-                            Section {
-                                recipeRows(group.recipes)
-                            }
                         }
                     }
+                    // Chapters are shown as separate List Sections (so
+                    // each gets its own DisclosureGroup), which by
+                    // default puts a noticeable gap between them —
+                    // cut down to a fraction of that so the chapter
+                    // list itself reads as compact, not spaced out.
+                    #if os(iOS)
+                    .listSectionSpacing(2)
+                    #endif
+                    #if os(iOS)
+                    .overlay(alignment: .trailing) {
+                        ScrollScrubber(itemIDs: visibleScrubberTargetIDs, proxy: scrollProxy)
+                    }
+                    #endif
                 }
-                // Chapters are shown as separate List Sections (so
-                // each gets its own DisclosureGroup), which by
-                // default puts a noticeable gap between them —
-                // cut down to a fraction of that so the chapter
-                // list itself reads as compact, not spaced out.
-                #if os(iOS)
-                .listSectionSpacing(2)
-                #endif
             }
         }
         .potluckHiddenScrollBackground()

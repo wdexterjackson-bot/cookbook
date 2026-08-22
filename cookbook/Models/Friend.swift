@@ -57,4 +57,11 @@ extension Friendship {
         let sorted = userIDs.sorted()
         return "\(sorted[0])_\(sorted[1])"
     }
+
+    /// The friend on the other side of this pair, from `userID`'s point of
+    /// view. Nil only if `userID` isn't actually a party to this friendship
+    /// (shouldn't happen for a doc a client is allowed to read at all).
+    func otherUserID(than userID: String) -> String? {
+        userIDs.first { $0 != userID }
+    }
 }

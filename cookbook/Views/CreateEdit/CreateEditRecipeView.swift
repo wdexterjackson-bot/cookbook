@@ -242,6 +242,15 @@ struct CreateEditRecipeView: View {
     ]
 
     let mode: Mode
+    /// Set only by the Photo/Scan entry point (RecipePhotoScanView) — raw
+    /// text recognized from a camera or library photo, run through the
+    /// exact same on-device AI import (`performImport`) the Paste Recipe
+    /// button already uses, automatically once on first appear rather
+    /// than requiring the user to also tap Import. `.create` mode only;
+    /// meaningless for `.edit`/`.importing`, which already have their own
+    /// content.
+    var initialScannedText: String? = nil
+    @State private var hasRunInitialScanImport = false
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -281,6 +290,7 @@ struct CreateEditRecipeView: View {
     @Environment(\.scenePhase) private var scenePhase
     private let lineImportService: RecipeLineImportServicing = FoundationModelsLineImportService()
     private let userProfileService: UserProfileServicing = FirestoreUserProfileService()
+    private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
 
     @State private var isPresentingAuthorPrompt = false
     @State private var authorPromptWasHandled = false
@@ -305,6 +315,7 @@ struct CreateEditRecipeView: View {
     #endif
     @State private var heroImageData: Data?
     @State private var removesExistingPhoto = false
+    @State private var entitlement: Entitlement?
     /// Captured once, the first time this view appears (after `init` has
     /// fully populated every @State field for whichever Mode this is) —
     /// nil until then. Cancel compares `draftSignature` against this to
@@ -319,8 +330,9 @@ struct CreateEditRecipeView: View {
 
     @FocusState private var focusedStepRowID: UUID?
 
-    init(mode: Mode) {
+    init(mode: Mode, initialScannedText: String? = nil) {
         self.mode = mode
+        self.initialScannedText = initialScannedText
         switch mode {
         case .create:
             _title = State(initialValue: "")
@@ -462,8 +474,14 @@ struct CreateEditRecipeView: View {
                 }
 
                 #if os(iOS)
-                Section("Photo") {
+                Section {
                     photoPicker
+                } header: {
+                    Text("Photo")
+                } footer: {
+                    if photoRequiresAnnualProMembership {
+                        Text("This cookbook is synced to the cloud, so adding a photo here requires an active Annual Pro Membership.")
+                    }
                 }
                 #endif
 
@@ -505,6 +523,16 @@ struct CreateEditRecipeView: View {
                 if initialDraftSignature == nil {
                     initialDraftSignature = draftSignature
                 }
+                // Runs after the signature above is captured, so a scan's
+                // recognized text counts as a real edit — Cancel should
+                // warn about losing it exactly like manually typed
+                // content, not treat it as the untouched starting state.
+                if let initialScannedText, !hasRunInitialScanImport, lineImportService.isAvailable {
+                    hasRunInitialScanImport = true
+                    importText = initialScannedText
+                    await performImport()
+                }
+                await loadEntitlement()
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -931,6 +959,7 @@ struct CreateEditRecipeView: View {
             }
         }
         .accessibilityLabel(heroImageData == nil ? "Add photo" : "Change photo")
+        .disabled(photoRequiresAnnualProMembership)
         .onChange(of: selectedPhotoItem) { _, newItem in
             Task {
                 if let data = try? await newItem?.loadTransferable(type: Data.self) {
@@ -1053,6 +1082,24 @@ struct CreateEditRecipeView: View {
 
     private var effectiveCookbook: Cookbook? {
         ownedCookbooks.first { $0.id == effectiveCookbookID }
+    }
+
+    /// A cloud-synced cookbook stores its photos in Firebase Storage —
+    /// an Annual Pro Membership perk. A purely local (non-synced)
+    /// cookbook never touches the cloud, so anyone can add a photo there
+    /// regardless of membership. Community Cookbooks (published recipes)
+    /// aren't edited through this view at all, so `effectiveCookbook`
+    /// (always a personal Cookbook) is the only case to check.
+    private var photoRequiresAnnualProMembership: Bool {
+        effectiveCookbook?.isCloudSynced == true && entitlement?.isActiveAnnualProMember != true
+    }
+
+    private func loadEntitlement() async {
+        guard let userID = accountState.currentUserID else {
+            entitlement = nil
+            return
+        }
+        entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
     }
 
     private var cookbookSelectionBinding: Binding<UUID?> {

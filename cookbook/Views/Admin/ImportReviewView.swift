@@ -218,6 +218,14 @@ struct ImportReviewView: View {
             importSession.phase = .idle
             switch result {
             case .success(let count):
+                // Silent, best-effort — same standardizer StandardizeRecipesView
+                // exposes manually, run automatically here so an imported
+                // file's old-format amounts ("1.5") don't sit unconverted
+                // until the user remembers to run it themselves. No
+                // progress UI or outcome text of its own; the existing
+                // "N recipes saved" message above is the only thing shown.
+                _ = RecipeQuantityStandardizer.standardize(cookbook, modelContext: modelContext)
+                RecipeStandardizationState.markStandardized(cookbook.id)
                 saveOutcome = .saved(count: count)
             case .failure(let error):
                 saveOutcome = .failed(message: error.localizedDescription)

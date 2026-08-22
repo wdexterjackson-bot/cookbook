@@ -7,8 +7,10 @@
 //  (RootTabView) rather than being a persistent tab destination itself.
 //  Discover (Spoonacular/TheMealDB search) folds in here as "Search
 //  Online" rather than keeping its own tab, per the confirmed navigation
-//  decision. Photo/scan capture doesn't exist anywhere in this app yet
-//  (a later PRD phase) — shown disabled rather than faked.
+//  decision. Photo/Scan (RecipePhotoScanView) is iOS/iPadOS only — camera
+//  capture and on-device text recognition are both UIKit/Vision, with no
+//  macOS/tvOS equivalent — so the row itself is hidden there rather than
+//  shown disabled.
 //
 
 import SwiftUI
@@ -21,6 +23,9 @@ struct CreateHubView: View {
 
     private enum ActiveSheet: String, Identifiable {
         case manual, pasteText, searchOnline, newPersonalCookbook, newFamilyCookbook
+        #if os(iOS)
+        case photoScan
+        #endif
         var id: String { rawValue }
     }
 
@@ -43,14 +48,13 @@ struct CreateHubView: View {
                     } label: {
                         Label("Search Online", systemImage: "sparkle.magnifyingglass")
                     }
-                    HStack {
+                    #if os(iOS)
+                    Button {
+                        activeSheet = .photoScan
+                    } label: {
                         Label("Photo / Scan", systemImage: "camera")
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text("Coming soon")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
+                    #endif
                 }
 
                 Section("Cookbooks") {
@@ -87,6 +91,10 @@ struct CreateHubView: View {
                 CreateEditRecipeView(mode: .create)
             case .searchOnline:
                 DiscoverView()
+            #if os(iOS)
+            case .photoScan:
+                RecipePhotoScanView()
+            #endif
             case .newPersonalCookbook:
                 CookbookConfigurationView(mode: .create(ownerID: accountState.currentOwnerID))
             case .newFamilyCookbook:

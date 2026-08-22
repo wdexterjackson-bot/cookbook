@@ -15,8 +15,7 @@ struct RecipeCopyCoordinatorTests {
             Recipe.self, IngredientSection.self, Ingredient.self, StepSection.self, Step.self,
             Cookbook.self, CookbookSection.self,
         ])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let container = try TestModelContainer.make(schema: schema)
         return ModelContext(container)
     }
 
@@ -30,7 +29,8 @@ struct RecipeCopyCoordinatorTests {
         authorLineage: String? = "Dante Ruiz",
         rootOriginRecipeID: String? = nil,
         sourceOwnerSnapshot: String? = "Dante Ruiz",
-        sourceGroupSnapshot: String? = "The Alvarez Family Table"
+        sourceGroupSnapshot: String? = "The Alvarez Family Table",
+        videoURLs: [String]? = nil
     ) -> Publication {
         let content = PublicationContentSnapshot(
             title: title,
@@ -51,7 +51,8 @@ struct RecipeCopyCoordinatorTests {
             authorLineage: authorLineage,
             rootOriginRecipeID: rootOriginRecipeID,
             sourceOwnerSnapshot: sourceOwnerSnapshot,
-            sourceGroupSnapshot: sourceGroupSnapshot
+            sourceGroupSnapshot: sourceGroupSnapshot,
+            videoURLs: videoURLs
         )
         return Publication(
             id: "pub-1", groupID: "group-1", cookbookID: "cb-1", ownerUserID: "dante",
@@ -82,6 +83,21 @@ struct RecipeCopyCoordinatorTests {
         #expect(steps.map(\.text) == ["Mix the masa.", "Steam for 90 minutes."])
         #expect(recipe.authorLineage == "Dante Ruiz")
         #expect(recipe.authorLineageIsExternal == true)
+    }
+
+    @Test func copyingAPublicationCarriesItsVideoURLsAlong() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = makeTargetCookbook()
+        context.insert(cookbook)
+        let publication = makePublication(videoURLs: ["https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"])
+
+        let result = RecipeCopyCoordinator.copy(publication, forUserID: "bob", into: cookbook, modelContext: context)
+
+        guard case .success(let recipe) = result else {
+            Issue.record("expected a successful copy")
+            return
+        }
+        #expect(recipe.videoURLs == ["https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"])
     }
 
     @Test func copyingAnOriginalPublicationSetsRootEqualToImmediateSource() throws {
@@ -146,5 +162,72 @@ struct RecipeCopyCoordinatorTests {
         #expect(recipe.title == "Bob's Tweaked Tamales")
         #expect(publication.content.title == "Abuela's Tamales") // untouched
         #expect(recipe.ownerID != publication.ownerUserID)
+    }
+
+    private func makeSharedRecipe(
+        sourceRecipeID: String = UUID().uuidString,
+        title: String = "Abuela's Tamales",
+        videoURLs: [String]? = nil
+    ) -> SharedRecipe {
+        let content = PublicationContentSnapshot(
+            title: title,
+            summary: "A holiday favorite.",
+            yield: "Serves 8",
+            totalTimeMinutes: 90,
+            ingredientSections: [
+                PublicationIngredientSection(heading: nil, ingredients: [
+                    PublicationIngredient(displayText: "2 cups masa harina", isOptional: false),
+                ]),
+            ],
+            stepSections: [
+                PublicationStepSection(heading: nil, steps: ["Mix the masa."]),
+            ],
+            notes: "Freezes well.",
+            tags: ["holiday"],
+            authorLineage: "Dante Ruiz",
+            videoURLs: videoURLs
+        )
+        return SharedRecipe(
+            id: SharedRecipe.compositeID(senderID: "dante", recipientID: "bob", sourceRecipeID: sourceRecipeID),
+            senderID: "dante", recipientID: "bob", sourceRecipeID: sourceRecipeID, content: content, sharedAt: .now, state: .pending
+        )
+    }
+
+    @Test func copyingASharedRecipeCreatesAnIndependentlyOwnedRecipe() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = makeTargetCookbook()
+        context.insert(cookbook)
+        let sourceRecipeID = UUID()
+        let sharedRecipe = makeSharedRecipe(sourceRecipeID: sourceRecipeID.uuidString)
+
+        let result = RecipeCopyCoordinator.copy(sharedRecipe, forUserID: "bob", into: cookbook, modelContext: context)
+
+        guard case .success(let recipe) = result else {
+            Issue.record("expected a successful copy")
+            return
+        }
+        #expect(recipe.ownerID == "bob")
+        #expect(recipe.title == "Abuela's Tamales")
+        #expect(recipe.authorLineage == "Dante Ruiz")
+        #expect(recipe.authorLineageIsExternal == true)
+        #expect(recipe.immediateSourceRecipeID == sourceRecipeID)
+        #expect(recipe.rootOriginRecipeID == sourceRecipeID)
+        let ingredients = recipe.ingredientSections.first?.ingredients ?? []
+        #expect(ingredients.map(\.displayText) == ["2 cups masa harina"])
+    }
+
+    @Test func copyingASharedRecipeCarriesItsVideoURLsAlong() throws {
+        let context = try makeInMemoryContext()
+        let cookbook = makeTargetCookbook()
+        context.insert(cookbook)
+        let sharedRecipe = makeSharedRecipe(videoURLs: ["https://youtu.be/aaaaaaaaaaa"])
+
+        let result = RecipeCopyCoordinator.copy(sharedRecipe, forUserID: "bob", into: cookbook, modelContext: context)
+
+        guard case .success(let recipe) = result else {
+            Issue.record("expected a successful copy")
+            return
+        }
+        #expect(recipe.videoURLs == ["https://youtu.be/aaaaaaaaaaa"])
     }
 }

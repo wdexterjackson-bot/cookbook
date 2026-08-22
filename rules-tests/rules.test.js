@@ -9,7 +9,10 @@ import {
   assertSucceeds,
   assertFails,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, deleteDoc, writeBatch, Timestamp, serverTimestamp } from 'firebase/firestore';
+import {
+  doc, setDoc, getDoc, deleteDoc, writeBatch, Timestamp, serverTimestamp,
+  collection, query, where, orderBy, getDocs,
+} from 'firebase/firestore';
 
 let testEnv;
 
@@ -1780,6 +1783,19 @@ describe('friendships', () => {
     await assertSucceeds(getDoc(doc(bob, 'friendships/alice_bob')));
   });
 
+  it('reading a friendship that does not exist yet succeeds (returns no data) rather than being denied', async () => {
+    // FirestoreFriendsService.sendFriendRequest's very first step is
+    // exactly this read — "are we already friends" — before any
+    // friendRequests doc is ever written, on every first-time (or
+    // re-sent) friend request, which obviously has no friendship doc yet.
+    // Regression test for a real bug: without `resource == null` in the
+    // read rule, this threw a hard permission-denied here, aborting
+    // sendFriendRequest before it could write anything.
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const snapshot = await assertSucceeds(getDoc(doc(alice, 'friendships/alice_bob')));
+    if (snapshot.exists()) throw new Error('expected no friendship doc to exist yet');
+  });
+
   it('a third party cannot read the friendship', async () => {
     await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
       id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
@@ -1794,5 +1810,256 @@ describe('friendships', () => {
     }));
     const bob = testEnv.authenticatedContext('bob').firestore();
     await assertSucceeds(deleteDoc(doc(bob, 'friendships/alice_bob')));
+  });
+});
+
+describe('publicProfiles', () => {
+  it('a user can set their own display name', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'publicProfiles/alice'), { displayName: 'Alice Alvarez' }));
+  });
+
+  it('rejects an empty display name', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'publicProfiles/alice'), { displayName: '' }));
+  });
+
+  it('cannot set someone else\'s display name', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'publicProfiles/bob'), { displayName: 'Hijacked' }));
+  });
+
+  it('a friend can read the display name', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'friendships/alice_bob'), { id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now() });
+      await setDoc(doc(db, 'publicProfiles/alice'), { displayName: 'Alice Alvarez' });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(getDoc(doc(bob, 'publicProfiles/alice')));
+  });
+
+  it('the recipient of a pending (not yet accepted) friend request can read the sender\'s display name', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'friendRequests/alice_bob'), {
+        id: 'alice_bob', senderID: 'alice', recipientID: 'bob',
+        status: 'pending', createdAt: Timestamp.now(), respondedAt: null,
+      });
+      await setDoc(doc(db, 'publicProfiles/alice'), { displayName: 'Alice Alvarez' });
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(getDoc(doc(bob, 'publicProfiles/alice')));
+  });
+
+  it('a stranger with no friendship or request connection cannot read the display name', async () => {
+    await seed((db) => setDoc(doc(db, 'publicProfiles/alice'), { displayName: 'Alice Alvarez' }));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'publicProfiles/alice')));
+  });
+
+  it('a user can always read their own display name', async () => {
+    await seed((db) => setDoc(doc(db, 'publicProfiles/alice'), { displayName: 'Alice Alvarez' }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(getDoc(doc(alice, 'publicProfiles/alice')));
+  });
+});
+
+function directMessageData(overrides = {}) {
+  return {
+    id: 'msg1',
+    conversationID: 'alice_bob',
+    senderID: 'alice',
+    recipientID: 'bob',
+    text: 'Hey!',
+    sentAt: Timestamp.now(),
+    isRead: false,
+    ...overrides,
+  };
+}
+
+describe('directMessages', () => {
+  it('friends can send each other a direct message', async () => {
+    await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'directMessages/msg1'), directMessageData()));
+  });
+
+  it('non-friends cannot send each other a direct message', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'directMessages/msg1'), directMessageData()));
+  });
+
+  it('cannot impersonate another sender', async () => {
+    await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'directMessages/msg1'), directMessageData({ senderID: 'bob' })));
+  });
+
+  it('a third party cannot read a direct message between two friends', async () => {
+    await seed((db) => setDoc(doc(db, 'directMessages/msg1'), directMessageData()));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'directMessages/msg1')));
+  });
+
+  it('the recipient can mark a message read', async () => {
+    await seed((db) => setDoc(doc(db, 'directMessages/msg1'), directMessageData()));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'directMessages/msg1'), { isRead: true }, { merge: true }));
+  });
+
+  it('the sender cannot rewrite the text of an already-sent message', async () => {
+    await seed((db) => setDoc(doc(db, 'directMessages/msg1'), directMessageData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'directMessages/msg1'), directMessageData({ text: 'Edited!' })));
+  });
+
+  // Regression test for a real production bug: FirestoreChatService.
+  // fetchMessages runs exactly this shape of *list* query (filtered on
+  // conversationID, ordered by sentAt) — a single-document getDoc
+  // (covered by the tests above) proves nothing about whether a list
+  // query is allowed, since Firestore only permits a list query when its
+  // rule is provably satisfied by the query's own filters, not
+  // per-returned-document. A rule based on senderID/recipientID (neither
+  // filtered on here) made this exact query fail with permission-denied
+  // in production even though every matching document actually satisfied
+  // the intent of the rule.
+  it('a participant can list the conversation by conversationID, ordered by sentAt', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'directMessages/msg1'), directMessageData({ id: 'msg1', sentAt: Timestamp.fromMillis(1000) }));
+      await setDoc(doc(db, 'directMessages/msg2'), directMessageData({
+        id: 'msg2', senderID: 'bob', recipientID: 'alice', text: 'Hi back', sentAt: Timestamp.fromMillis(2000),
+      }));
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const snapshot = await assertSucceeds(getDocs(
+      query(collection(alice, 'directMessages'), where('conversationID', '==', 'alice_bob'), orderBy('sentAt'))
+    ));
+    if (snapshot.size !== 2) throw new Error(`expected 2 messages, got ${snapshot.size}`);
+  });
+
+  it('a non-participant cannot list a conversation by conversationID', async () => {
+    await seed((db) => setDoc(doc(db, 'directMessages/msg1'), directMessageData()));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDocs(
+      query(collection(mallory, 'directMessages'), where('conversationID', '==', 'alice_bob'), orderBy('sentAt'))
+    ));
+  });
+
+  // Regression coverage for the dashboard/Messages "N unread from X"
+  // summary (FirestoreChatService.fetchUnreadCounts) — a different list
+  // query shape (filtered by recipientID + isRead, no conversationID at
+  // all), so it needs its own provable-from-the-query disjunct; the
+  // conversationID-based one above doesn't cover it.
+  it('a recipient can list their unread messages across every conversation by recipientID', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'directMessages/msg1'), directMessageData({ id: 'msg1' }));
+      await setDoc(doc(db, 'directMessages/msg2'), directMessageData({
+        id: 'msg2', conversationID: 'bob_carol', senderID: 'carol', recipientID: 'bob', text: 'Hey',
+      }));
+    });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    const snapshot = await assertSucceeds(getDocs(
+      query(collection(bob, 'directMessages'), where('recipientID', '==', 'bob'), where('isRead', '==', false))
+    ));
+    if (snapshot.size !== 2) throw new Error(`expected 2 unread messages, got ${snapshot.size}`);
+  });
+
+  it('cannot list someone else\'s unread messages by recipientID', async () => {
+    await seed((db) => setDoc(doc(db, 'directMessages/msg1'), directMessageData()));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDocs(
+      query(collection(mallory, 'directMessages'), where('recipientID', '==', 'bob'), where('isRead', '==', false))
+    ));
+  });
+});
+
+function sharedRecipeContent(overrides = {}) {
+  return {
+    title: 'Cornbread', summary: '', yield: '', totalTimeMinutes: null,
+    ingredientSections: [], stepSections: [], notes: '', tags: [],
+    ...overrides,
+  };
+}
+
+function sharedRecipeData(overrides = {}) {
+  return {
+    id: 'alice_bob_recipe1',
+    senderID: 'alice',
+    recipientID: 'bob',
+    sourceRecipeID: 'recipe1',
+    content: sharedRecipeContent(),
+    sharedAt: Timestamp.now(),
+    state: 'pending',
+    ...overrides,
+  };
+}
+
+describe('sharedRecipes', () => {
+  it('friends can share a recipe with each other', async () => {
+    await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData()));
+  });
+
+  it('non-friends cannot share a recipe', async () => {
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData()));
+  });
+
+  it('rejects a doc ID that does not match senderID_recipientID_sourceRecipeID', async () => {
+    await seed((db) => setDoc(doc(db, 'friendships/alice_bob'), {
+      id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+    }));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'sharedRecipes/wrong-id'), sharedRecipeData()));
+  });
+
+  it('the recipient can mark a shared recipe copied', async () => {
+    await seed((db) => setDoc(doc(db, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData()));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(bob, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData({ state: 'copied' })));
+  });
+
+  it('the recipient cannot sneak a content change in while declining', async () => {
+    await seed((db) => setDoc(doc(db, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData()));
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(setDoc(doc(bob, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData({
+      state: 'declined', content: sharedRecipeContent({ title: 'Hijacked' }),
+    })));
+  });
+
+  it('the sender can re-share after a decline, resetting it to pending', async () => {
+    await seed(async (db) => {
+      await setDoc(doc(db, 'friendships/alice_bob'), {
+        id: 'alice_bob', userIDs: ['alice', 'bob'], becameFriendsAt: Timestamp.now(),
+      });
+      await setDoc(doc(db, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData({ state: 'declined' }));
+    });
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(alice, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData({ state: 'pending' })));
+  });
+
+  it('a third party cannot read a shared recipe between two friends', async () => {
+    await seed((db) => setDoc(doc(db, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData()));
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'sharedRecipes/alice_bob_recipe1')));
+  });
+
+  // Same "provable from the query's own filters" requirement as
+  // directMessages (see isChatParticipant's doc comment) — senderID is
+  // both the query's filter and one disjunct of the read rule, which is
+  // what makes fetchSharedRecipes(bySender:)'s list query provable.
+  it('the sender can list the recipes they have shared, by senderID', async () => {
+    await seed((db) => setDoc(doc(db, 'sharedRecipes/alice_bob_recipe1'), sharedRecipeData()));
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const snapshot = await assertSucceeds(getDocs(
+      query(collection(alice, 'sharedRecipes'), where('senderID', '==', 'alice'), orderBy('sharedAt', 'desc'))
+    ));
+    if (snapshot.size !== 1) throw new Error(`expected 1 shared recipe, got ${snapshot.size}`);
   });
 });

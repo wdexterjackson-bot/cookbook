@@ -13,7 +13,18 @@ struct RecipeDetailView: View {
     @State private var isPresentingEdit = false
     @State private var isPresentingCookingMode = false
     @State private var isPresentingPublish = false
+    @State private var isPresentingShareWithFriend = false
     @State private var cartToastMessage: String?
+    #if os(iOS)
+    /// Drives the Videos section's per-icon playback sheet — set to the
+    /// tapped video's own URL string, nil when no sheet is up.
+    @State private var selectedVideoURLString: String?
+    /// Separate from isPresentingCookingMode (the toolbar's own "Start
+    /// Cooking" entry point) — this one opens Cooking Mode with "Ready to
+    /// Continue" instead, since reaching Cooking Mode from the Videos
+    /// section implies a cook already in progress, not a fresh start.
+    @State private var isPresentingCookingModeToContinue = false
+    #endif
 
     var body: some View {
         ScrollView {
@@ -56,6 +67,12 @@ struct RecipeDetailView: View {
                     Text(recipe.notes)
                 }
 
+                #if os(iOS)
+                if !recipe.videoURLs.isEmpty {
+                    videosSection
+                }
+                #endif
+
                 NutritionSummaryView(
                     calories: recipe.calories,
                     proteinGrams: recipe.proteinGrams,
@@ -77,7 +94,7 @@ struct RecipeDetailView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 // Love (Favorite) only — Like doesn't apply to a personal
                 // recipe (nothing to aggregate a count across); the shared-
-                // cookbook counterpart lives in GroupCookbookView instead,
+                // cookbook counterpart lives in CommunityCookbookRecipesView instead,
                 // next to each published recipe's real like count.
                 Button {
                     recipe.isFavorite.toggle()
@@ -115,6 +132,12 @@ struct RecipeDetailView: View {
                     } label: {
                         Label("Publish to a Community Cookbook", systemImage: "person.3")
                     }
+
+                    Button {
+                        isPresentingShareWithFriend = true
+                    } label: {
+                        Label("Share with a Friend", systemImage: "paperplane")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -127,6 +150,19 @@ struct RecipeDetailView: View {
         .sheet(isPresented: $isPresentingCookingMode) {
             CookingModeView(recipe: recipe)
         }
+        #if os(iOS)
+        .sheet(isPresented: Binding(
+            get: { selectedVideoURLString != nil },
+            set: { isPresented in if !isPresented { selectedVideoURLString = nil } }
+        )) {
+            if let selectedVideoURLString {
+                RecipeVideoPlayerSheet(videoURLString: selectedVideoURLString)
+            }
+        }
+        .sheet(isPresented: $isPresentingCookingModeToContinue) {
+            CookingModeView(recipe: recipe, startButtonLabel: "Ready to Continue")
+        }
+        #endif
         .sheet(isPresented: $isPresentingPublish) {
             PublishToFamilyCookbookView(
                 recipe: recipe,
@@ -134,6 +170,13 @@ struct RecipeDetailView: View {
                 publicationsService: FirestorePublicationsService(),
                 photoUploadService: FirebaseRecipePhotoUploadService(),
                 entitlementService: FirestoreEntitlementService()
+            )
+        }
+        .sheet(isPresented: $isPresentingShareWithFriend) {
+            ShareRecipeWithFriendView(
+                recipe: recipe,
+                friendsService: FirestoreFriendsService(),
+                sharedRecipesService: FirestoreSharedRecipesService()
             )
         }
         .cartToast($cartToastMessage)
@@ -265,6 +308,45 @@ struct RecipeDetailView: View {
         .foregroundStyle(.secondary)
     }
 
+    #if os(iOS)
+    /// One "play.rectangle" icon per saved video (same icon Cooking Mode's
+    /// own toolbar uses for the same purpose) — tapping icon N plays video
+    /// N directly, no picker needed since the icon itself is the choice.
+    /// "View In Cooking Mode" underneath is a second way to reach the same
+    /// videos (and everything else Cooking Mode offers) without leaving
+    /// this screen to find the toolbar's own Start Cooking button.
+    private var videosSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Videos")
+            HStack(spacing: 20) {
+                ForEach(Array(recipe.videoURLs.enumerated()), id: \.offset) { index, url in
+                    Button {
+                        selectedVideoURLString = url
+                    } label: {
+                        Image(systemName: "play.rectangle")
+                            .font(.title2)
+                    }
+                    .accessibilityLabel("Play video \(index + 1)")
+                }
+                Spacer()
+            }
+
+            Button {
+                isPresentingCookingModeToContinue = true
+            } label: {
+                // Text before the icon, per spec — SwiftUI's Label always
+                // puts the icon first, so this is a plain HStack instead.
+                HStack(spacing: 6) {
+                    Text("View This Recipe in COOKING MODE")
+                    Image(systemName: "flame")
+                }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("View This Recipe in Cooking Mode")
+        }
+    }
+    #endif
+
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.title3.bold())
@@ -318,6 +400,45 @@ struct RecipeDetailView: View {
         }
     }
 }
+
+#if os(iOS)
+/// A single video, no picker — the Videos section's own icon row is
+/// already the picker (tapping icon N opens this with that video's URL
+/// directly). Mirrors CookingModeVideoSheet's single-video rendering.
+private struct RecipeVideoPlayerSheet: View {
+    let videoURLString: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack {
+                if let videoID = YouTubeURL.videoID(from: videoURLString) {
+                    YouTubePlayerView(videoID: videoID)
+                        .id(videoID)
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .potluckCardShadow()
+                        .padding()
+                } else {
+                    ContentUnavailableView(
+                        "Couldn't Load Video",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("This link doesn't look like a valid YouTube video anymore.")
+                    )
+                }
+                Spacer()
+            }
+            .navigationTitle("Video")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+#endif
 
 #Preview {
     RecipeDetailPreviewContainer()

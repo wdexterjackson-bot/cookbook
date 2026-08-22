@@ -152,7 +152,7 @@ struct TVPairingSignInView: View {
         state = .signingIn
         do {
             let result = try await accountState.signInWithCustomToken(token)
-            try await PostSignInCoordinator.handle(result, email: nil, modelContext: modelContext)
+            try await PostSignInCoordinator.handle(result, email: nil, displayName: accountState.currentUserDisplayName, modelContext: modelContext)
         } catch {
             // If signInWithCustomToken itself already succeeded before
             // PostSignInCoordinator.handle threw, isSignedIn flips true and

@@ -5,7 +5,7 @@
 //  Lists the signed-in user's Family Cookbooks and is the entry point for
 //  creating a new one or finding an existing public one. Publishing a
 //  personal recipe INTO a Family Cookbook is deliberately not in this
-//  pass — see GroupCookbookView's empty state.
+//  pass — see CommunityCookbookRecipesView's empty state.
 //
 
 import SwiftUI
@@ -33,7 +33,7 @@ struct FamilyView: View {
                 } else {
                     ForEach(entries, id: \.cookbook.id) { entry in
                         NavigationLink {
-                            GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
+                            CommunityCookbookRecipesView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.cookbook.cookbookName)

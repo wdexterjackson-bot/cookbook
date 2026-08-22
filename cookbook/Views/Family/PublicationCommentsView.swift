@@ -3,7 +3,7 @@
 //  cookbook
 //
 //  Only ever reached when Publication.commentsEnabled is true (see
-//  GroupCookbookView's own gate on the entry point) — this view itself
+//  CommunityCookbookRecipesView's own gate on the entry point) — this view itself
 //  still checks it too, defensively, in case a stale cached publication
 //  value is passed in.
 //

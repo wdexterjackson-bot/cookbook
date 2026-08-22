@@ -26,8 +26,16 @@ final class FirestoreUserProfileService: UserProfileServicing {
         try await db.collection("userProfiles").document(userID).setData(encoded, merge: true)
     }
 
+    /// Lowercased before storing — email search (findUserByEmail) does an
+    /// exact-match Firestore query, and a federated sign-in provider
+    /// (Apple/Google) can hand back a mixed-case email that a person would
+    /// never type mixed-case into the search field themselves. Normalizing
+    /// once here, on every sign-in (this runs unconditionally via
+    /// PostSignInCoordinator, not just at account creation), is what keeps
+    /// every existing account self-healing on its next sign-in rather than
+    /// needing a one-off data migration.
     func setEmail(_ email: String, userID: String) async throws {
-        try await db.collection("userProfiles").document(userID).setData(["email": email], merge: true)
+        try await db.collection("userProfiles").document(userID).setData(["email": email.lowercased()], merge: true)
     }
 
     func fetchIsEmailDiscoverable(userID: String) async throws -> Bool {

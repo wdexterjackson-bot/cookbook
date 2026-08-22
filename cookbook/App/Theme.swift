@@ -58,6 +58,36 @@ extension Font {
     static func potluckScript(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
         .custom("Snell Roundhand", size: size, relativeTo: textStyle)
     }
+
+    /// Instrument Serif — a lighter-touch, editorial serif accent
+    /// (regular weight only; the family ships no bold cut). Used for the
+    /// dashboard's own app-name toolbar title, in place of the bold
+    /// Poppins headline every other title on this screen still uses.
+    static func potluckSerif(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("InstrumentSerif-Regular", size: size, relativeTo: textStyle)
+    }
+
+    static func potluckSerifItalic(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("InstrumentSerif-Italic", size: size, relativeTo: textStyle)
+    }
+
+    /// Manrope — bundled alongside Instrument Serif for future use, same
+    /// per-weight-file convention as the Poppins helpers above.
+    static func potluckSans(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("Manrope-Regular", size: size, relativeTo: textStyle)
+    }
+
+    static func potluckSansMedium(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("Manrope-Medium", size: size, relativeTo: textStyle)
+    }
+
+    static func potluckSansSemibold(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("Manrope-SemiBold", size: size, relativeTo: textStyle)
+    }
+
+    static func potluckSansBold(_ size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        .custom("Manrope-Bold", size: size, relativeTo: textStyle)
+    }
 }
 
 enum PotluckMetrics {

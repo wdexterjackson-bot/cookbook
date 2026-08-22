@@ -32,6 +32,23 @@ struct PublicationContentSnapshotRecipeTests {
         #expect(snapshot.authorLineage == nil)
     }
 
+    @Test func mapsVideoURLsSoTheyTravelWithAPublishOrShare() {
+        let recipe = Recipe(ownerID: "alice", title: "Skillet Cornbread")
+        recipe.videoURLs = ["https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"]
+
+        let snapshot = PublicationContentSnapshot.make(from: recipe)
+
+        #expect(snapshot.videoURLs == ["https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"])
+    }
+
+    @Test func aRecipeWithNoVideosMapsToAnEmptyArrayNotNil() {
+        let recipe = Recipe(ownerID: "alice", title: "Skillet Cornbread")
+
+        let snapshot = PublicationContentSnapshot.make(from: recipe)
+
+        #expect(snapshot.videoURLs == [])
+    }
+
     @Test func mapsAuthorLineageWhenSet() {
         let recipe = Recipe(ownerID: "alice", title: "Cornbread")
         recipe.authorLineage = "Mary Jackson of Memphis, TN"
@@ -113,5 +130,45 @@ struct PublicationContentSnapshotRecipeTests {
         let snapshot = PublicationContentSnapshot.make(from: recipe)
 
         #expect(snapshot.sourceGroupSnapshot == nil)
+    }
+
+    // ShareRecipeWithFriendView's attribution rule (see
+    // attributingSenderIfUnattributed's own doc comment): sharing a
+    // recipe that's a friend's own original creation (no prior lineage)
+    // should credit the sender by name, not leave the recipient seeing
+    // "You" for a recipe they didn't make.
+    @Test func unattributedSnapshotGetsCreditedToTheSender() {
+        let recipe = Recipe(ownerID: "alice", title: "Cornbread")
+        let snapshot = PublicationContentSnapshot.make(from: recipe)
+        #expect(snapshot.authorLineage == nil)
+
+        let attributed = snapshot.attributingSenderIfUnattributed("Alice Alvarez")
+
+        #expect(attributed.authorLineage == "Alice Alvarez")
+        #expect(attributed.sourceOwnerSnapshot == "Alice Alvarez")
+    }
+
+    // The core "lineage must always stay intact" rule: a recipe that
+    // already carries its own lineage (imported from Grandma, or copied
+    // from someone else earlier) keeps that credit — the sender sharing
+    // it is never substituted in, even though the sender is the one who
+    // triggered this particular share.
+    @Test func existingLineageSurvivesASharePreservingTheOriginalCredit() {
+        let recipe = Recipe(ownerID: "alice", title: "Tamales")
+        recipe.authorLineage = "Abuela Rosa"
+        let snapshot = PublicationContentSnapshot.make(from: recipe)
+
+        let attributed = snapshot.attributingSenderIfUnattributed("Alice Alvarez")
+
+        #expect(attributed.authorLineage == "Abuela Rosa")
+    }
+
+    @Test func aNilSenderNameLeavesAnUnattributedSnapshotStillUnattributed() {
+        let recipe = Recipe(ownerID: "alice", title: "Cornbread")
+        let snapshot = PublicationContentSnapshot.make(from: recipe)
+
+        let attributed = snapshot.attributingSenderIfUnattributed(nil)
+
+        #expect(attributed.authorLineage == nil)
     }
 }

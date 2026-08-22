@@ -1,34 +1,37 @@
 //
-//  GroupCookbookView.swift
+//  CommunityCookbookRecipesView.swift
 //  cookbook
 //
-//  Read-only browse of a Family Cookbook's published recipes. Publishing a
-//  personal recipe INTO a Family Cookbook is a deliberately deferred
-//  follow-up (confirmed scope decision) — a brand-new cookbook shows an
-//  honest empty state here rather than silently looking broken.
+//  The Cookbooks tab's destination for a Community Cookbook — mirrors
+//  RecipeListView's personal-cookbook shape (header, recipe list, "No
+//  Recipes Yet" empty state) rather than the old combined info/manage
+//  screen (see CommunityCookbookManageView, reached instead from
+//  Administrator > Manage Community Cookbooks). A brand-new, still-empty
+//  cookbook offers an "Import Recipes from Existing Cookbook" action
+//  (reusing PublishCookbookToFamilyCookbookView's bulk-publish machinery,
+//  pre-locked to this cookbook as the destination) — it disappears the
+//  moment the cookbook actually has recipes in it, same one-time-only
+//  framing as the empty-state affordance it sits alongside.
 //
 
 import SwiftUI
 import SwiftData
 
-struct GroupCookbookView: View {
+struct CommunityCookbookRecipesView: View {
     let group: FamilyGroup
     let cookbook: GroupCookbook
     let membership: Membership
     let groupsService: GroupsServicing
 
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AccountState.self) private var accountState
     @Environment(\.modelContext) private var modelContext
+    @Environment(AccountState.self) private var accountState
     @Environment(ActiveCookbookState.self) private var activeCookbookState
     @Query private var allCookbooks: [Cookbook]
     @State private var publications: [Publication] = []
-    @State private var groupMemberships: [Membership] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var busyPublicationIDs: Set<String> = []
-    @State private var isPresentingLeaveConfirmation = false
-    @State private var isPresentingGroupQRCode = false
+    @State private var isPresentingImport = false
     /// Which publications the current user has liked — loaded once
     /// alongside the publications themselves, then kept in sync locally as
     /// the user taps Like (PublicationsServicing.setLiked is the source of
@@ -45,59 +48,22 @@ struct GroupCookbookView: View {
     private let publicationsService: PublicationsServicing = FirestorePublicationsService()
     private let photoUploadService: RecipePhotoUploadServicing = FirebaseRecipePhotoUploadService()
 
+    /// Same eligibility rule PublishCookbookToFamilyCookbookView and
+    /// PublishToFamilyCookbookView already use elsewhere — an admin can
+    /// always import, a plain member only when this cookbook explicitly
+    /// allows member publishing.
+    private var canImport: Bool {
+        membership.role == .admin || cookbook.allowsMemberPublishing
+    }
+
     var body: some View {
-        List {
-            Section {
-                cookbookHeader
-                    .frame(maxWidth: .infinity)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-            }
-
-            Section {
-                LabeledContent("Family/Group", value: group.name)
-                LabeledContent("Location", value: group.locationText)
-                LabeledContent("Your Role", value: membership.role.rawValue.capitalized)
-                LabeledContent("Visibility", value: group.visibility == .publicGroup ? "Public" : "Private")
-                Button {
-                    isPresentingGroupQRCode = true
-                } label: {
-                    Label("Share Group QR Code", systemImage: "qrcode")
-                }
-                if membership.role == .admin {
-                    NavigationLink {
-                        GroupAdminManagementView(group: group, groupsService: groupsService)
-                    } label: {
-                        Label("Manage Administrators", systemImage: "person.badge.key")
-                    }
-                }
-            }
-
-            Section("Recipes") {
-                if publications.isEmpty && !isLoading {
-                    Text("No recipes have been published to this cookbook yet.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(publications) { publication in
-                        publicationRow(publication)
-                    }
-                }
-            }
-
-            Section {
-                Button("Leave Family Cookbook", role: .destructive) {
-                    isPresentingLeaveConfirmation = true
-                }
-            }
-
-            if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
-            }
-            if let copyStatusMessage {
-                Text(copyStatusMessage).foregroundStyle(Color.potluckSage)
-            }
+        // No NavigationStack here — always pushed as a destination from
+        // CookbooksHubView, same convention RecipeListView documents for
+        // itself.
+        VStack(spacing: 0) {
+            cookbookHeader
+            recipeListOrEmptyState
         }
-        .potluckHiddenScrollBackground()
         .background(Color.potluckCream)
         .navigationTitle("")
         #if os(iOS)
@@ -105,39 +71,57 @@ struct GroupCookbookView: View {
         #endif
         .task {
             await loadPublications()
-            await loadMemberships()
         }
-        .confirmationDialog(
-            leaveConfirmationMessage,
-            isPresented: $isPresentingLeaveConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button(isLastActiveMember ? "Delete Cookbook" : "Leave", role: .destructive) {
-                Task { await leave() }
+        .sheet(isPresented: $isPresentingImport) {
+            PublishCookbookToFamilyCookbookView(fixedDestination: (group: group, cookbook: cookbook))
+        }
+        .onChange(of: isPresentingImport) { wasPresenting, isPresenting in
+            // The import sheet publishes recipes as a side effect — refresh
+            // once it's dismissed so the (now non-empty) list replaces the
+            // empty state without the user needing to pull-to-refresh.
+            if wasPresenting, !isPresenting {
+                Task { await loadPublications() }
             }
-            Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $isPresentingGroupQRCode) {
-            QRCodeDisplayView(
-                payload: .group(id: group.id),
-                title: group.name,
-                subtitle: "Scan this to send a request to join \(group.name)."
-            )
         }
     }
 
-    /// Whether `membership.userID` leaving would be the last active
-    /// membership on this group — leaveGroup deletes the whole cookbook in
-    /// that case rather than just marking this one membership `.left`.
-    private var isLastActiveMember: Bool {
-        GroupPolicy.isLastActiveMember(membership.userID, in: groupMemberships)
-    }
-
-    private var leaveConfirmationMessage: String {
-        if isLastActiveMember {
-            return "You're the last member of \(cookbook.cookbookName). Leaving will permanently delete this cookbook and everything in it — recipes and photos — for everyone. This cannot be undone."
+    @ViewBuilder
+    private var recipeListOrEmptyState: some View {
+        Group {
+            if publications.isEmpty && !isLoading {
+                ContentUnavailableView {
+                    Label("No Recipes Yet", systemImage: "fork.knife")
+                } description: {
+                    Text("No recipes have been published to \(cookbook.cookbookName) yet.")
+                } actions: {
+                    if canImport {
+                        Button("Import Recipes from Existing Cookbook") {
+                            isPresentingImport = true
+                        }
+                    }
+                }
+            } else {
+                ScrollViewReader { scrollProxy in
+                    List {
+                        ForEach(publications) { publication in
+                            publicationRow(publication)
+                        }
+                        if let errorMessage {
+                            Text(errorMessage).foregroundStyle(.red)
+                        }
+                        if let copyStatusMessage {
+                            Text(copyStatusMessage).foregroundStyle(Color.potluckSage)
+                        }
+                    }
+                    .potluckHiddenScrollBackground()
+                    #if os(iOS)
+                    .overlay(alignment: .trailing) {
+                        ScrollScrubber(itemIDs: publications.map(\.id), proxy: scrollProxy)
+                    }
+                    #endif
+                }
+            }
         }
-        return "Leave \(group.name)? You'll be removed from this Family Cookbook."
     }
 
     private var cookbookHeader: some View {
@@ -147,19 +131,34 @@ struct GroupCookbookView: View {
                 .foregroundStyle(Color.potluckDeepTeal)
                 .multilineTextAlignment(.center)
 
-            if let urlString = cookbook.coverImageURL ?? group.coverImageURL, let url = URL(string: urlString) {
-                AsyncImage(url: url) { image in
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Color.secondary.opacity(0.1)
-                }
+            coverArt
                 .frame(height: 140)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
                 .potluckCardShadow()
-            }
         }
+        .padding(.horizontal)
         .padding(.vertical, 4)
+    }
+
+    /// Priority: a custom uploaded image wins; otherwise a chosen Cover
+    /// Style; otherwise the plain color — same fallback order
+    /// RecipeListView's personal-cookbook header uses.
+    @ViewBuilder
+    private var coverArt: some View {
+        if let urlString = cookbook.coverImageURL ?? group.coverImageURL, let url = URL(string: urlString) {
+            AsyncImage(url: url) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Color.secondary.opacity(0.1)
+            }
+        } else if let styleName = cookbook.coverStyleImageName, let style = CookbookCoverStyleCatalog.style(named: styleName) {
+            Image(style.imageAssetName)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            Color(hex: cookbook.coverColorHex ?? Cookbook.defaultColorHex)
+        }
     }
 
     @ViewBuilder
@@ -186,7 +185,12 @@ struct GroupCookbookView: View {
                 likeRow(publication)
                 ratingRow(publication)
 
-                if publication.commentsEnabled {
+                // The cookbook-wide ceiling (cookbook.commentsAllowed) hides
+                // this entry point even if a recipe's own commentsEnabled
+                // flag is stale-true from before an admin turned the
+                // ceiling off — see CommunityCookbookManageView's Cookbook
+                // Settings section.
+                if publication.commentsEnabled && (cookbook.commentsAllowed ?? true) {
                     NavigationLink {
                         PublicationCommentsView(publication: publication, membership: membership, publicationsService: publicationsService)
                     } label: {
@@ -387,21 +391,6 @@ struct GroupCookbookView: View {
                 }
                 myRatings = ratings
             }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func loadMemberships() async {
-        groupMemberships = (try? await groupsService.fetchMemberships(forGroup: group.id)) ?? []
-    }
-
-    private func leave() async {
-        do {
-            try await groupsService.leaveGroup(groupID: group.id, userID: membership.userID)
-            dismiss()
-        } catch GroupsServiceError.lastAdminCannotLeaveOrBeDemoted {
-            errorMessage = "You're the last admin of this cookbook with other active members still in it — promote someone else first."
         } catch {
             errorMessage = error.localizedDescription
         }

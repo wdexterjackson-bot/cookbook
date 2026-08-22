@@ -12,8 +12,7 @@ struct RecipeOwnershipMigratorTests {
 
     private func makeInMemoryContext() throws -> ModelContext {
         let schema = Schema([Recipe.self, IngredientSection.self, Ingredient.self, StepSection.self, Step.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let container = try TestModelContainer.make(schema: schema)
         return ModelContext(container)
     }
 

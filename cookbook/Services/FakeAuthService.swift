@@ -55,6 +55,15 @@ final class FakeAuthService: AuthServicing {
         displayNamesByUserID[currentUserID] = displayName
     }
 
+    /// Tracked, not simulated — matches the real adapter's success-
+    /// regardless-of-existence behavior, so tests can assert a call
+    /// happened without the fake needing its own notion of "registered."
+    private(set) var passwordResetEmailsSent: [String] = []
+
+    func sendPasswordReset(email: String) async throws {
+        passwordResetEmailsSent.append(email)
+    }
+
     func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult {
         try signInFederated(token: idToken, provider: "apple")
     }

@@ -19,22 +19,54 @@ import SwiftUI
 struct CookingModePrepReviewView: View {
     let recipe: Recipe
     @Binding var servingMultiplier: Double
+    /// Same background the step pager will show once cooking starts —
+    /// passed down rather than picked independently, so this screen
+    /// doesn't flash a different image the moment "Start Cooking" is
+    /// tapped (see CookingModeView.currentBackgroundImageName, the one
+    /// source of truth this mirrors).
+    let backgroundImageName: String
     let onStartCooking: () -> Void
+    /// "Start Cooking" everywhere except the video-section entry point in
+    /// RecipeDetailView, which passes "Ready to Continue" instead — the
+    /// user's own cooking session may already be underway there, so
+    /// "Start" reads wrong.
+    var startButtonLabel: String = "Start Cooking"
 
     var prepSummaryService: RecipePrepSummaryServicing = FoundationModelsPrepSummaryService()
 
     @Environment(\.modelContext) private var modelContext
     @State private var isGenerating = false
 
-    /// Fixed row count rather than a single flowing column — lets the
-    /// ingredient card have a defined size/shape and scroll horizontally
-    /// when a recipe has more ingredients than fit, instead of pushing
-    /// "Start Cooking" further down the page.
-    private let ingredientGridRows = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+    /// A fixed-row-count horizontal grid used to live here — cutting the
+    /// list off after 4 rows and requiring a horizontal scroll (with no
+    /// visible affordance hinting at it) to see the rest, which is
+    /// exactly the "ingredients are missing/cut off" bug reported against
+    /// it. A vertical, adaptive-column grid instead grows with the outer
+    /// ScrollView, so every ingredient is always reachable, and each cell
+    /// gets its own full width to left-justify (and wrap, rather than
+    /// clip) whatever a scaled amount's text turns out to be.
+    private let ingredientGridColumns = [GridItem(.adaptive(minimum: 140), spacing: 20, alignment: .leading)]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                VStack(spacing: 8) {
+                    Text(recipe.title)
+                        .font(.potluckHeadline(24))
+                        .foregroundStyle(Color.potluckDeepTeal)
+                        .multilineTextAlignment(.center)
+
+                    if let lineage = trimmedAuthorLineage {
+                        Text("Inspired by \(lineage)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Kitchen Preparation")
+                        .font(.title2.weight(.bold))
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+
                 if let prepSummary = recipe.prepSummary, !prepSummary.isEmpty {
                     prepSummaryCard(prepSummary)
                 } else if isGenerating {
@@ -60,32 +92,36 @@ struct CookingModePrepReviewView: View {
                         Button("Reset to Original") { servingMultiplier = 1 }
                             .font(.caption)
                     }
-                    ScrollView(.horizontal) {
-                        LazyHGrid(rows: ingredientGridRows, alignment: .top, spacing: 20) {
-                            ForEach(flattenedIngredientEntries, id: \.id) { entry in
-                                Text(entry.text)
-                                    .font(.body)
-                                    .frame(minWidth: 140, alignment: .leading)
-                            }
+                    LazyVGrid(columns: ingredientGridColumns, alignment: .leading, spacing: 12) {
+                        ForEach(flattenedIngredientEntries, id: \.id) { entry in
+                            Text(entry.text)
+                                .font(.body)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
                     }
-                    .frame(height: 240)
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
                 }
+                .padding(12)
+                .background(Color.potluckCream.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
 
                 Button {
                     onStartCooking()
                 } label: {
-                    Text("Start Cooking")
+                    Text(startButtonLabel)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             }
             .padding()
+        }
+        .background {
+            Image(backgroundImageName)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
         }
         .task {
             await generateSummaryIfNeeded()
@@ -99,18 +135,21 @@ struct CookingModePrepReviewView: View {
                 .font(.headline)
             Text(summary)
                 .fixedSize(horizontal: false, vertical: true)
-            if prepSummaryService.isAvailable {
-                Button("Regenerate") {
-                    recipe.prepSummary = nil
-                    Task { await generateSummaryIfNeeded() }
-                }
-                .font(.caption)
-            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.potluckSunflower.opacity(0.18))
+        .background(Color.potluckSunflower.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: PotluckMetrics.cardCornerRadius))
+    }
+
+    /// Nil (not "You") when the recipe has no external lineage — unlike
+    /// RecipeDetailView's own lineage label, this screen only shows the
+    /// line when there's an actual credit to show.
+    private var trimmedAuthorLineage: String? {
+        guard let lineage = recipe.authorLineage?.trimmingCharacters(in: .whitespacesAndNewlines), !lineage.isEmpty else {
+            return nil
+        }
+        return lineage
     }
 
     /// Mirrors IngredientReferenceListView.scaledText(for:)/
@@ -200,7 +239,7 @@ struct CookingModePrepReviewView: View {
     ]
     recipe.ingredientSections = [section]
     return NavigationStack {
-        CookingModePrepReviewView(recipe: recipe, servingMultiplier: .constant(1), onStartCooking: {})
+        CookingModePrepReviewView(recipe: recipe, servingMultiplier: .constant(1), backgroundImageName: CookingModeBackgroundCatalog.randomName(excluding: nil), onStartCooking: {})
     }
     .modelContainer(for: Recipe.self, inMemory: true)
 }

@@ -197,6 +197,47 @@ protocol GroupsServicing {
     /// or userID — see the invitations UID-matching fix in firestore.rules).
     func fetchInvitations(forInvitee identifier: String) async throws -> [Invitation]
 
+    /// Admin-only edit of a Community's (FamilyGroup's) shared settings —
+    /// name, location, visibility, who can join, and whether members can
+    /// invite others. These apply to every cookbook the group holds, not
+    /// just one — distinct from `updateGroupCookbook`, which is scoped to
+    /// a single cookbook. `createdByUserID`/`isMFB` are never touched here
+    /// (firestore.rules' groups/update rule keeps both immutable).
+    func updateGroup(
+        _ groupID: String,
+        name: String,
+        locationText: String,
+        visibility: GroupVisibility,
+        approvalPolicy: JoinApprovalPolicy,
+        allowsMemberInvites: Bool,
+        actingUserID: String
+    ) async throws
+
+    /// Admin-only edit of one cookbook's own settings — name, whether
+    /// members can publish to it, the cookbook-wide comments ceiling
+    /// (`GroupCookbook.commentsAllowed`), and its cover (color, style,
+    /// and/or a custom uploaded image — same three-way priority as
+    /// `Cookbook`'s own cover fields: image beats style beats color).
+    /// `coverImageURL` is passed through as-is (nil to clear it, an
+    /// existing or freshly-uploaded URL to set it) — actually uploading/
+    /// deleting the Storage object itself is the caller's job
+    /// (GroupCookbookPhotoUploadServicing), not this method's; this only
+    /// persists whatever URL the caller already resolved. `groupID` is
+    /// never touched here (firestore.rules' groupCookbooks/update rule
+    /// keeps it immutable — a cookbook can't be reparented to a
+    /// different group).
+    func updateGroupCookbook(
+        _ cookbookID: String,
+        groupID: String,
+        cookbookName: String,
+        allowsMemberPublishing: Bool,
+        commentsAllowed: Bool,
+        coverColorHex: String,
+        coverStyleImageName: String?,
+        coverImageURL: String?,
+        actingUserID: String
+    ) async throws
+
     /// Throws `.lastAdminCannotLeaveOrBeDemoted` if this would leave the
     /// group with no active admin (GRP-008).
     func updateRole(groupID: String, userID: String, newRole: MembershipRole, actingUserID: String) async throws

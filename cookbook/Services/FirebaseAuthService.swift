@@ -39,6 +39,10 @@ final class FirebaseAuthService: AuthServicing {
         return AuthResult(userID: result.user.uid, isNewAccount: true)
     }
 
+    func sendPasswordReset(email: String) async throws {
+        try await Auth.auth().sendPasswordReset(withEmail: email)
+    }
+
     func updateDisplayName(_ displayName: String) async throws {
         guard let user = Auth.auth().currentUser else {
             throw AuthServiceError.notSignedIn

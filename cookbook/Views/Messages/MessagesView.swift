@@ -10,10 +10,13 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct MessagesView: View {
+    @Environment(\.modelContext) private var modelContext
     @Environment(AccountState.self) private var accountState
     @Environment(\.dismiss) private var dismiss
+    @Query private var allCookbooks: [Cookbook]
 
     @State private var messages: [Message] = []
     @State private var adminPendingJoinRequests: [(request: JoinRequest, group: FamilyGroup)] = []
@@ -21,17 +24,34 @@ struct MessagesView: View {
     @State private var pendingInvitations: [(invitation: Invitation, group: FamilyGroup)] = []
     @State private var incomingFriendRequests: [FriendRequest] = []
     @State private var outgoingFriendRequests: [FriendRequest] = []
+    @State private var pendingSharedRecipes: [SharedRecipe] = []
+    @State private var outgoingSharedRecipes: [SharedRecipe] = []
+    #if !os(tvOS)
+    @State private var chatUnreadCounts: [String: Int] = [:]
+    #endif
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var copyStatusMessage: String?
     @State private var busyIDs: Set<String> = []
+    @State private var friendlyNames = FriendlyNameDirectory()
+    @State private var sharedRecipePendingCookbookChoice: SharedRecipe?
+    #if !os(tvOS)
+    @State private var isPresentingNewChat = false
+    #endif
 
     private let groupsService: GroupsServicing = FirestoreGroupsService()
     private let friendsService: FriendsServicing = FirestoreFriendsService()
+    private let chatService: ChatServicing = FirestoreChatService()
     private let messagingService: MessagingServicing = FirestoreMessagingService()
+    private let sharedRecipesService: SharedRecipesServicing = FirestoreSharedRecipesService()
     private let entitlementService: EntitlementServicing = FirestoreEntitlementService()
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
     @State private var gate = EntitlementGateCoordinator()
+
+    private var ownedCookbooks: [Cookbook] {
+        allCookbooks.filter { $0.ownerID == accountState.currentOwnerID }
+    }
 
     var body: some View {
         NavigationStack {
@@ -39,6 +59,16 @@ struct MessagesView: View {
                 if isEverythingEmpty && !isLoading {
                     ContentUnavailableView("No Messages", systemImage: "tray")
                 }
+
+                #if !os(tvOS)
+                if !chatUnreadCounts.isEmpty {
+                    Section("Chats") {
+                        ForEach(chatUnreadCounts.sorted { $0.key < $1.key }, id: \.key) { friendUserID, unreadCount in
+                            chatRow(friendUserID: friendUserID, unreadCount: unreadCount)
+                        }
+                    }
+                }
+                #endif
 
                 if !adminPendingJoinRequests.isEmpty {
                     Section("Requests to Join Your Cookbooks") {
@@ -68,6 +98,25 @@ struct MessagesView: View {
                     Section("Your Friend Requests") {
                         ForEach(outgoingFriendRequests) { request in
                             outgoingFriendRequestRow(request)
+                        }
+                    }
+                }
+
+                if !pendingSharedRecipes.isEmpty {
+                    Section("Recipes Shared With You") {
+                        ForEach(pendingSharedRecipes) { shared in
+                            sharedRecipeRow(shared)
+                        }
+                        if let copyStatusMessage {
+                            Text(copyStatusMessage).foregroundStyle(Color.potluckSage)
+                        }
+                    }
+                }
+
+                if !outgoingSharedRecipes.isEmpty {
+                    Section("Recipes You've Shared") {
+                        ForEach(outgoingSharedRecipes) { shared in
+                            outgoingSharedRecipeRow(shared)
                         }
                     }
                 }
@@ -106,6 +155,26 @@ struct MessagesView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+                #if !os(tvOS)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isPresentingNewChat = true
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .accessibilityLabel("New Message")
+                }
+                #endif
+            }
+            #if !os(tvOS)
+            .sheet(isPresented: $isPresentingNewChat) {
+                NewChatView(friendsService: friendsService, chatService: chatService)
+            }
+            #endif
+            .sheet(item: $sharedRecipePendingCookbookChoice) { shared in
+                PickCookbookSheet(title: "Add to Cookbook", cookbooks: ownedCookbooks) { cookbook in
+                    Task { await copySharedRecipe(shared, into: cookbook) }
+                }
             }
             .task(id: accountState.currentUserID) {
                 await load()
@@ -124,8 +193,13 @@ struct MessagesView: View {
     }
 
     private var isEverythingEmpty: Bool {
-        messages.isEmpty && adminPendingJoinRequests.isEmpty && ownJoinRequests.isEmpty && pendingInvitations.isEmpty
-            && incomingFriendRequests.isEmpty && outgoingFriendRequests.isEmpty
+        var empty = messages.isEmpty && adminPendingJoinRequests.isEmpty && ownJoinRequests.isEmpty && pendingInvitations.isEmpty
+            && incomingFriendRequests.isEmpty && outgoingFriendRequests.isEmpty && pendingSharedRecipes.isEmpty
+            && outgoingSharedRecipes.isEmpty
+        #if !os(tvOS)
+        empty = empty && chatUnreadCounts.isEmpty
+        #endif
+        return empty
     }
 
     private func statusText(_ state: JoinRequestState) -> String {
@@ -180,14 +254,63 @@ struct MessagesView: View {
         .padding(.vertical, 4)
     }
 
-    /// No sender display name shown, same reasoning as everywhere else in
-    /// this app that surfaces another user's identity minimally (see
-    /// FriendsListView's own doc comment) — findUserByEmail's result is
-    /// the one deliberate exception, shown only at request-sending time.
+    @ViewBuilder
+    private func sharedRecipeRow(_ shared: SharedRecipe) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(shared.content.title)
+                .font(.headline)
+            Text("Shared by \(friendlyNames.label(for: shared.senderID))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Accept") {
+                    sharedRecipePendingCookbookChoice = shared
+                }
+                .disabled(ownedCookbooks.isEmpty)
+                Button("Decline", role: .destructive) {
+                    Task { await declineSharedRecipe(shared) }
+                }
+            }
+            .disabled(busyIDs.contains(shared.id))
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func outgoingSharedRecipeRow(_ shared: SharedRecipe) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(shared.content.title)
+                .font(.headline)
+            Text("Shared with \(friendlyNames.label(for: shared.recipientID)) — waiting for a response")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    #if !os(tvOS)
+    @ViewBuilder
+    private func chatRow(friendUserID: String, unreadCount: Int) -> some View {
+        NavigationLink {
+            ChatView(friendUserID: friendUserID, chatService: chatService)
+        } label: {
+            HStack {
+                Text(friendlyNames.label(for: friendUserID))
+                Spacer()
+                Text("\(unreadCount)")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(6)
+                    .background(Circle().fill(Color.potluckTomato))
+            }
+        }
+    }
+    #endif
+
     @ViewBuilder
     private func incomingFriendRequestRow(_ request: FriendRequest) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Friend request from Member \(request.senderID.suffix(6))")
+            Text("Friend request from \(friendlyNames.label(for: request.senderID))")
                 .font(.headline)
             HStack {
                 Button("Accept") {
@@ -205,7 +328,7 @@ struct MessagesView: View {
     @ViewBuilder
     private func outgoingFriendRequestRow(_ request: FriendRequest) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Friend request sent to Member \(request.recipientID.suffix(6))")
+            Text("Friend request sent to \(friendlyNames.label(for: request.recipientID))")
                 .font(.headline)
             Text("Waiting for a response")
                 .font(.caption)
@@ -277,6 +400,36 @@ struct MessagesView: View {
             failureMessages.append(error.localizedDescription)
         }
 
+        do {
+            pendingSharedRecipes = try await sharedRecipesService.fetchSharedRecipes(forRecipient: userID)
+                .filter { $0.state == .pending }
+        } catch {
+            failureMessages.append(error.localizedDescription)
+        }
+
+        do {
+            outgoingSharedRecipes = try await sharedRecipesService.fetchSharedRecipes(bySender: userID)
+                .filter { $0.state == .pending }
+        } catch {
+            failureMessages.append(error.localizedDescription)
+        }
+
+        var otherUserIDs = incomingFriendRequests.map(\.senderID)
+            + outgoingFriendRequests.map(\.recipientID)
+            + pendingSharedRecipes.map(\.senderID)
+            + outgoingSharedRecipes.map(\.recipientID)
+
+        #if !os(tvOS)
+        do {
+            chatUnreadCounts = try await chatService.fetchUnreadCounts(forRecipient: userID)
+            otherUserIDs += Array(chatUnreadCounts.keys)
+        } catch {
+            failureMessages.append(error.localizedDescription)
+        }
+        #endif
+
+        await friendlyNames.load(userIDs: otherUserIDs)
+
         errorMessage = failureMessages.isEmpty ? nil
             : (failureMessages.count == 1 ? failureMessages[0] : "Some of your messages couldn't be loaded. Pull to refresh to try again.")
     }
@@ -309,6 +462,37 @@ struct MessagesView: View {
         defer { busyIDs.remove(request.id) }
         do {
             try await friendsService.cancelFriendRequest(request.id, actingUserID: userID)
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func copySharedRecipe(_ shared: SharedRecipe, into cookbook: Cookbook) async {
+        guard let userID = accountState.currentUserID else { return }
+        busyIDs.insert(shared.id)
+        errorMessage = nil
+        defer { busyIDs.remove(shared.id) }
+        switch RecipeCopyCoordinator.copy(shared, forUserID: userID, into: cookbook, modelContext: modelContext) {
+        case .success:
+            do {
+                try await sharedRecipesService.markCopied(shared.id, recipientID: userID)
+                copyStatusMessage = "Added \"\(shared.content.title)\" to \(cookbook.title)."
+                await load()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        case .failure(let error):
+            errorMessage = "Couldn't copy this recipe: \(error.localizedDescription)"
+        }
+    }
+
+    private func declineSharedRecipe(_ shared: SharedRecipe) async {
+        guard let userID = accountState.currentUserID else { return }
+        busyIDs.insert(shared.id)
+        defer { busyIDs.remove(shared.id) }
+        do {
+            try await sharedRecipesService.decline(shared.id, recipientID: userID)
             await load()
         } catch {
             errorMessage = error.localizedDescription
@@ -361,4 +545,6 @@ struct MessagesView: View {
 #Preview {
     MessagesView()
         .environment(AccountState(authService: FakeAuthService()))
+        .environment(ActiveCookbookState())
+        .modelContainer(for: Recipe.self, inMemory: true)
 }

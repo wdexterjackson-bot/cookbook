@@ -84,6 +84,15 @@ test('treats a profile doc with no matching Auth user as not found', async () =>
   assert.deepEqual(result, { found: false });
 });
 
+test('finds a user regardless of search-input casing (stored lowercase, searched mixed-case)', async () => {
+  await db.collection('userProfiles').doc('bob-uid').set({ email: 'bob@example.com', isEmailDiscoverable: true });
+  const authClient = fakeAuthClient({ 'bob-uid': { displayName: 'Bob Barrentine' } });
+
+  const result = await findUserByEmail({ db, authClient, email: 'Bob@Example.com', callerUserID: 'alice-uid' });
+
+  assert.deepEqual(result, { found: true, userID: 'bob-uid', displayName: 'Bob Barrentine' });
+});
+
 test('rejects an empty email', async () => {
   const authClient = fakeAuthClient({});
 

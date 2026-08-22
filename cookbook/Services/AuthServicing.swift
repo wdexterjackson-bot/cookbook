@@ -50,6 +50,15 @@ protocol AuthServicing {
 
     func signInWithEmail(email: String, password: String) async throws -> AuthResult
     func signUpWithEmail(email: String, password: String, displayName: String) async throws -> AuthResult
+    /// Sends Firebase's own hosted "reset your password" email — the user
+    /// picks a brand-new password via the link, nothing about their old
+    /// one is ever read back to anyone (Firebase's password hashing is
+    /// one-way; there is no "email me my current password" capability).
+    /// Succeeds even for an email with no account, matching
+    /// EmailProviderLookupServicing's same anti-enumeration stance — never
+    /// use this call's success/failure to tell a user whether an account
+    /// exists.
+    func sendPasswordReset(email: String) async throws
     func signInWithApple(idToken: String, rawNonce: String) async throws -> AuthResult
     func signInWithGoogle(idToken: String, accessToken: String) async throws -> AuthResult
     /// Apple TV phone-pairing sign-in: the TV exchanges a short-lived,

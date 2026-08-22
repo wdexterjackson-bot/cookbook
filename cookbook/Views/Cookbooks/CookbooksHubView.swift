@@ -3,13 +3,15 @@
 //  cookbook
 //
 //  The dashboard spec's "Cookbooks" tab: "All recipe containers —
-//  Personal, joined groups, MFB, with a cookbook switcher." Reuses
-//  GroupCookbookView (Family) wholesale rather than rewriting its
-//  content — this screen owns the switcher plus Personal cookbook
-//  create/edit/delete. Family Cookbook removal isn't duplicated here —
-//  GroupCookbookView already has a correct "Leave Family Cookbook" flow
-//  (including the last-admin-can't-leave edge case), reached by tapping
-//  into the cookbook.
+//  Personal, joined groups, MFB, with a cookbook switcher." This screen
+//  owns the switcher plus Personal cookbook create/edit/delete. Tapping a
+//  Community Cookbook pushes CommunityCookbookRecipesView — the same
+//  recipe-list-first shape a personal cookbook gets, empty-state and all
+//  — not the properties/manage screen (CommunityCookbookManageView),
+//  which lives instead under Administrator > Manage Community Cookbooks.
+//  Family Cookbook removal isn't duplicated here — CommunityCookbookManageView
+//  already has a correct "Leave Family Cookbook" flow (including the
+//  last-admin-can't-leave edge case), reached from that Administrator screen.
 //
 
 import SwiftUI
@@ -136,7 +138,7 @@ struct CookbooksHubView: View {
                     Section("Community Cookbooks") {
                         ForEach(joinedGroups, id: \.cookbook.id) { entry in
                             NavigationLink {
-                                GroupCookbookView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
+                                CommunityCookbookRecipesView(group: entry.group, cookbook: entry.cookbook, membership: entry.membership, groupsService: groupsService)
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(entry.cookbook.cookbookName)

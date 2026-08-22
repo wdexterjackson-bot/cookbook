@@ -411,6 +411,79 @@ struct GroupsServicingTests {
         }
     }
 
+    @Test func adminCanUpdateGroupCookbookSettings() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, cookbook) = try await createTestGroup(service)
+
+        try await service.updateGroupCookbook(
+            cookbook.id, groupID: group.id, cookbookName: "Renamed Reunion",
+            allowsMemberPublishing: false, commentsAllowed: false,
+            coverColorHex: "2A7F7E", coverStyleImageName: "01-forest-laurel", coverImageURL: "https://example.com/cover.jpg",
+            actingUserID: "alice"
+        )
+
+        let updated = try await service.fetchGroupCookbook(id: cookbook.id)
+        #expect(updated?.cookbookName == "Renamed Reunion")
+        #expect(updated?.allowsMemberPublishing == false)
+        #expect(updated?.commentsAllowed == false)
+        #expect(updated?.coverColorHex == "2A7F7E")
+        #expect(updated?.coverStyleImageName == "01-forest-laurel")
+        #expect(updated?.coverImageURL == "https://example.com/cover.jpg")
+    }
+
+    @Test func nonAdminCannotUpdateGroupCookbookSettings() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, cookbook) = try await createTestGroup(service)
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
+
+        await #expect(throws: GroupsServiceError.notAuthorized) {
+            try await service.updateGroupCookbook(
+                cookbook.id, groupID: group.id, cookbookName: "Bob's Edit",
+                allowsMemberPublishing: true, commentsAllowed: true,
+                coverColorHex: "2A7F7E", coverStyleImageName: nil, coverImageURL: nil,
+                actingUserID: "bob"
+            )
+        }
+    }
+
+    @Test func adminCanUpdateGroupSettings() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+
+        try await service.updateGroup(
+            group.id, name: "Renamed Family", locationText: "Nashville, TN",
+            visibility: .privateGroup, approvalPolicy: .noApprovalNeeded,
+            allowsMemberInvites: true, actingUserID: "alice"
+        )
+
+        let updated = try await service.fetchGroup(id: group.id)
+        #expect(updated?.name == "Renamed Family")
+        #expect(updated?.locationText == "Nashville, TN")
+        #expect(updated?.visibility == .privateGroup)
+        #expect(updated?.approvalPolicy == .noApprovalNeeded)
+        #expect(updated?.allowsMemberInvites == true)
+    }
+
+    @Test func nonAdminCannotUpdateGroupSettings() async throws {
+        let service = InMemoryGroupsService()
+        service.tier2CreditsByUserID["alice"] = 1
+        let (group, _) = try await createTestGroup(service)
+        let request = try await service.requestToJoin(groupID: group.id, requesterID: "bob", note: nil)
+        try await service.decideJoinRequest(request.id, approve: true, decidedByUserID: "alice")
+
+        await #expect(throws: GroupsServiceError.notAuthorized) {
+            try await service.updateGroup(
+                group.id, name: "Bob's Edit", locationText: "Nowhere",
+                visibility: .publicGroup, approvalPolicy: .anyAdministrator,
+                allowsMemberInvites: true, actingUserID: "bob"
+            )
+        }
+    }
+
     @Test func fetchPublicGroupCookbooksOnlyReturnsCookbooksFromPublicActiveGroups() async throws {
         let service = InMemoryGroupsService()
         service.tier2CreditsByUserID["alice"] = 2

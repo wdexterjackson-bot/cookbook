@@ -62,6 +62,15 @@ struct PublicationContentSnapshot: Codable, Equatable {
     var rootOriginRecipeID: String?
     var sourceOwnerSnapshot: String?
     var sourceGroupSnapshot: String?
+    /// The source Recipe's saved video links (max 3, see Recipe.
+    /// videoURLs) — Optional, not a plain `[String]` with a `= []`
+    /// default, because Firestore's Codable decoding throws on a
+    /// genuinely missing key regardless of a compile-time default (a
+    /// stored default only helps direct Swift construction, not
+    /// `data(as:)`); nil for publications/shares created before this
+    /// field existed, treated the same as "no videos" everywhere this is
+    /// read. New publishes/shares always write this explicitly.
+    var videoURLs: [String]?
 
     init(
         title: String,
@@ -76,7 +85,8 @@ struct PublicationContentSnapshot: Codable, Equatable {
         authorLineage: String? = nil,
         rootOriginRecipeID: String? = nil,
         sourceOwnerSnapshot: String? = nil,
-        sourceGroupSnapshot: String? = nil
+        sourceGroupSnapshot: String? = nil,
+        videoURLs: [String]? = nil
     ) {
         self.title = title
         self.summary = summary
@@ -91,6 +101,7 @@ struct PublicationContentSnapshot: Codable, Equatable {
         self.rootOriginRecipeID = rootOriginRecipeID
         self.sourceOwnerSnapshot = sourceOwnerSnapshot
         self.sourceGroupSnapshot = sourceGroupSnapshot
+        self.videoURLs = videoURLs
     }
 }
 
@@ -113,7 +124,7 @@ struct Publication: Codable, Identifiable, Equatable {
     var updatedAt: Date
     var content: PublicationContentSnapshot
     /// Nil for publications created before like-counting existed — treat
-    /// as 0 (see the `?? 0` at GroupCookbookView's display site). Inline
+    /// as 0 (see the `?? 0` at CommunityCookbookRecipesView's display site). Inline
     /// `= nil` so existing Publication(...) call sites don't need updating
     /// and old Firestore docs lacking the field still decode. Maintained
     /// by PublicationsServicing.setLiked, paired (same transaction) with a

@@ -19,6 +19,7 @@ struct AuthGatedRootView: View {
     private let entitlementGranter: EntitlementGranting = FirestoreEntitlementGranter()
     private let purchaseService: PurchaseServicing = StoreKitPurchaseService()
     private let claimWriter: PurchaseClaimSubmitting = FirestorePurchaseClaimWriter()
+    private let publicProfileService: PublicProfileServicing = FirestorePublicProfileService()
 
     var body: some View {
         if accountState.isSignedIn {
@@ -49,6 +50,14 @@ struct AuthGatedRootView: View {
                     await PurchaseCoordinator.reconcileUnfinishedTransactions(
                         userID: userID, purchaseService: purchaseService, claimWriter: claimWriter
                     )
+                    // Same "backfill on every relaunch" reasoning as the
+                    // credit grant above — an account created before
+                    // publicProfiles existed (or that changed its name
+                    // since) self-heals here rather than needing a fresh
+                    // sign-in for friends to see its real name.
+                    if let name = accountState.currentUserDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                        try? await publicProfileService.setDisplayName(name, userID: userID)
+                    }
                 }
         } else {
             SignInView(isDismissable: false)

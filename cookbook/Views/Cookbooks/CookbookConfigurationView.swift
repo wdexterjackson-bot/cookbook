@@ -37,6 +37,10 @@ struct CookbookConfigurationView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(AccountState.self) private var accountState
+    /// Only consulted in `.create` mode, to avoid silently handing out a
+    /// second "My Cookbook" — see `clearDefaultTitleIfAlreadyTaken()`.
+    /// Unused in `.edit` mode.
+    @Query(sort: \Cookbook.sortOrder) private var allCookbooks: [Cookbook]
 
     private let syncService: PersonalCookbookSyncServicing = FirestorePersonalCookbookSyncService()
     private let photoUploadService: PersonalCookbookPhotoUploadServicing = FirebasePersonalCookbookPhotoUploadService()
@@ -72,6 +76,10 @@ struct CookbookConfigurationView: View {
     /// from adding/removing a chapter) — see Cookbook.chaptersManuallyReordered.
     @State private var chaptersManuallyReordered: Bool
     @State private var newCustomSectionTitle = ""
+    /// Set by `clearDefaultTitleIfAlreadyTaken()` the moment it blanks the
+    /// default title out — drives the Title section's footer prompt. Never
+    /// set in `.edit` mode.
+    @State private var titleWasClearedDueToCollision = false
     @State private var validationMessage: String?
     @State private var isCloudSynced: Bool
     /// Captured at open time so save() can tell "just turned on this
@@ -84,6 +92,7 @@ struct CookbookConfigurationView: View {
     @State private var lastSyncedAt: Date?
     @State private var isSyncing = false
     @State private var syncErrorMessage: String?
+    @State private var entitlement: Entitlement?
 
     init(mode: Mode) {
         self.mode = mode
@@ -126,8 +135,14 @@ struct CookbookConfigurationView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Title") {
+                Section {
                     TextField("Cookbook Title", text: $title)
+                } header: {
+                    Text("Title")
+                } footer: {
+                    if titleWasClearedDueToCollision {
+                        Text("You already have a cookbook named \"My Cookbook\" — give this one its own name.")
+                    }
                 }
 
                 Section {
@@ -165,8 +180,14 @@ struct CookbookConfigurationView: View {
                 }
 
                 #if os(iOS)
-                Section("Cover Image") {
+                Section {
                     coverImagePicker
+                } header: {
+                    Text("Cover Image")
+                } footer: {
+                    if coverImageRequiresAnnualProMembership {
+                        Text("This cookbook is synced to the cloud, so adding a cover image requires an active Annual Pro Membership.")
+                    }
                 }
                 #endif
 
@@ -224,6 +245,10 @@ struct CookbookConfigurationView: View {
             .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
             .navigationTitle(isEditing ? "Edit Cookbook" : "New Cookbook")
+            .onAppear(perform: clearDefaultTitleIfAlreadyTaken)
+            .task {
+                await loadEntitlement()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -386,6 +411,7 @@ struct CookbookConfigurationView: View {
             }
         }
         .accessibilityLabel(coverImageData == nil ? "Add cover image" : "Change cover image")
+        .disabled(coverImageRequiresAnnualProMembership)
         .onChange(of: selectedPhotoItem) { _, newItem in
             Task {
                 if let data = try? await newItem?.loadTransferable(type: Data.self) {
@@ -441,6 +467,36 @@ struct CookbookConfigurationView: View {
     private var isEditing: Bool {
         if case .edit = mode { return true }
         return false
+    }
+
+    /// `@Query` isn't readable inside `init(mode:)` — the modelContext
+    /// environment value isn't wired up until the view is actually
+    /// installed — so the untouched "My Cookbook" default set there gets
+    /// corrected here instead, the moment the view first appears (well
+    /// before the user could plausibly have typed anything). Guarded on
+    /// `.create` and the title still being the untouched default, so this
+    /// never touches `.edit` mode or a title the user already changed.
+    /// Live `isCloudSynced` (the toggle's current value, not the value at
+    /// open time) — flipping Sync to Cloud on immediately requires Annual
+    /// Pro Membership for a cover image, even before Done is tapped.
+    private var coverImageRequiresAnnualProMembership: Bool {
+        isCloudSynced && entitlement?.isActiveAnnualProMember != true
+    }
+
+    private func loadEntitlement() async {
+        guard let userID = accountState.currentUserID else {
+            entitlement = nil
+            return
+        }
+        entitlement = try? await entitlementService.fetchEntitlement(userID: userID)
+    }
+
+    private func clearDefaultTitleIfAlreadyTaken() {
+        guard case .create(let ownerID) = mode, title == "My Cookbook" else { return }
+        let alreadyHasDefaultNamed = allCookbooks.contains { $0.ownerID == ownerID && $0.title == "My Cookbook" }
+        guard alreadyHasDefaultNamed else { return }
+        title = ""
+        titleWasClearedDueToCollision = true
     }
 
     /// Saves locally, then — only if Sync to Cloud was just switched on

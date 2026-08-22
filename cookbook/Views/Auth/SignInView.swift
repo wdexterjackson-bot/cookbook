@@ -37,9 +37,12 @@ struct SignInView: View {
     @State private var lastName = ""
     @State private var email = ""
     @State private var password = ""
+    @State private var isPasswordVisible = false
     @State private var isBusy = false
     @State private var errorMessage: String?
     @State private var currentAppleNonce: String?
+    @State private var isSendingPasswordReset = false
+    @State private var passwordResetMessage: String?
 
     private let lookupService: EmailProviderLookupServicing = FirebaseEmailProviderLookupService()
 
@@ -107,15 +110,54 @@ struct SignInView: View {
                         #endif
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("emailField")
-                    SecureField("Password", text: $password)
+                    HStack {
+                        Group {
+                            if isPasswordVisible {
+                                TextField("Password", text: $password)
+                                    #if os(iOS)
+                                    .textInputAutocapitalization(.never)
+                                    #endif
+                                    .autocorrectionDisabled()
+                            } else {
+                                SecureField("Password", text: $password)
+                            }
+                        }
                         .accessibilityIdentifier("passwordField")
 
-                    Button(authIntent.rawValue) {
-                        Task { await performEmailAuth(isSignUp: authIntent == .signUp) }
+                        Button {
+                            isPasswordVisible.toggle()
+                        } label: {
+                            Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isPasswordVisible ? "Hide password" : "Show password")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canSubmit || isBusy)
-                    .accessibilityIdentifier("signInSubmitButton")
+
+                    HStack {
+                        if authIntent == .signIn {
+                            Button(isSendingPasswordReset ? "Sending…" : "Forgot Password?") {
+                                Task { await sendPasswordReset() }
+                            }
+                            .font(.caption)
+                            .disabled(trimmedEmail.isEmpty || isSendingPasswordReset)
+                            .accessibilityIdentifier("forgotPasswordButton")
+                        }
+
+                        Spacer()
+
+                        Button(authIntent.rawValue) {
+                            Task { await performEmailAuth(isSignUp: authIntent == .signUp) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canSubmit || isBusy)
+                        .accessibilityIdentifier("signInSubmitButton")
+                    }
+                    if let passwordResetMessage {
+                        Text(passwordResetMessage)
+                            .font(.caption)
+                            .foregroundStyle(Color.potluckSage)
+                    }
                 }
 
                 #if os(iOS)
@@ -194,7 +236,7 @@ struct SignInView: View {
             let result = isSignUp
                 ? try await accountState.signUp(email: trimmedEmail, password: password, displayName: fullName)
                 : try await accountState.signIn(email: trimmedEmail, password: password)
-            try await PostSignInCoordinator.handle(result, email: accountState.currentUserEmail, modelContext: modelContext)
+            try await PostSignInCoordinator.handle(result, email: accountState.currentUserEmail, displayName: accountState.currentUserDisplayName, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             // isSignedIn is already true here only if accountState.signIn/
@@ -210,6 +252,23 @@ struct SignInView: View {
             } else {
                 errorMessage = message
             }
+        }
+    }
+
+    /// Firebase always reports success here regardless of whether an
+    /// account exists for this email (same anti-enumeration stance
+    /// EmailProviderLookupServicing documents) — the confirmation message
+    /// is worded to match, never confirming or denying an account exists.
+    private func sendPasswordReset() async {
+        isSendingPasswordReset = true
+        errorMessage = nil
+        passwordResetMessage = nil
+        defer { isSendingPasswordReset = false }
+        do {
+            try await accountState.sendPasswordReset(email: trimmedEmail)
+            passwordResetMessage = "If an account exists for \(trimmedEmail), a password reset email is on its way."
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -267,7 +326,7 @@ struct SignInView: View {
                     try? await accountState.updateDisplayName(name)
                 }
             }
-            try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, modelContext: modelContext)
+            try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, displayName: accountState.currentUserDisplayName, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             // See performEmailAuth's matching catch block for why this
@@ -300,7 +359,7 @@ struct SignInView: View {
             if authResult.isNewAccount, let name = signInResult.user.profile?.name, !name.isEmpty {
                 try? await accountState.updateDisplayName(name)
             }
-            try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, modelContext: modelContext)
+            try await PostSignInCoordinator.handle(authResult, email: accountState.currentUserEmail, displayName: accountState.currentUserDisplayName, modelContext: modelContext)
             if isDismissable { dismiss() }
         } catch {
             // See performEmailAuth's matching catch block for why this

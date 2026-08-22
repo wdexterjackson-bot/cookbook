@@ -11,11 +11,23 @@
 //  One failing recipe doesn't stop the rest, same principle as bulk file
 //  import — the results screen lists anything that couldn't publish.
 //
+//  Doubles as "Import Recipes from Existing Cookbook" for a brand-new,
+//  still-empty Community Cookbook (CommunityCookbookRecipesView's empty
+//  state) — same bulk-publish mechanism, just with the Destination
+//  picker skipped in favor of a fixed, pre-selected cookbook.
+//
 
 import SwiftUI
 import SwiftData
 
 struct PublishCookbookToFamilyCookbookView: View {
+    /// When set, the Destination section/picker is skipped entirely and
+    /// every recipe publishes straight to this cookbook — the "Import
+    /// Recipes from Existing Cookbook" entry point from an empty Community
+    /// Cookbook. Nil (the Administrator screen's own launch site) keeps
+    /// today's full picker-both-sides behavior.
+    var fixedDestination: (group: FamilyGroup, cookbook: GroupCookbook)? = nil
+
     @Environment(\.dismiss) private var dismiss
     @Environment(AccountState.self) private var accountState
     @Query private var allCookbooks: [Cookbook]
@@ -86,24 +98,30 @@ struct PublishCookbookToFamilyCookbookView: View {
                         }
                     }
 
-                    Section {
-                        if isLoadingGroups {
-                            ProgressView()
-                        } else if eligibleCookbooks.isEmpty {
-                            Text("No Community Cookbooks you can publish to yet.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Picker("Community Cookbook", selection: $selectedGroupCookbookID) {
-                                Text("Choose a Community Cookbook").tag(String?.none)
-                                ForEach(eligibleCookbooks, id: \.cookbook.id) { entry in
-                                    Text(entry.cookbook.cookbookName).tag(String?.some(entry.cookbook.id))
+                    if let fixedDestination {
+                        Section("Destination") {
+                            Text(fixedDestination.cookbook.cookbookName)
+                        }
+                    } else {
+                        Section {
+                            if isLoadingGroups {
+                                ProgressView()
+                            } else if eligibleCookbooks.isEmpty {
+                                Text("No Community Cookbooks you can publish to yet.")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Picker("Community Cookbook", selection: $selectedGroupCookbookID) {
+                                    Text("Choose a Community Cookbook").tag(String?.none)
+                                    ForEach(eligibleCookbooks, id: \.cookbook.id) { entry in
+                                        Text(entry.cookbook.cookbookName).tag(String?.some(entry.cookbook.id))
+                                    }
                                 }
                             }
+                        } header: {
+                            Text("Destination")
+                        } footer: {
+                            Text("Republishing a recipe already published to this cookbook updates it in place rather than duplicating it.")
                         }
-                    } header: {
-                        Text("Destination")
-                    } footer: {
-                        Text("Republishing a recipe already published to this cookbook updates it in place rather than duplicating it.")
                     }
 
                     if isPublishing {
@@ -124,7 +142,7 @@ struct PublishCookbookToFamilyCookbookView: View {
             }
             .potluckHiddenScrollBackground()
             .background(Color.potluckCream)
-            .navigationTitle("Publish a Cookbook")
+            .navigationTitle(fixedDestination != nil ? "Import Recipes" : "Publish a Cookbook")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -134,15 +152,17 @@ struct PublishCookbookToFamilyCookbookView: View {
                 }
                 if !isComplete {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Publish") {
+                        Button(fixedDestination != nil ? "Import" : "Publish") {
                             Task { await publishAll() }
                         }
-                        .disabled(selectedCookbookID == nil || selectedGroupCookbookID == nil || recipesInSelectedCookbook.isEmpty || isPublishing)
+                        .disabled(selectedCookbookID == nil || (fixedDestination == nil && selectedGroupCookbookID == nil) || recipesInSelectedCookbook.isEmpty || isPublishing)
                     }
                 }
             }
             .task {
-                await loadEligibleCookbooks()
+                if fixedDestination == nil {
+                    await loadEligibleCookbooks()
+                }
             }
         }
     }
@@ -169,9 +189,15 @@ struct PublishCookbookToFamilyCookbookView: View {
     }
 
     private func publishAll() async {
-        guard let userID = accountState.currentUserID,
-              let selectedGroupCookbookID,
-              let entry = eligibleCookbooks.first(where: { $0.cookbook.id == selectedGroupCookbookID }) else {
+        let resolvedEntry: (group: FamilyGroup, cookbook: GroupCookbook)?
+        if let fixedDestination {
+            resolvedEntry = fixedDestination
+        } else if let selectedGroupCookbookID {
+            resolvedEntry = eligibleCookbooks.first(where: { $0.cookbook.id == selectedGroupCookbookID })
+        } else {
+            resolvedEntry = nil
+        }
+        guard let userID = accountState.currentUserID, let entry = resolvedEntry else {
             return
         }
         let group = entry.group

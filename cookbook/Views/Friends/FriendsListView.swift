@@ -4,13 +4,10 @@
 //
 //  Accepted friends only — pending requests (incoming and outgoing) live
 //  in Messages/the Home dashboard instead, same as join requests and
-//  invitations never appear in Family either, only in Messages. No
-//  per-user display name shown for the same reason
-//  GroupAdminManagementView doesn't show one either — a live cross-user
-//  profile lookup isn't a capability this app has; findUserByEmail's
-//  result (name shown at request time, in AddFriendView) is the one
-//  deliberate exception, since that's a one-time, rate-limited, opt-in
-//  lookup, not a general capability.
+//  invitations never appear in Family either, only in Messages. Friendly
+//  names come from FriendlyNameDirectory (publicProfiles) — unlike
+//  GroupAdminManagementView, which still has no such lookup for group
+//  members.
 //
 
 import SwiftUI
@@ -18,6 +15,7 @@ import SwiftUI
 struct FriendsListView: View {
     let friendsService: FriendsServicing
     let friendDiscoveryService: FriendDiscoveryServicing
+    let chatService: ChatServicing = FirestoreChatService()
 
     @Environment(AccountState.self) private var accountState
     @Environment(\.dismiss) private var dismiss
@@ -26,6 +24,7 @@ struct FriendsListView: View {
     @State private var errorMessage: String?
     @State private var isPresentingAddFriend = false
     @State private var isPresentingMyQRCode = false
+    @State private var friendlyNames = FriendlyNameDirectory()
 
     var body: some View {
         NavigationStack {
@@ -104,22 +103,30 @@ struct FriendsListView: View {
 
     @ViewBuilder
     private func friendRow(_ friendship: Friendship) -> some View {
+        #if os(tvOS)
         Text(otherUserLabel(friendship))
-            #if !os(tvOS)
-            .swipeActions {
-                Button("Remove", role: .destructive) {
-                    Task { await remove(friendship) }
-                }
+        #else
+        NavigationLink {
+            if let userID = accountState.currentUserID, let otherID = friendship.otherUserID(than: userID) {
+                ChatView(friendUserID: otherID, chatService: chatService)
             }
-            #endif
+        } label: {
+            Text(otherUserLabel(friendship))
+        }
+        .swipeActions {
+            Button("Remove", role: .destructive) {
+                Task { await remove(friendship) }
+            }
+        }
+        #endif
     }
 
     private func otherUserLabel(_ friendship: Friendship) -> String {
         guard let userID = accountState.currentUserID,
-              let otherID = friendship.userIDs.first(where: { $0 != userID }) else {
+              let otherID = friendship.otherUserID(than: userID) else {
             return "Friend"
         }
-        return "Member \(otherID.suffix(6))"
+        return friendlyNames.label(for: otherID)
     }
 
     private func load() async {
@@ -127,6 +134,8 @@ struct FriendsListView: View {
         isLoading = true
         defer { isLoading = false }
         friends = (try? await friendsService.fetchFriends(forUser: userID)) ?? []
+        let otherIDs = friends.compactMap { $0.otherUserID(than: userID) }
+        await friendlyNames.load(userIDs: otherIDs)
     }
 
     private func remove(_ friendship: Friendship) async {

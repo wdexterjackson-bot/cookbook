@@ -11,6 +11,10 @@ import UIKit
 
 struct CookingModeView: View {
     let recipe: Recipe
+    /// "Start Cooking" everywhere except RecipeDetailView's video-section
+    /// entry point, which passes "Ready to Continue" — forwarded straight
+    /// to CookingModePrepReviewView's own button.
+    var startButtonLabel: String = "Start Cooking"
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -57,9 +61,13 @@ struct CookingModeView: View {
                         description: Text("Add steps to this recipe to use cooking mode.")
                     )
                 } else if !hasStartedCooking {
-                    CookingModePrepReviewView(recipe: recipe, servingMultiplier: $servingMultiplier) {
-                        hasStartedCooking = true
-                    }
+                    CookingModePrepReviewView(
+                        recipe: recipe,
+                        servingMultiplier: $servingMultiplier,
+                        backgroundImageName: currentBackgroundImageName,
+                        onStartCooking: { hasStartedCooking = true },
+                        startButtonLabel: startButtonLabel
+                    )
                 } else {
                     stepPager
                 }
@@ -70,10 +78,10 @@ struct CookingModeView: View {
             }
             .navigationTitle(recipe.title)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { finish() }
-                }
                 if hasStartedCooking {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { finish() }
+                    }
                     ToolbarItemGroup(placement: .primaryAction) {
                         Button {
                             isPresentingIngredients = true
@@ -99,6 +107,13 @@ struct CookingModeView: View {
                             .accessibilityLabel("Watch video")
                         }
                         #endif
+                    }
+                } else {
+                    // Kitchen Preparation (pre-start) screen only — Done
+                    // moves to the trailing/primary side here instead of
+                    // cancellationAction's leading placement, per request.
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Done") { finish() }
                     }
                 }
             }

@@ -119,7 +119,12 @@ final class AdministratorImportUITests: XCTestCase {
     @MainActor
     private func signOutIfAlreadySignedIn(_ app: XCUIApplication) {
         let moreTab = app.tabBars.buttons["More"]
-        guard moreTab.waitForExistence(timeout: 3) else { return }
+        // 3s was too short on a slower cold launch (observed on iPad
+        // Simulator: the tab bar isn't up yet at 3s even though the
+        // account really is signed in) — falsely concluding "not signed
+        // in" here strands every subsequent step, since the sign-up
+        // screen never actually appears either.
+        guard moreTab.waitForExistence(timeout: 10) else { return }
         moreTab.tap()
         let profileCard = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Profile'")).firstMatch
         guard profileCard.waitForExistence(timeout: 3) else { return }

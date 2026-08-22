@@ -24,7 +24,12 @@ const RATE_LIMIT_MAX_ATTEMPTS = 20;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 async function findUserByEmail({ db, authClient, email, callerUserID }) {
-  const trimmedEmail = (email || '').trim();
+  // Lowercased to match FirestoreUserProfileService.setEmail's own
+  // normalization — a federated sign-in provider can hand back a
+  // mixed-case email, but this is an exact-match Firestore query, not a
+  // case-insensitive one, so a search typed in the searcher's own casing
+  // (almost always lowercase) would otherwise silently never match.
+  const trimmedEmail = (email || '').trim().toLowerCase();
   if (!trimmedEmail) {
     throw new Error('email is required');
   }

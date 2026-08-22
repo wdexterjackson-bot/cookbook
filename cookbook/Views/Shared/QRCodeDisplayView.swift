@@ -3,11 +3,25 @@
 //  cookbook
 //
 //  Reused for both "Share My QR Code" (friend code, on the user's own
-//  profile) and the group code on GroupCookbookView's settings — same
+//  profile) and the group code on CommunityCookbookManageView's settings — same
 //  presentation, different payload.
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// What ShareLink actually shares — our own controlled PNG bytes rather
+/// than SwiftUI's own `Image: Transferable` conformance. See
+/// QRCodeImageGenerator.pngData's own doc comment for why: a saved copy
+/// of this needs to stay pixel-exact to still be scannable, which
+/// `Image`'s own transfer representation doesn't guarantee.
+private struct QRCodeShareFile: Transferable {
+    let pngData: Data
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .png) { $0.pngData }
+    }
+}
 
 struct QRCodeDisplayView: View {
     let payload: QRCodePayload
@@ -18,6 +32,10 @@ struct QRCodeDisplayView: View {
 
     private var qrImage: Image? {
         QRCodeImageGenerator.image(for: payload.stringValue)
+    }
+
+    private var qrPNGData: Data? {
+        QRCodeImageGenerator.pngData(for: payload.stringValue)
     }
 
     var body: some View {
@@ -46,9 +64,9 @@ struct QRCodeDisplayView: View {
                     .padding(.horizontal)
 
                 #if !os(tvOS)
-                if let qrImage {
+                if let qrImage, let qrPNGData {
                     ShareLink(
-                        item: qrImage,
+                        item: QRCodeShareFile(pngData: qrPNGData),
                         preview: SharePreview(title, image: qrImage)
                     ) {
                         Label("Share QR Code", systemImage: "square.and.arrow.up")
